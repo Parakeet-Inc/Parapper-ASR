@@ -1,0 +1,138 @@
+name: Build
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows-msi:
+    name: Windows MSI
+    runs-on: windows-latest
+
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_VERSION: 1.88.0
+      TARGET_TRIPLE: x86_64-pc-windows-msvc
+      SHERPA_ONNX_VERSION: 1.12.39
+      SHERPA_PREBUILT_DIR: sherpa-onnx-v1.12.39-win-x64-shared-MT-Release-lib
+      SHERPA_PREBUILT_URL: https://sourceforge.net/projects/sherpa-onnx.mirror/files/v1.12.39/sherpa-onnx-v1.12.39-win-x64-shared-MT-Release-lib.tar.bz2/download
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.1.1
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.10.0
+          cache: pnpm
+
+      - name: Setup Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install $env:RUST_VERSION
+          rustup default $env:RUST_VERSION
+          rustup target add $env:TARGET_TRIPLE
+          rustup component add rustfmt --toolchain $env:RUST_VERSION
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ env.TARGET_TRIPLE }}
+          cache-on-failure: true
+
+      - name: Cache sherpa-onnx runtime DLLs
+        id: sherpa-cache
+        uses: actions/cache@v4
+        with:
+          path: target/sherpa-onnx-prebuilt
+          key: sherpa-onnx-${{ env.SHERPA_ONNX_VERSION }}-${{ env.TARGET_TRIPLE }}-${{ env.SHERPA_PREBUILT_DIR }}
+
+      - name: Download sherpa-onnx runtime DLLs
+        if: steps.sherpa-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:GITHUB_WORKSPACE 'target/sherpa-onnx-prebuilt'
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          $archive = Join-Path $env:RUNNER_TEMP 'sherpa-onnx.tar.bz2'
+          curl.exe -L -f -o $archive $env:SHERPA_PREBUILT_URL
+          tar.exe -xjf $archive -C $destination
+          $libDir = Join-Path $destination "$env:SHERPA_PREBUILT_DIR/lib"
+          if (!(Test-Path $libDir)) {
+            Write-Error "sherpa-onnx runtime DLL dir not found: $libDir"
+          }
+
+      - name: Cache cargo-about
+        id: cargo-about-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-about
+            ~/.cargo/bin/cargo-about.exe
+            ~/.cargo/.crates2.json
+            ~/.cargo/.crates.toml
+          key: cargo-about-${{ runner.os }}-rust-${{ env.RUST_VERSION }}-v0.6.6
+
+      - name: Install cargo-about
+        if: steps.cargo-about-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-about --version 0.6.6 --locked
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Rust format check
+        run: cargo fmt --all -- --check
+
+      - name: Rust tests
+        run: cargo test -p parapper
+
+      - name: Build MSI
+        uses: tauri-apps/tauri-action@v0
+        id: tauri
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: pnpm tauri
+          args: --target ${{ env.TARGET_TRIPLE }} --bundles msi
+          includeDebug: false
+          includeRelease: true
+
+      - name: Collect MSI paths
+        id: msi
+        shell: pwsh
+        run: |
+          $paths = Get-ChildItem -Path target -Recurse -Filter '*.msi' | ForEach-Object { $_.FullName }
+          if (!$paths) {
+            Write-Error 'No MSI artifacts were produced.'
+          }
+          "paths<<EOF" >> $env:GITHUB_OUTPUT
+          $paths >> $env:GITHUB_OUTPUT
+          "EOF" >> $env:GITHUB_OUTPUT
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: parapper-msi-${{ github.sha }}
+          path: ${{ steps.msi.outputs.paths }}
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.msi.outputs.paths }}
+          generate_release_notes: true

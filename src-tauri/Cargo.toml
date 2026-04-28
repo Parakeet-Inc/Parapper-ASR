@@ -1,0 +1,40 @@
+[package]
+name = "parapper"
+version = "0.1.0"
+description = "YukariNet and Yukari Connect NEO ASR bridge"
+authors = ["Parakeet"]
+license = "MIT"
+repository = ""
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { workspace = true }
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+cpal = "0.17.3"
+dasp_sample = "0.11.0"
+log = { workspace = true }
+ort = "=2.0.0-rc.12"
+reqwest = { workspace = true }
+rubato = "1.0.1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sherpa-onnx = { version = "=1.12.39", default-features = false, features = ["shared"] }
+sherpa-onnx-sys = { version = "=1.12.39", default-features = false, features = ["shared"] }
+tauri = { workspace = true }
+tauri-plugin-dialog = { workspace = true }
+tauri-plugin-log = { workspace = true }
+tokio = { workspace = true }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+mdns-sd = "0.19.0"

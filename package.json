@@ -1,0 +1,52 @@
+{
+  "name": "parapper",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "pnpm generate-license && vite",
+    "build": "pnpm generate-license && tsc -b && vite build",
+    "build:msi": "pnpm tauri build --target x86_64-pc-windows-msvc --bundles msi",
+    "generate-license": "cargo run -p scripts --bin generate_license",
+    "preview": "vite preview",
+    "format": "prettier --write \"./src/**/*.{ts,tsx,js,json}\" \"./*.json\"",
+    "lint": "eslint ./src",
+    "spell": "cspell .",
+    "rust:fmt": "cargo fmt -p parapper -- --check",
+    "rust:lint": "cargo clippy --all-targets --all-features -p parapper -- -D warnings"
+  },
+  "dependencies": {
+    "@mantine/core": "7.14.3",
+    "@mantine/hooks": "7.14.3",
+    "@mantine/notifications": "7.14.3",
+    "@tauri-apps/api": "2.9.0",
+    "@tauri-apps/plugin-dialog": "2.4.2",
+    "@tauri-apps/plugin-log": "2.7.1",
+    "i18next": "^26.0.8",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-i18next": "^17.0.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@iconify-json/material-symbols": "^1.2.69",
+    "@svgr/core": "^8.1.0",
+    "@svgr/plugin-jsx": "^8.1.0",
+    "@tauri-apps/cli": "2.9.1",
+    "@types/react": "18.3.28",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "4.0.0",
+    "cspell": "^10.0.0",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-unused-imports": "^4.4.1",
+    "globals": "^17.5.0",
+    "prettier": "^3.8.3",
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.59.0",
+    "unplugin-icons": "^23.0.1",
+    "vite": "4.5.14"
+  }
+}
