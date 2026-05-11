@@ -15,6 +15,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
+import { zeroMinHeight, zeroMinWidth } from "../lib/layout-styles";
 import {
   buildRecognitionCsvExport,
   float32SamplesToWavBytes,
@@ -33,6 +34,8 @@ type RecognitionLogProps = {
   dateTimeLocale: string;
   onClear: () => void;
 };
+
+const formatDetectedLanguage = (language: string) => language.toUpperCase();
 
 export const RecognitionLog: React.FC<RecognitionLogProps> = ({
   asrWarning,
@@ -144,9 +147,9 @@ export const RecognitionLog: React.FC<RecognitionLogProps> = ({
       withBorder
       radius="sm"
       p="md"
-      style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
+      style={{ height: "100%", ...zeroMinHeight, overflow: "hidden" }}
     >
-      <Stack h="100%" gap="sm" style={{ minHeight: 0 }}>
+      <Stack h="100%" gap="sm" style={zeroMinHeight}>
         <Group justify="space-between" align="center">
           <Title order={4}>{t("recognitionLog.title")}</Title>
           <Group gap="xs">
@@ -180,14 +183,15 @@ export const RecognitionLog: React.FC<RecognitionLogProps> = ({
         ) : null}
         <Box
           ref={logRef}
+          data-log-scroll
           style={{
             flex: 1,
-            minHeight: 0,
+            ...zeroMinHeight,
             overflowY: "auto",
             paddingRight: 4,
           }}
         >
-          <Stack gap="xs" justify="end" style={{ minHeight: "100%" }}>
+          <Stack gap="xs">
             {recognizedTexts.length === 0 ? (
               <Text c="dimmed" size="sm">
                 {t("recognitionLog.empty")}
@@ -195,15 +199,33 @@ export const RecognitionLog: React.FC<RecognitionLogProps> = ({
             ) : (
               recognizedTexts.map((entry, index) => (
                 <Paper
-                  key={`${entry.elapsed_millis}-${index}`}
+                  key={`${entry.id}-${index}`}
+                  data-log-row-id={entry.id}
                   p="xs"
                   withBorder
                   radius="sm"
                 >
                   <Group wrap="nowrap" gap="sm">
-                    <Text lineClamp={1} style={{ flex: 1, minWidth: 0 }}>
+                    <Text
+                      style={{
+                        flex: 1,
+                        ...zeroMinWidth,
+                        whiteSpace: "pre-wrap",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
                       {entry.text}
                     </Text>
+                    {entry.detected_language ? (
+                      <Badge color="blue" variant="light" size="sm">
+                        {formatDetectedLanguage(entry.detected_language)}
+                      </Badge>
+                    ) : null}
+                    {!entry.is_final ? (
+                      <Badge color="cyan" variant="light" size="sm">
+                        {t("recognitionLog.partial")}
+                      </Badge>
+                    ) : null}
                     <Text size="xs" c="dimmed" w={72} ta="right">
                       {formatLogTime(
                         entry.recognized_at_millis,

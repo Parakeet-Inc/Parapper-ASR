@@ -1,8 +1,8 @@
-import { Anchor, Button, Modal, Stack, Text } from "@mantine/core";
+import { Button, Modal, Stack, Text } from "@mantine/core";
 import { lazy, Suspense, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { notificationColor } from "../../lib/theme";
+import { ExternalLink } from "./external-link";
 
 const RustLicenses = lazy(() => import("./rust-licenses"));
 
@@ -27,21 +27,57 @@ const modelLicenses = [
     license: "MIT",
     url: "https://github.com/snakers4/silero-vad",
   },
+  {
+    name: "Namo Turn Detector v1 Japanese",
+    license: "Apache-2.0",
+    url: "https://huggingface.co/videosdk-live/Namo-Turn-Detector-v1-Japanese",
+  },
+  {
+    name: "Namo Turn Detector v1 English",
+    license: "Apache-2.0",
+    url: "https://huggingface.co/videosdk-live/Namo-Turn-Detector-v1-English",
+  },
+  {
+    name: "Namo Turn Detector v1 Multilingual",
+    license: "Apache-2.0",
+    url: "https://huggingface.co/videosdk-live/Namo-Turn-Detector-v1-Multilingual",
+  },
+  {
+    name: "SpeechBrain ECAPA-TDNN VoxLingua107",
+    license: "Apache-2.0",
+    url: "https://huggingface.co/drakulavich/SpeechBrain-coreml",
+  },
+  {
+    name: "piper-voices en_US Kristin medium",
+    license: "MIT",
+    url: "https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/kristin/medium",
+  },
+  {
+    name: "piper-voices en_US John medium",
+    license: "MIT",
+    url: "https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/john/medium",
+  },
+  {
+    name: "piper-voices en_US Norman medium",
+    license: "MIT",
+    url: "https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/norman/medium",
+  },
+  {
+    name: "Supertonic 2 ONNX",
+    license: "OpenRAIL-M",
+    url: "https://huggingface.co/Supertone/supertonic-2",
+  },
+  {
+    name: "Supertonic 3 ONNX",
+    license: "OpenRAIL-M",
+    url: "https://huggingface.co/Supertone/supertonic-3",
+  },
+  {
+    name: "UL-UNAS",
+    license: "MIT",
+    url: "https://github.com/Xiaobin-Rong/ul-unas",
+  },
 ];
-
-const ExternalLink: React.FC<{
-  href: string;
-  children: React.ReactNode;
-}> = ({ href, children }) => (
-  <Anchor
-    href={href}
-    target="_blank"
-    rel="noreferrer"
-    c={notificationColor.info}
-  >
-    {children}
-  </Anchor>
-);
 
 export const Licenses: React.FC = () => {
   const { t } = useTranslation();

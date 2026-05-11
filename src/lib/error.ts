@@ -26,7 +26,7 @@ const ERROR_MESSAGES: Record<ParapperErrorType, string> = {
   VAD: "音声区間の判定に失敗しました。",
   ASR: "音声認識に失敗しました。",
   MODEL_DOWNLOAD: "モデルのダウンロードに失敗しました。",
-  NEO_HTTP: "ゆかこねNEOへの送信に失敗しました。",
+  NEO_HTTP: "ゆかコネNEOへの送信に失敗しました。",
   OSC_QUERY: "VRChat OSCQueryの状態取得に失敗しました。",
   FILE_SAVE: "ファイルの保存に失敗しました。",
   CONFIG: "設定の読み書きに失敗しました。",

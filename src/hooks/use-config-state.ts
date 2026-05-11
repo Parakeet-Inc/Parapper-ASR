@@ -8,9 +8,7 @@ import type { AsrModel, ParapperConfig } from "../lib/types";
 
 export const useConfigState = (t: (key: string) => string) => {
   const [config, setConfig] = useState<ParapperConfig | null>(null);
-  const [appliedConfig, setAppliedConfig] = useState<ParapperConfig | null>(
-    null,
-  );
+  const [, setAppliedConfig] = useState<ParapperConfig | null>(null);
   const configRef = useRef<ParapperConfig | null>(null);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const saveRevisionRef = useRef(0);
@@ -55,7 +53,12 @@ export const useConfigState = (t: (key: string) => string) => {
     value: ParapperConfig[K],
   ) => {
     if (!config) return;
-    applyConfig({ ...config, [key]: value });
+    const nextConfig = { ...config, [key]: value };
+    applyConfig(nextConfig);
+  };
+
+  const replaceConfig = (nextConfig: ParapperConfig) => {
+    applyConfig(nextConfig);
   };
 
   const resetConfig = async () => {
@@ -95,11 +98,10 @@ export const useConfigState = (t: (key: string) => string) => {
   return {
     config,
     setConfig,
-    appliedConfig,
     setAppliedConfig,
     configRef,
     updateConfig,
-    applyConfig,
+    replaceConfig,
     resetConfig,
     applyAsrModel,
   };

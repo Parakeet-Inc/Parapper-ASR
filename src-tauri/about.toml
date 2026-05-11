@@ -11,7 +11,8 @@ accepted = [
     "Apache-2.0 WITH LLVM-exception",
     "OpenSSL",
     "Zlib",
-    "Unlicense"
+    "Unlicense",
+    "CC0-1.0"
 ]
 
 targets = [

@@ -1,11 +1,11 @@
 {
   "name": "parapper",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "tauri": "tauri",
-    "dev": "pnpm generate-license && vite",
+    "dev": "vite --host 127.0.0.1 --port 5174 --strictPort",
     "build": "pnpm generate-license && tsc -b && vite build",
     "build:msi": "pnpm tauri build --target x86_64-pc-windows-msvc --bundles msi",
     "generate-license": "cargo run -p scripts --bin generate_license",

@@ -7,11 +7,12 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { OnboardingState } from "../hooks/use-app-state";
 import type {
-  AsrModel,
+  ConfigPreset,
   ModelDownloadProgress,
   ParapperConfig,
 } from "../lib/types";
@@ -23,36 +24,56 @@ type SelectOption<T extends string = string> = {
 
 type OnboardingModalProps = {
   onboarding: OnboardingState;
-  config: ParapperConfig;
   languageOptions: SelectOption[];
   currentLanguage: string;
-  asrModelSelectOptions: SelectOption<AsrModel>[];
+  configPresets: ConfigPreset[];
   downloadingModels: boolean;
   modelDownloadProgress: ModelDownloadProgress | null;
   onClose: () => void;
   onBack: () => void;
   onNext: () => void;
   onLanguageChange: (language: string) => void;
-  onApplyAsrModel: (model: AsrModel) => void;
-  onDownloadSelectedModels: () => Promise<unknown>;
+  onApplyPresetAndDownload: (config: ParapperConfig) => Promise<unknown>;
 };
 
 export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   onboarding,
-  config,
   languageOptions,
   currentLanguage,
-  asrModelSelectOptions,
+  configPresets,
   downloadingModels,
   modelDownloadProgress,
   onClose,
   onBack,
   onNext,
   onLanguageChange,
-  onApplyAsrModel,
-  onDownloadSelectedModels,
+  onApplyPresetAndDownload,
 }) => {
   const { t } = useTranslation();
+  const [selectedPresetName, setSelectedPresetName] = useState<string | null>(
+    null,
+  );
+  const selectedPreset = useMemo(
+    () =>
+      configPresets.find((preset) => preset.name === selectedPresetName) ??
+      null,
+    [configPresets, selectedPresetName],
+  );
+  const presetOptions = useMemo(
+    () =>
+      configPresets.map((preset) => ({
+        value: preset.name,
+        label: preset.built_in
+          ? t("settings.configPresets.builtInLabel", { name: preset.name })
+          : preset.name,
+      })),
+    [configPresets, t],
+  );
+
+  useEffect(() => {
+    if (selectedPresetName || configPresets.length === 0) return;
+    setSelectedPresetName(configPresets[0].name);
+  }, [configPresets, selectedPresetName]);
 
   return (
     <Modal
@@ -84,16 +105,21 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           </>
         ) : (
           <>
-            <Text size="sm" fw={600}>
-              {t("onboarding.modelStep")}
-            </Text>
+            <Stack gap={4}>
+              <Text size="sm" fw={600}>
+                {t("onboarding.presetStep")}
+              </Text>
+              <Text size="sm" c="dimmed">
+                {t("onboarding.presetDescription")}
+              </Text>
+            </Stack>
             <Select
-              data={asrModelSelectOptions}
-              value={config.asr_model}
+              data={presetOptions}
+              value={selectedPresetName}
               allowDeselect={false}
-              onChange={(value) => {
-                if (value) onApplyAsrModel(value as AsrModel);
-              }}
+              searchable
+              maxDropdownHeight={260}
+              onChange={setSelectedPresetName}
             />
             {downloadingModels || modelDownloadProgress ? (
               <Stack gap={4}>
@@ -119,8 +145,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               <Group gap="xs">
                 <Button
                   loading={downloadingModels}
+                  disabled={!selectedPreset}
                   onClick={() => {
-                    void onDownloadSelectedModels().then(onClose);
+                    if (!selectedPreset) return;
+                    void onApplyPresetAndDownload(selectedPreset.config).then(
+                      onClose,
+                    );
                   }}
                 >
                   {t("onboarding.downloadAndClose")}

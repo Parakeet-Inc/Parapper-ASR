@@ -58,9 +58,8 @@ impl OnnxRuntimeSileroVadEngine {
     }
 }
 
-fn init_onnx_runtime() {
+pub(super) fn init_onnx_runtime() {
     ORT_INIT.get_or_init(|| {
-        log::debug!("Initializing ONNX Runtime");
         initialize_onnx_runtime();
     });
 }

@@ -20,21 +20,32 @@ pub(crate) struct InputDeviceSelection {
     pub device: Device,
     pub stream_config: StreamConfig,
     pub sample_format: SampleFormat,
-    pub device_info: DeviceInfo,
+}
+
+pub(crate) struct OutputDeviceSelection {
+    pub device: Device,
 }
 
 pub fn collect_input_devices() -> Vec<DeviceInfo> {
+    collect_devices(DeviceDirection::Input)
+}
+
+pub fn collect_output_devices() -> Vec<DeviceInfo> {
+    collect_devices(DeviceDirection::Output)
+}
+
+fn collect_devices(direction: DeviceDirection) -> Vec<DeviceInfo> {
     let mut devices = Vec::new();
     for host_id in available_non_asio_hosts() {
         let Ok(host) = cpal::host_from_id(host_id) else {
             continue;
         };
-        let Ok(input_devices) = host.input_devices() else {
+        let Ok(host_devices) = direction.devices(&host) else {
             continue;
         };
 
-        for device in input_devices {
-            let Some(device_info) = device_info(host_id, &device) else {
+        for device in host_devices {
+            let Some(device_info) = device_info(host_id, &device, direction) else {
                 continue;
             };
             devices.push(device_info);
@@ -56,6 +67,19 @@ pub(crate) fn selected_input_device(config: &ParapperConfig) -> Result<InputDevi
     default_input_device()
 }
 
+pub(crate) fn selected_output_device_by_id(
+    host: Option<&str>,
+    id: Option<&str>,
+) -> Result<OutputDeviceSelection> {
+    if let (Some(host), Some(id)) = (host, id)
+        && let Some(selected) = find_output_device(host, id)?
+    {
+        return Ok(selected);
+    }
+
+    default_output_device()
+}
+
 fn find_input_device(host_name: &str, device_id: &str) -> Result<Option<InputDeviceSelection>> {
     for host_id in available_non_asio_hosts() {
         if host_name_from_id(host_id) != host_name {
@@ -64,7 +88,7 @@ fn find_input_device(host_name: &str, device_id: &str) -> Result<Option<InputDev
         let host = cpal::host_from_id(host_id)?;
         let input_devices = host.input_devices()?;
         for device in input_devices {
-            let Some(device_info) = device_info(host_id, &device) else {
+            let Some(device_info) = device_info(host_id, &device, DeviceDirection::Input) else {
                 continue;
             };
             if device_info.id == device_id {
@@ -73,8 +97,27 @@ fn find_input_device(host_name: &str, device_id: &str) -> Result<Option<InputDev
                     device,
                     stream_config: default_config.config(),
                     sample_format: default_config.sample_format(),
-                    device_info,
                 }));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn find_output_device(host_name: &str, device_id: &str) -> Result<Option<OutputDeviceSelection>> {
+    for host_id in available_non_asio_hosts() {
+        if host_name_from_id(host_id) != host_name {
+            continue;
+        }
+        let host = cpal::host_from_id(host_id)?;
+        let output_devices = host.output_devices()?;
+        for device in output_devices {
+            let Some(device_info) = device_info(host_id, &device, DeviceDirection::Output) else {
+                continue;
+            };
+            if device_info.id == device_id {
+                return Ok(Some(OutputDeviceSelection { device }));
             }
         }
     }
@@ -88,23 +131,37 @@ fn default_input_device() -> Result<InputDeviceSelection> {
         let Some(device) = host.default_input_device() else {
             continue;
         };
-        let Some(device_info) = device_info(host_id, &device) else {
+        if device_info(host_id, &device, DeviceDirection::Input).is_none() {
             continue;
-        };
+        }
         let default_config = device.default_input_config()?;
         return Ok(InputDeviceSelection {
             device,
             stream_config: default_config.config(),
             sample_format: default_config.sample_format(),
-            device_info,
         });
     }
 
     bail!("No input audio device is available")
 }
 
-fn device_info(host_id: HostId, device: &Device) -> Option<DeviceInfo> {
-    let default_config = device.default_input_config().ok()?;
+fn default_output_device() -> Result<OutputDeviceSelection> {
+    for host_id in available_non_asio_hosts() {
+        let host = cpal::host_from_id(host_id)?;
+        let Some(device) = host.default_output_device() else {
+            continue;
+        };
+        if device_info(host_id, &device, DeviceDirection::Output).is_none() {
+            continue;
+        }
+        return Ok(OutputDeviceSelection { device });
+    }
+
+    bail!("No output audio device is available")
+}
+
+fn device_info(host_id: HostId, device: &Device, direction: DeviceDirection) -> Option<DeviceInfo> {
+    let default_config = direction.default_config(device)?;
     let stream_config = default_config.config();
     Some(DeviceInfo {
         id: device_id(device),
@@ -113,6 +170,28 @@ fn device_info(host_id: HostId, device: &Device) -> Option<DeviceInfo> {
         channels: stream_config.channels,
         sample_rate: stream_config.sample_rate,
     })
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DeviceDirection {
+    Input,
+    Output,
+}
+
+impl DeviceDirection {
+    fn devices(self, host: &cpal::Host) -> Result<Box<dyn Iterator<Item = Device>>> {
+        match self {
+            Self::Input => Ok(Box::new(host.input_devices()?)),
+            Self::Output => Ok(Box::new(host.output_devices()?)),
+        }
+    }
+
+    fn default_config(self, device: &Device) -> Option<cpal::SupportedStreamConfig> {
+        match self {
+            Self::Input => device.default_input_config().ok(),
+            Self::Output => device.default_output_config().ok(),
+        }
+    }
 }
 
 fn available_non_asio_hosts() -> impl Iterator<Item = HostId> {

@@ -17,6 +17,7 @@ models/
 artifacts/macos-build/
 artifacts/macos-signing/
 scripts/sign-macos-local.sh
+.claude/settings.local.json
 eggs/
 .eggs/
 /lib/

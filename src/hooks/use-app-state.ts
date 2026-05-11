@@ -23,6 +23,7 @@ import type {
   AsrMissingEvent,
   AudioDeviceInfo,
   ConnectionStateEvent,
+  InputLevelEvent,
   ModelDownloadProgress,
   ModelStatus,
   OscMuteStateEvent,
@@ -30,6 +31,8 @@ import type {
   ParapperErrorPayload,
   RecognizedTextEvent,
   RecognitionStatus,
+  SpeechRequestEvent,
+  TranslationTextEvent,
   VadStateEvent,
 } from "../lib/types";
 
@@ -37,12 +40,14 @@ export type RuntimeState = {
   status: RecognitionStatus;
   running: boolean;
   inputLevel: number;
+  inputLevelBeforeGain: number;
   vadState: VadStateEvent | null;
   asrWarning: string | null;
   lastError: ParapperErrorPayload | null;
   oscMuted: boolean | null;
   neoNotFound: boolean;
   vrcNotFound: boolean;
+  translationSpeechDelaySuspected: boolean;
 };
 
 export type ModelState = {
@@ -65,13 +70,17 @@ const initialRuntimeState: RuntimeState = {
   status: "idle",
   running: false,
   inputLevel: 0,
+  inputLevelBeforeGain: 0,
   vadState: null,
   asrWarning: null,
   lastError: null,
   oscMuted: null,
   neoNotFound: false,
   vrcNotFound: false,
+  translationSpeechDelaySuspected: false,
 };
+
+const TRANSLATION_SPEECH_DELAY_WARNING_MS = 3000;
 
 const initialModelState: ModelState = {
   status: null,
@@ -110,11 +119,19 @@ export const useAppState = ({
   const [onboarding, setOnboarding] = useState<OnboardingState>(
     initialOnboardingState,
   );
-  const [audioDevices, setAudioDevices] = useState<AudioDeviceInfo[]>([]);
+  const [inputAudioDevices, setInputAudioDevices] = useState<AudioDeviceInfo[]>(
+    [],
+  );
+  const [outputAudioDevices, setOutputAudioDevices] = useState<
+    AudioDeviceInfo[]
+  >([]);
   const [refreshingAudioDevices, setRefreshingAudioDevices] = useState(false);
   const [recognizedTexts, setRecognizedTexts] = useState<RecognizedTextEvent[]>(
     [],
   );
+  const [translatedTexts, setTranslatedTexts] = useState<
+    TranslationTextEvent[]
+  >([]);
   const nativeConnectionsDisabled = isMacOs();
   const notifiedMissingTargetsRef = useRef<Set<ConnectionStateEvent["target"]>>(
     new Set(),
@@ -147,7 +164,8 @@ export const useAppState = ({
     notifiedMissingTargetsRef.current.add(target);
     notifications.show({
       title: t(`notifications.connectionNotFound.${target}.title`),
-      message: t(`notifications.connectionNotFound.${target}.message`),
+      message:
+        detail ?? t(`notifications.connectionNotFound.${target}.message`),
       color: notificationColor.warn,
     });
     if (detail) console.warn(detail);
@@ -156,9 +174,13 @@ export const useAppState = ({
   const loadAudioDevices = useCallback(async () => {
     setRefreshingAudioDevices(true);
     try {
-      const loadedAudioDevices =
-        await invoke<AudioDeviceInfo[]>("get_audio_devices");
-      setAudioDevices(loadedAudioDevices);
+      const [loadedInputAudioDevices, loadedOutputAudioDevices] =
+        await Promise.all([
+          invoke<AudioDeviceInfo[]>("get_audio_devices"),
+          invoke<AudioDeviceInfo[]>("get_output_audio_devices"),
+        ]);
+      setInputAudioDevices(loadedInputAudioDevices);
+      setOutputAudioDevices(loadedOutputAudioDevices);
     } finally {
       setRefreshingAudioDevices(false);
     }
@@ -178,29 +200,45 @@ export const useAppState = ({
 
   useEffect(() => {
     void (async () => {
-      const loadedConfig = await invoke<ParapperConfig>("get_config");
-      await loadAudioDevices();
-      const loadedStatus = await invoke<RecognitionStatus>(
-        "get_recognition_status",
-      );
-      const loadedModelStatus = await invoke<ModelStatus>("get_model_status");
-      const hasAnyModelInstalled = await invoke<boolean>(
-        "has_any_model_installed",
-      );
-      setConfig(loadedConfig);
-      setAppliedConfig(loadedConfig);
-      setRuntime((current) => ({
-        ...current,
-        status: loadedStatus,
-        running: loadedStatus === "listening",
-      }));
-      setModel((current) => ({ ...current, status: loadedModelStatus }));
-      setOnboarding((current) => ({
-        ...current,
-        open: !hasAnyModelInstalled,
-      }));
+      try {
+        const loadedConfig = await invoke<ParapperConfig>("get_config");
+        setConfig(loadedConfig);
+        setAppliedConfig(loadedConfig);
+
+        await loadAudioDevices().catch((error) => {
+          notifications.show({
+            title: t("notifications.audioDeviceRefreshFailed.title"),
+            message: String(error),
+            color: notificationColor.error,
+          });
+        });
+
+        const loadedStatus = await invoke<RecognitionStatus>(
+          "get_recognition_status",
+        );
+        setRuntime((current) => ({
+          ...current,
+          status: loadedStatus,
+          running: loadedStatus === "listening",
+        }));
+
+        const loadedModelStatus = await invoke<ModelStatus>("get_model_status");
+        setModel((current) => ({ ...current, status: loadedModelStatus }));
+
+        const hasAnyModelInstalled = await invoke<boolean>(
+          "has_any_model_installed",
+        );
+        setOnboarding((current) => ({
+          ...current,
+          open: !hasAnyModelInstalled,
+        }));
+      } catch (error) {
+        const payload = normalizeParapperErrorPayload(error);
+        setRuntime((current) => ({ ...current, lastError: payload }));
+        notifyParapperIssue(payload);
+      }
     })();
-  }, [loadAudioDevices, setAppliedConfig, setConfig]);
+  }, [loadAudioDevices, setAppliedConfig, setConfig, t]);
 
   useEffect(() => {
     configRef.current = config;
@@ -227,6 +265,13 @@ export const useAppState = ({
   useEffect(() => {
     if (!config) return;
 
+    if (!canNeoMainTextDelayTranslationSpeech(config)) {
+      setRuntime((current) => ({
+        ...current,
+        translationSpeechDelaySuspected: false,
+      }));
+    }
+
     if (nativeConnectionsDisabled) {
       applyConnectionState("neo", true);
       applyConnectionState("vrchat", true);
@@ -237,7 +282,19 @@ export const useAppState = ({
       void invoke<boolean>("check_neo_http_available", {
         neoHttpEnabled: config.neo_http_enabled,
         neoHttpPort: config.neo_http_port,
-      }).then((found) => applyConnectionState("neo", found, null, false));
+      }).then(async (found) => {
+        const detectedPort = found
+          ? null
+          : await invoke<number | null>("find_neo_http_port").catch(() => null);
+        const detail =
+          detectedPort && detectedPort !== config.neo_http_port
+            ? t("notifications.connectionNotFound.neo.detectedPortMessage", {
+                configuredPort: config.neo_http_port,
+                detectedPort,
+              })
+            : null;
+        applyConnectionState("neo", found, detail, false);
+      });
     } else {
       applyConnectionState("neo", true);
     }
@@ -258,10 +315,12 @@ export const useAppState = ({
 
   useEffect(() => {
     const unlistenCallbacks = [
-      listen<number>("parapper://input-level", (event) => {
+      listen<InputLevelEvent | number>("parapper://input-level", (event) => {
+        const level = parseInputLevelEvent(event.payload);
         setRuntime((current) => ({
           ...current,
-          inputLevel: Math.min(1, Math.max(0, event.payload)),
+          inputLevel: Math.max(0, level.postGain),
+          inputLevelBeforeGain: Math.max(0, level.preGain),
         }));
       }),
       listen<VadStateEvent>("parapper://vad-state", (event) => {
@@ -274,7 +333,7 @@ export const useAppState = ({
         const eventConfig = configRef.current;
         setRecognizedTexts((texts) =>
           trimRecognizedTextLog(
-            [...texts, event.payload],
+            upsertRecognizedText(texts, event.payload),
             configuredLimit(
               eventConfig?.recognition_log_limit,
               DEFAULT_RECOGNITION_LOG_LIMIT,
@@ -285,6 +344,27 @@ export const useAppState = ({
             ),
           ),
         );
+      }),
+      listen<TranslationTextEvent>("parapper://translated-text", (event) => {
+        setTranslatedTexts((texts) =>
+          upsertTranslatedText(texts, event.payload),
+        );
+      }),
+      listen<SpeechRequestEvent>("parapper://speech-request", (event) => {
+        const eventConfig = configRef.current;
+        if (
+          event.payload.source_kind !== "translation" ||
+          event.payload.status !== "accepted" ||
+          event.payload.elapsed_millis < TRANSLATION_SPEECH_DELAY_WARNING_MS ||
+          !eventConfig ||
+          !canNeoMainTextDelayTranslationSpeech(eventConfig)
+        ) {
+          return;
+        }
+        setRuntime((current) => ({
+          ...current,
+          translationSpeechDelaySuspected: true,
+        }));
       }),
       listen<AsrMissingEvent>("parapper://asr-missing", (event) => {
         setRuntime((current) => ({
@@ -325,8 +405,8 @@ export const useAppState = ({
     };
   }, [configRef, t]);
 
-  const downloadSelectedModels = async () => {
-    if (!config) return null;
+  const downloadSelectedModels = async (downloadConfig = config) => {
+    if (!downloadConfig) return null;
 
     setModel((current) => ({
       ...current,
@@ -335,7 +415,7 @@ export const useAppState = ({
     }));
     try {
       const downloaded = await invoke<ModelStatus>("download_models", {
-        config,
+        config: downloadConfig,
       });
       setModel((current) => ({ ...current, status: downloaded }));
       setRuntime((current) => ({ ...current, asrWarning: null }));
@@ -353,16 +433,94 @@ export const useAppState = ({
     runtime,
     setRuntime,
     model,
-    setModel,
     ui,
     setUi,
     onboarding,
     setOnboarding,
-    audioDevices,
+    inputAudioDevices,
+    outputAudioDevices,
     refreshingAudioDevices,
     recognizedTexts,
     setRecognizedTexts,
+    translatedTexts,
+    setTranslatedTexts,
     refreshAudioDevices,
     downloadSelectedModels,
   };
 };
+
+const canNeoMainTextDelayTranslationSpeech = (config: ParapperConfig) =>
+  config.neo_http_enabled &&
+  config.translation_enabled &&
+  config.translation_mappings.length > 0 &&
+  config.speech_mappings.some(
+    (mapping) =>
+      !mapping.muted &&
+      mapping.source_kind === "translation" &&
+      mapping.backend === "ync" &&
+      mapping.talker.trim() !== "",
+  );
+
+const parseInputLevelEvent = (
+  payload: InputLevelEvent | number,
+): { preGain: number; postGain: number } => {
+  if (typeof payload === "number") {
+    return {
+      preGain: payload,
+      postGain: payload,
+    };
+  }
+  return {
+    preGain: payload.pre_gain_level,
+    postGain: payload.post_gain_level,
+  };
+};
+
+const upsertRecognizedText = (
+  texts: RecognizedTextEvent[],
+  event: RecognizedTextEvent,
+) => {
+  if (event.update_mode !== "replace") {
+    return [...texts, event];
+  }
+
+  const index = texts.findIndex((text) =>
+    sameRecognitionSource(text.source, event.source),
+  );
+  if (index < 0) {
+    return [...texts, event];
+  }
+
+  return texts.map((text, currentIndex) =>
+    currentIndex === index ? event : text,
+  );
+};
+
+const upsertTranslatedText = (
+  texts: TranslationTextEvent[],
+  event: TranslationTextEvent,
+) => {
+  if (event.update_mode !== "replace") {
+    return [...texts, event];
+  }
+
+  const index = texts.findIndex(
+    (text) =>
+      sameRecognitionSource(text.source, event.source) &&
+      text.target_lang === event.target_lang,
+  );
+  if (index < 0) {
+    return [...texts, event];
+  }
+
+  return texts.map((text, currentIndex) =>
+    currentIndex === index ? event : text,
+  );
+};
+
+const sameRecognitionSource = (
+  left: { turn_session_id: number; turn_id: number },
+  right: { turn_session_id: number; turn_id: number },
+) =>
+  left.turn_session_id === right.turn_session_id &&
+  left.turn_id === right.turn_id;

@@ -16,7 +16,11 @@ use tauri::{AppHandle, Emitter};
 use crate::{
     config::ParapperConfig,
     error_event::{ErrorSeverity, ParapperErrorType, emit_parapper_error},
-    recognition::RecognitionPipeline,
+    model::noise_cancellation_model_dir,
+    recognition::{
+        RecognitionPipeline,
+        engines::{NoiseCancellationEngine, UlUnasNoiseCancellationEngine},
+    },
 };
 
 use super::{
@@ -35,6 +39,13 @@ pub struct AudioChunkEvent {
     pub sample_rate: u32,
     pub frames: usize,
     pub level: f32,
+    pub pre_gain_level: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputLevelEvent {
+    pub pre_gain_level: f32,
+    pub post_gain_level: f32,
 }
 
 pub struct RunningAudioInput {
@@ -58,14 +69,6 @@ impl RunningAudioInput {
             sender,
         )?;
         stream.play().context("Failed to start input stream")?;
-
-        log::info!(
-            "Started audio input: {} [{}] {} Hz, {} channel(s)",
-            selection.device_info.display_name,
-            selection.device_info.host,
-            source_sample_rate,
-            selection.stream_config.channels
-        );
 
         let stop_requested = Arc::new(AtomicBool::new(false));
         let worker_stop = stop_requested.clone();
@@ -149,6 +152,19 @@ fn run_audio_worker(
             None
         }
     };
+    let mut noise_cancellation = match create_noise_cancellation_engine(handle, config) {
+        Ok(noise_cancellation) => noise_cancellation,
+        Err(err) => {
+            emit_parapper_error(
+                handle,
+                ParapperErrorType::AudioInput,
+                ErrorSeverity::Fatal,
+                Some(err.to_string()),
+            );
+            recognition = None;
+            None
+        }
+    };
     let mut input_level_emitter = InputLevelEmitter::default();
 
     while !stop_requested.load(Ordering::Acquire) {
@@ -181,15 +197,31 @@ fn run_audio_worker(
         }
 
         match receiver.recv_timeout(Duration::from_millis(50)) {
-            Ok(chunk) => process_input_chunk(
-                handle,
-                &mut resampler,
-                &mut input_level_emitter,
-                recognition.as_mut(),
-                source_sample_rate,
-                &chunk,
-            ),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Ok(chunk) => {
+                let input_gain = input_volume_db_to_gain(current_config.input_volume_db);
+                InputChunkProcessor {
+                    handle,
+                    resampler: &mut resampler,
+                    noise_cancellation: &mut noise_cancellation,
+                    input_level_emitter: &mut input_level_emitter,
+                    recognition: recognition.as_mut(),
+                    source_sample_rate,
+                    input_gain,
+                }
+                .process(&chunk);
+                tick_recognition_after_worker_iteration(
+                    recognition
+                        .as_mut()
+                        .map(|recognition| recognition as &mut dyn RecognitionTicker),
+                );
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                tick_recognition_after_worker_iteration(
+                    recognition
+                        .as_mut()
+                        .map(|recognition| recognition as &mut dyn RecognitionTicker),
+                );
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
@@ -199,61 +231,199 @@ fn run_audio_worker(
     }
 }
 
-fn process_input_chunk(
+trait RecognitionTicker {
+    fn tick(&mut self);
+}
+
+impl RecognitionTicker for RecognitionPipeline {
+    fn tick(&mut self) {
+        RecognitionPipeline::tick(self);
+    }
+}
+
+fn tick_recognition_after_worker_iteration(recognition: Option<&mut dyn RecognitionTicker>) {
+    if let Some(recognition) = recognition {
+        recognition.tick();
+    }
+}
+
+fn create_noise_cancellation_engine(
     handle: &AppHandle,
-    resampler: &mut MonoFastFixedInResampler,
-    input_level_emitter: &mut InputLevelEmitter,
-    mut recognition: Option<&mut RecognitionPipeline>,
+    config: &ParapperConfig,
+) -> Result<Option<Box<dyn NoiseCancellationEngine>>> {
+    if !config.noise_cancellation_enabled {
+        return Ok(None);
+    }
+
+    let model_dir = noise_cancellation_model_dir(handle, config.noise_cancellation_model)?;
+    Ok(Some(Box::new(UlUnasNoiseCancellationEngine::new(
+        &model_dir,
+    )?)))
+}
+
+struct InputChunkProcessor<'a> {
+    handle: &'a AppHandle,
+    resampler: &'a mut MonoFastFixedInResampler,
+    noise_cancellation: &'a mut Option<Box<dyn NoiseCancellationEngine>>,
+    input_level_emitter: &'a mut InputLevelEmitter,
+    recognition: Option<&'a mut RecognitionPipeline>,
     source_sample_rate: u32,
-    chunk: &InputChunk,
-) {
-    let Ok(resampled_chunks) = resampler.push(&chunk.samples) else {
-        emit_parapper_error(
-            handle,
-            ParapperErrorType::Resampler,
-            ErrorSeverity::Warning,
-            Some("Failed to resample input audio".to_string()),
-        );
-        return;
-    };
-    for samples in resampled_chunks {
-        let level = peak_level(&samples);
-        input_level_emitter.push(handle, level);
-        let event = AudioChunkEvent {
-            source_sample_rate,
-            sample_rate: ASR_SAMPLE_RATE,
-            frames: samples.len(),
-            level,
-        };
-        let _ = handle.emit("parapper://audio-chunk", event);
-        if let Some(recognition) = recognition.as_deref_mut()
-            && let Err(err) = recognition.process_chunk(&samples)
-        {
+    input_gain: f32,
+}
+
+impl InputChunkProcessor<'_> {
+    fn process(mut self, chunk: &InputChunk) {
+        let Ok(resampled_chunks) = self.resampler.push(&chunk.samples) else {
             emit_parapper_error(
-                handle,
-                ParapperErrorType::Vad,
+                self.handle,
+                ParapperErrorType::Resampler,
                 ErrorSeverity::Warning,
-                Some(err.to_string()),
+                Some("Failed to resample input audio".to_string()),
             );
+            return;
+        };
+        for mut samples in resampled_chunks {
+            let pre_gain_level = peak_level(&samples);
+            apply_input_gain(&mut samples, self.input_gain);
+            if let Some(noise_cancellation) = self.noise_cancellation.as_deref_mut() {
+                samples = match noise_cancellation.process(&samples) {
+                    Ok(samples) => samples,
+                    Err(err) => {
+                        emit_parapper_error(
+                            self.handle,
+                            ParapperErrorType::AudioInput,
+                            ErrorSeverity::Warning,
+                            Some(err.to_string()),
+                        );
+                        continue;
+                    }
+                };
+            }
+            let post_gain_level = peak_level(&samples);
+            self.input_level_emitter
+                .push(self.handle, pre_gain_level, post_gain_level);
+            let event = AudioChunkEvent {
+                source_sample_rate: self.source_sample_rate,
+                sample_rate: ASR_SAMPLE_RATE,
+                frames: samples.len(),
+                level: post_gain_level,
+                pre_gain_level,
+            };
+            let _ = self.handle.emit("parapper://audio-chunk", event);
+            if let Some(recognition) = self.recognition.as_deref_mut()
+                && let Err(err) = recognition.process_chunk(&samples)
+            {
+                emit_parapper_error(
+                    self.handle,
+                    ParapperErrorType::Vad,
+                    ErrorSeverity::Warning,
+                    Some(err.to_string()),
+                );
+            }
         }
+    }
+}
+
+fn input_volume_db_to_gain(volume_db: f32) -> f32 {
+    let volume_db = if volume_db.is_finite() {
+        volume_db.clamp(-30.0, 30.0)
+    } else {
+        0.0
+    };
+    10.0_f32.powf(volume_db / 20.0)
+}
+
+fn apply_input_gain(samples: &mut [f32], gain: f32) {
+    let gain = if gain.is_finite() { gain } else { 1.0 };
+    for sample in samples {
+        *sample *= gain;
     }
 }
 
 #[derive(Default)]
 struct InputLevelEmitter {
     chunks_since_emit: u32,
-    peak_level: f32,
+    pre_gain_peak_level: f32,
+    post_gain_peak_level: f32,
 }
 
 impl InputLevelEmitter {
-    fn push(&mut self, handle: &AppHandle, level: f32) {
+    fn push(&mut self, handle: &AppHandle, pre_gain_level: f32, post_gain_level: f32) {
         self.chunks_since_emit += 1;
-        self.peak_level = self.peak_level.max(level);
+        self.pre_gain_peak_level = self.pre_gain_peak_level.max(pre_gain_level);
+        self.post_gain_peak_level = self.post_gain_peak_level.max(post_gain_level);
 
         if self.chunks_since_emit >= INPUT_LEVEL_EMIT_CHUNKS {
-            let _ = handle.emit("parapper://input-level", self.peak_level);
+            let _ = handle.emit(
+                "parapper://input-level",
+                InputLevelEvent {
+                    pre_gain_level: self.pre_gain_peak_level,
+                    post_gain_level: self.post_gain_peak_level,
+                },
+            );
             self.chunks_since_emit = 0;
-            self.peak_level = 0.0;
+            self.pre_gain_peak_level = 0.0;
+            self.post_gain_peak_level = 0.0;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        RecognitionTicker, apply_input_gain, input_volume_db_to_gain,
+        tick_recognition_after_worker_iteration,
+    };
+    use crate::audio::stream::peak_level;
+
+    #[derive(Default)]
+    struct MockRecognitionTicker {
+        ticks: usize,
+    }
+
+    impl RecognitionTicker for MockRecognitionTicker {
+        fn tick(&mut self) {
+            self.ticks += 1;
+        }
+    }
+
+    #[test]
+    fn input_volume_db_to_gain_uses_decibel_scale() {
+        assert!((input_volume_db_to_gain(0.0) - 1.0).abs() < f32::EPSILON);
+        assert!((input_volume_db_to_gain(20.0) - 10.0).abs() < 0.0001);
+        assert!((input_volume_db_to_gain(-20.0) - 0.1).abs() < 0.0001);
+    }
+
+    #[test]
+    fn apply_input_gain_does_not_clip_audio_sample_range() {
+        let mut samples = vec![-0.25, 0.25, 0.75];
+
+        apply_input_gain(&mut samples, 2.0);
+
+        assert_eq!(samples, vec![-0.5, 0.5, 1.5]);
+    }
+
+    #[test]
+    fn input_level_peak_preserves_values_above_display_range() {
+        let mut samples = vec![-0.5, 0.25, 0.75];
+
+        apply_input_gain(&mut samples, 4.0);
+
+        assert_eq!(samples, vec![-2.0, 1.0, 3.0]);
+        assert!((peak_level(&samples) - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn worker_iteration_ticks_recognition_after_input_chunk_is_processed() {
+        let mut recognition = MockRecognitionTicker::default();
+
+        tick_recognition_after_worker_iteration(Some(&mut recognition));
+
+        assert_eq!(recognition.ticks, 1);
+    }
+
+    #[test]
+    fn worker_iteration_without_recognition_does_not_panic() {
+        tick_recognition_after_worker_iteration(None);
     }
 }

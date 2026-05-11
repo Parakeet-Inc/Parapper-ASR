@@ -1,7 +1,8 @@
-import { Anchor, Box, Code, ScrollArea, Stack, Text } from "@mantine/core";
+import { Box, Code, ScrollArea, Stack, Text } from "@mantine/core";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import rustLicenses from "../../../licenses/rust.json";
+import { ExternalLink } from "./external-link";
 
 type CargoAboutCrate = {
   name: string;
@@ -22,19 +23,40 @@ type CargoAboutOutput = {
   licenses: CargoAboutLicense[];
 };
 
-const rustLicenseData = rustLicenses as CargoAboutOutput;
-
-const ExternalLink: React.FC<{
-  href: string;
-  children: React.ReactNode;
-}> = ({ href, children }) => (
-  <Anchor href={href} target="_blank" rel="noreferrer">
-    {children}
-  </Anchor>
-);
-
 const RustLicenses: React.FC = () => {
   const { t } = useTranslation();
+  const [rustLicenseData, setRustLicenseData] =
+    useState<CargoAboutOutput | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/licenses/rust.json")
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to load Rust licenses: ${response.status}`);
+        }
+        return response.json() as Promise<CargoAboutOutput>;
+      })
+      .then((data) => {
+        if (!cancelled) {
+          setRustLicenseData(data);
+        }
+      })
+      .catch((error: unknown) => {
+        console.error(error);
+        if (!cancelled) {
+          setRustLicenseData({ licenses: [] });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!rustLicenseData) {
+    return <Text>{t("licenses.loadingRustLicenses")}</Text>;
+  }
 
   return (
     <Stack gap="md">

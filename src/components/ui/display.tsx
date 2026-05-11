@@ -67,12 +67,6 @@ export const DisabledReasonTooltip: React.FC<{
   </Tooltip>
 );
 
-export const thresholdChunksToMs = (chunks: number, intervalMs: number) =>
-  chunks * intervalMs;
-
-export const thresholdMsToChunks = (thresholdMs: number, intervalMs: number) =>
-  Math.max(1, Math.ceil(thresholdMs / Math.max(1, intervalMs)));
-
 export const configsEqual = (
   left: ParapperConfig | null,
   right: ParapperConfig | null,

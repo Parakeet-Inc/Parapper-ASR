@@ -2,7 +2,8 @@ fn main() {
     copy_sherpa_onnx_runtime_dlls();
     copy_macos_sherpa_runtime_libraries();
     configure_macos_runtime_library_path();
-    tauri_build::build();
+    configure_windows_common_controls_manifest();
+    tauri_build::try_build(tauri_build_attributes()).expect("failed to run tauri build helpers");
 }
 
 #[cfg(windows)]
@@ -172,3 +173,55 @@ fn configure_macos_runtime_library_path() {
 
 #[cfg(not(target_os = "macos"))]
 fn configure_macos_runtime_library_path() {}
+
+#[cfg(windows)]
+fn tauri_build_attributes() -> tauri_build::Attributes {
+    tauri_build::Attributes::new()
+        .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest())
+}
+
+#[cfg(not(windows))]
+fn tauri_build_attributes() -> tauri_build::Attributes {
+    tauri_build::Attributes::new()
+}
+
+#[cfg(windows)]
+fn configure_windows_common_controls_manifest() {
+    use std::{env, fs};
+
+    let Some(out_dir) = env::var_os("OUT_DIR") else {
+        return;
+    };
+    let manifest_path = std::path::PathBuf::from(out_dir).join("common-controls-v6.manifest");
+    let manifest = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*" />
+    </dependentAssembly>
+  </dependency>
+</assembly>
+"#;
+    if let Err(err) = fs::write(&manifest_path, manifest) {
+        println!(
+            "cargo:warning=failed to write Windows common-controls manifest {}: {err}",
+            manifest_path.display()
+        );
+        return;
+    }
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!(
+        "cargo:rustc-link-arg=/MANIFESTINPUT:{}",
+        manifest_path.display()
+    );
+}
+
+#[cfg(not(windows))]
+fn configure_windows_common_controls_manifest() {}

@@ -1,23 +1,20 @@
 import { Group, Select, Stack, Text, Title } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { invoke } from "@tauri-apps/api/core";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { OnboardingModal } from "./components/onboarding-modal";
 import { RuntimePanel } from "./components/runtime-panel";
 import { SettingsPanel } from "./components/settings-panel";
 import { StatusBadges } from "./components/status-badges";
+import { TranslationSidePanel } from "./components/translation-side-panel";
 import { useAppState } from "./hooks/use-app-state";
 import { useConfigState } from "./hooks/use-config-state";
 import { availableLanguages, normalizeLanguage } from "./i18n";
-import {
-  asrModelOption,
-  asrModelOptions,
-  asrPrecisionOptions,
-} from "./lib/constants";
+import { zeroMinHeight } from "./lib/layout-styles";
 import { notificationColor } from "./lib/theme";
-import type { ParapperConfig } from "./lib/types";
+import type { ConfigPreset, ParapperConfig } from "./lib/types";
 
 export const App: React.FC = () => {
   const { i18n, t } = useTranslation();
@@ -27,9 +24,11 @@ export const App: React.FC = () => {
     setAppliedConfig,
     configRef,
     updateConfig,
+    replaceConfig,
     resetConfig: resetConfigInner,
     applyAsrModel,
   } = useConfigState(t);
+  const [configPresets, setConfigPresets] = useState<ConfigPreset[]>([]);
   const {
     runtime,
     setRuntime,
@@ -38,10 +37,13 @@ export const App: React.FC = () => {
     setUi,
     onboarding,
     setOnboarding,
-    audioDevices,
+    inputAudioDevices,
+    outputAudioDevices,
     refreshingAudioDevices,
     recognizedTexts,
     setRecognizedTexts,
+    translatedTexts,
+    setTranslatedTexts,
     refreshAudioDevices,
     downloadSelectedModels,
   } = useAppState({
@@ -65,6 +67,17 @@ export const App: React.FC = () => {
     i18n.resolvedLanguage ?? i18n.language,
   );
   const dateTimeLocale = currentLanguage === "en" ? "en-US" : "ja-JP";
+  useEffect(() => {
+    void invoke<ConfigPreset[]>("get_config_presets")
+      .then(setConfigPresets)
+      .catch((error) => {
+        notifications.show({
+          title: t("notifications.configPresetsLoadFailed.title"),
+          message: String(error),
+          color: notificationColor.error,
+        });
+      });
+  }, [t]);
 
   if (!config) {
     return (
@@ -91,17 +104,35 @@ export const App: React.FC = () => {
     }
   };
 
-  const selectedAsrModelOption = asrModelOption(config.asr_model);
-  const asrModelSelectOptions = asrModelOptions.map(({ labelKey, value }) => ({
-    label: t(labelKey),
-    value,
-  }));
-  const selectedAsrPrecisionOptions = asrPrecisionOptions.filter((option) =>
-    selectedAsrModelOption.supportedPrecisions.includes(option.value),
-  );
+  const saveConfigPreset = async (name: string) => {
+    const presets = await invoke<ConfigPreset[]>("save_config_preset", {
+      name,
+      config,
+    });
+    setConfigPresets(presets);
+    return presets;
+  };
+
+  const deleteConfigPreset = async (name: string) => {
+    const presets = await invoke<ConfigPreset[]>("delete_config_preset", {
+      name,
+    });
+    setConfigPresets(presets);
+    return presets;
+  };
+
+  const applyPresetAndDownloadModels = async (presetConfig: ParapperConfig) => {
+    replaceConfig(presetConfig);
+    return downloadSelectedModels(presetConfig);
+  };
+
   const modelsMissing =
     model.status?.vad.installed === false ||
-    model.status?.asr.installed === false;
+    model.status?.asr.installed === false ||
+    model.status?.language_id?.installed === false ||
+    model.status?.turn_detectors.some((status) => !status.installed) === true ||
+    model.status?.tts.some((status) => !status.installed) === true ||
+    model.status?.noise_cancellation?.installed === false;
   const canStartRecognition = !modelsMissing;
 
   return (
@@ -141,10 +172,9 @@ export const App: React.FC = () => {
 
       <OnboardingModal
         onboarding={onboarding}
-        config={config}
         languageOptions={languageOptions}
         currentLanguage={currentLanguage}
-        asrModelSelectOptions={asrModelSelectOptions}
+        configPresets={configPresets}
         downloadingModels={model.downloading}
         modelDownloadProgress={model.progress}
         onClose={() =>
@@ -155,26 +185,28 @@ export const App: React.FC = () => {
         onLanguageChange={(language) =>
           void i18n.changeLanguage(normalizeLanguage(language))
         }
-        onApplyAsrModel={applyAsrModel}
-        onDownloadSelectedModels={downloadSelectedModels}
+        onApplyPresetAndDownload={applyPresetAndDownloadModels}
       />
 
       <Group
         align="stretch"
         wrap="nowrap"
         gap="md"
-        style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
+        style={{ flex: 1, ...zeroMinHeight, overflow: "hidden" }}
       >
         <SettingsPanel
           config={config}
+          outputAudioDevices={outputAudioDevices}
           settingsOpen={ui.settingsOpen}
           settingsTab={ui.settingsTab}
           running={runtime.running}
-          selectedAsrPrecisionOptions={selectedAsrPrecisionOptions}
-          asrModelSelectOptions={asrModelSelectOptions}
+          translationSpeechDelaySuspected={
+            runtime.translationSpeechDelaySuspected
+          }
           modelStatus={model.status}
           downloadingModels={model.downloading}
           modelDownloadProgress={model.progress}
+          configPresets={configPresets}
           onSettingsOpenChange={(settingsOpen) =>
             setUi((current) => ({ ...current, settingsOpen }))
           }
@@ -185,22 +217,45 @@ export const App: React.FC = () => {
           onApplyAsrModel={applyAsrModel}
           onDownloadSelectedModels={() => void downloadSelectedModels()}
           onResetConfig={resetConfigInner}
+          onSaveConfigPreset={saveConfigPreset}
+          onDeleteConfigPreset={deleteConfigPreset}
+          onApplyConfigPreset={replaceConfig}
         />
 
         <RuntimePanel
           config={config}
-          audioDevices={audioDevices}
+          inputAudioDevices={inputAudioDevices}
           recognizedTexts={recognizedTexts}
           runtime={runtime}
           setRuntime={setRuntime}
           refreshingAudioDevices={refreshingAudioDevices}
+          translationPanel={
+            config.translation_enabled ? (
+              <TranslationSidePanel
+                translatedTexts={translatedTexts}
+                onClearTranslatedTexts={() => setTranslatedTexts([])}
+              />
+            ) : null
+          }
           dateTimeLocale={dateTimeLocale}
           canStartRecognition={canStartRecognition}
+          downloadingModels={model.downloading}
           onClearRecognizedTexts={() => setRecognizedTexts([])}
           onRefreshAudioDevices={() => void refreshAudioDevices()}
           onApplyAudioDeviceConfig={(nextConfig) =>
             void applyAudioDeviceConfig(nextConfig)
           }
+          onUpdateConfig={updateConfig}
+          onOpenModelDownload={() => {
+            setUi((current) => ({
+              ...current,
+              settingsOpen: true,
+              settingsTab: "connection",
+            }));
+            if (!model.downloading) {
+              void downloadSelectedModels();
+            }
+          }}
         />
       </Group>
     </Stack>

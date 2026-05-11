@@ -1,12 +1,16 @@
-use std::fs;
+use std::{fs, process::Command};
 
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
-    audio::{DeviceInfo, collect_input_devices},
+    audio::{DeviceInfo, collect_input_devices, collect_output_devices},
     config::ParapperConfig,
-    connect::{detect_neo_http_port, neo_http_available, query_current_mute_state},
+    config_preset::ConfigPreset,
+    connect::{
+        SpeechRequest, YncPluginClient, detect_ync_plugin_http_port,
+        detect_ync_text_input_http_port, query_current_mute_state, ync_text_input_http_available,
+    },
     error_event::{ErrorSeverity, ParapperErrorPayload, ParapperErrorType, parapper_error_payload},
     model::{ModelStatus, ensure_models_downloaded},
     recognition::RecognitionStatus,
@@ -17,6 +21,47 @@ type CommandResult<T> = Result<T, ParapperErrorPayload>;
 
 fn command_error(error_type: ParapperErrorType, detail: String) -> ParapperErrorPayload {
     parapper_error_payload(error_type, ErrorSeverity::Fatal, detail)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri::command が JS invoke payload から所有 String を受け取るため"
+)]
+pub fn open_external_url(url: String) -> CommandResult<()> {
+    if !is_safe_external_url(&url) {
+        return Err(command_error(
+            ParapperErrorType::Unknown,
+            format!("Unsupported external URL: {url}"),
+        ));
+    }
+
+    open_url_with_platform(&url)
+        .map(|_| ())
+        .map_err(|err| command_error(ParapperErrorType::Unknown, err.to_string()))
+}
+
+fn is_safe_external_url(url: &str) -> bool {
+    (url.starts_with("https://") || url.starts_with("http://"))
+        && !url.chars().any(char::is_control)
+}
+
+#[cfg(target_os = "windows")]
+fn open_url_with_platform(url: &str) -> std::io::Result<std::process::Child> {
+    Command::new("rundll32")
+        .arg("url.dll,FileProtocolHandler")
+        .arg(url)
+        .spawn()
+}
+
+#[cfg(target_os = "macos")]
+fn open_url_with_platform(url: &str) -> std::io::Result<std::process::Child> {
+    Command::new("open").arg(url).spawn()
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_url_with_platform(url: &str) -> std::io::Result<std::process::Child> {
+    Command::new("xdg-open").arg(url).spawn()
 }
 
 #[tauri::command]
@@ -43,9 +88,57 @@ pub async fn reset_config(state: State<'_, AppState>) -> CommandResult<ParapperC
         .map_err(|err| command_error(ParapperErrorType::Config, err.to_string()))
 }
 
+// 以下 3 つは sync コマンドで `State<'_, AppState>` を値で受け取るため、
+// clippy::needless_pass_by_value の対象になる。tauri::command が要求する正規のシグネチャなので
+// 偽陽性として #[expect] でマークする（必要なくなれば lint がそれ自身を warn してくれる）。
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri::command が要求する State<'_, T> の値渡しによる偽陽性"
+)]
+pub(crate) fn get_config_presets(state: State<'_, AppState>) -> CommandResult<Vec<ConfigPreset>> {
+    state
+        .config_presets()
+        .map_err(|err| command_error(ParapperErrorType::Config, err.to_string()))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri::command が要求する State<'_, T> の値渡しによる偽陽性"
+)]
+pub(crate) fn save_config_preset(
+    state: State<'_, AppState>,
+    name: String,
+    config: ParapperConfig,
+) -> CommandResult<Vec<ConfigPreset>> {
+    state
+        .save_config_preset(name, config)
+        .map_err(|err| command_error(ParapperErrorType::Config, err.to_string()))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri::command が要求する State<'_, T> の値渡しによる偽陽性"
+)]
+pub(crate) fn delete_config_preset(
+    state: State<'_, AppState>,
+    name: String,
+) -> CommandResult<Vec<ConfigPreset>> {
+    state
+        .delete_config_preset(name)
+        .map_err(|err| command_error(ParapperErrorType::Config, err.to_string()))
+}
+
 #[tauri::command]
 pub fn get_audio_devices() -> Vec<DeviceInfo> {
     collect_input_devices()
+}
+
+#[tauri::command]
+pub fn get_output_audio_devices() -> Vec<DeviceInfo> {
+    collect_output_devices()
 }
 
 #[tauri::command]
@@ -53,7 +146,15 @@ pub fn find_neo_http_port() -> Option<u16> {
     if !ParapperConfig::neo_http_supported() {
         return None;
     }
-    detect_neo_http_port()
+    detect_ync_text_input_http_port()
+}
+
+#[tauri::command]
+pub fn find_ync_plugin_http_port() -> Option<u16> {
+    if !ParapperConfig::neo_http_supported() {
+        return None;
+    }
+    detect_ync_plugin_http_port()
 }
 
 #[tauri::command]
@@ -64,7 +165,7 @@ pub fn check_neo_http_available(neo_http_enabled: bool, neo_http_port: u16) -> b
     if !neo_http_enabled {
         return true;
     }
-    neo_http_available(neo_http_port) || detect_neo_http_port().is_some_and(neo_http_available)
+    ync_text_input_http_available(neo_http_port)
 }
 
 #[tauri::command]
@@ -76,6 +177,57 @@ pub fn check_vrchat_oscquery_available(vrc_osc_micmute: bool) -> bool {
         return true;
     }
     query_current_mute_state().is_ok()
+}
+
+#[tauri::command]
+pub async fn fetch_neo_voice_list(port: u16) -> CommandResult<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut client = YncPluginClient::for_command(port)
+            .map_err(|err| command_error(ParapperErrorType::NeoHttp, err.to_string()))?;
+        client
+            .voice_list("voice-list")
+            .map_err(|err| command_error(ParapperErrorType::NeoHttp, err.to_string()))
+    })
+    .await
+    .map_err(|err| command_error(ParapperErrorType::NeoHttp, err.to_string()))?
+}
+
+#[tauri::command]
+pub async fn neo_speech_stop(port: u16) -> CommandResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut client = YncPluginClient::for_speech(port)
+            .map_err(|err| command_error(ParapperErrorType::NeoHttp, err.to_string()))?;
+        client
+            .speech_stop("speech-stop")
+            .map_err(|err| command_error(ParapperErrorType::NeoHttp, err.to_string()))
+    })
+    .await
+    .map_err(|err| command_error(ParapperErrorType::NeoHttp, err.to_string()))?
+}
+
+#[tauri::command]
+pub async fn neo_speech_test(port: u16, talker: String, text: String) -> CommandResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut client = YncPluginClient::for_command(port)
+            .map_err(|err| command_error(ParapperErrorType::NeoHttp, err.to_string()))?;
+        let response = client
+            .speech(SpeechRequest {
+                id: "speech-test",
+                text: &text,
+                talker: &talker,
+                volume: 1.0,
+            })
+            .map_err(|err| command_error(ParapperErrorType::NeoHttp, err.to_string()))?;
+        if response.id != "speech-test" {
+            log::warn!(
+                "YNC speech test response id differs: request=speech-test, response={}",
+                response.id
+            );
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|err| command_error(ParapperErrorType::NeoHttp, err.to_string()))?
 }
 
 #[tauri::command]
