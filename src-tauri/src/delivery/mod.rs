@@ -5,7 +5,7 @@ mod dispatch;
 mod sinks;
 mod types;
 
-pub(crate) use crate::recognition::events::RecognitionSourceMeta;
+pub(crate) use crate::recognition::control::events::RecognitionSourceMeta;
 #[cfg(test)]
 pub(crate) use crate::synthesis::{
     QueuedSpeechRequest, build_speech_requests, spawn_speech_requests,

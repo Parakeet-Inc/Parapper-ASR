@@ -129,6 +129,7 @@ export const App: React.FC = () => {
   const modelsMissing =
     model.status?.vad.installed === false ||
     model.status?.asr.installed === false ||
+    model.status?.japanese_morph?.installed === false ||
     model.status?.language_id?.installed === false ||
     model.status?.turn_detectors.some((status) => !status.installed) === true ||
     model.status?.tts.some((status) => !status.installed) === true ||
@@ -199,7 +200,7 @@ export const App: React.FC = () => {
           outputAudioDevices={outputAudioDevices}
           settingsOpen={ui.settingsOpen}
           settingsTab={ui.settingsTab}
-          running={runtime.running}
+          running={runtime.running || runtime.starting}
           translationSpeechDelaySuspected={
             runtime.translationSpeechDelaySuspected
           }
@@ -232,15 +233,22 @@ export const App: React.FC = () => {
           translationPanel={
             config.translation_enabled ? (
               <TranslationSidePanel
+                config={config}
+                recognizedTexts={recognizedTexts}
                 translatedTexts={translatedTexts}
-                onClearTranslatedTexts={() => setTranslatedTexts([])}
               />
             ) : null
           }
           dateTimeLocale={dateTimeLocale}
           canStartRecognition={canStartRecognition}
           downloadingModels={model.downloading}
-          onClearRecognizedTexts={() => setRecognizedTexts([])}
+          canClearLogs={
+            recognizedTexts.length > 0 || translatedTexts.length > 0
+          }
+          onClearRecognizedTexts={() => {
+            setRecognizedTexts([]);
+            setTranslatedTexts([]);
+          }}
           onRefreshAudioDevices={() => void refreshAudioDevices()}
           onApplyAudioDeviceConfig={(nextConfig) =>
             void applyAudioDeviceConfig(nextConfig)

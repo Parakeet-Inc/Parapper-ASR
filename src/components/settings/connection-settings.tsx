@@ -66,24 +66,35 @@ export const ConnectionSettings: React.FC<ConnectionSettingsProps> = ({
       key: "noise-cancellation",
       label: "NC",
       installed: modelStatus?.noise_cancellation?.installed === true,
+      preparing: modelStatus?.noise_cancellation?.preparing === true,
       visible: Boolean(modelStatus?.noise_cancellation),
     },
     {
       key: "vad",
       label: "VAD",
       installed: modelStatus?.vad.installed === true,
+      preparing: modelStatus?.vad.preparing === true,
       visible: true,
     },
     {
       key: "asr",
       label: "ASR",
       installed: modelStatus?.asr.installed === true,
+      preparing: modelStatus?.asr.preparing === true,
       visible: true,
+    },
+    {
+      key: "japanese-morph",
+      label: "Morph",
+      installed: modelStatus?.japanese_morph?.installed === true,
+      preparing: modelStatus?.japanese_morph?.preparing === true,
+      visible: Boolean(modelStatus?.japanese_morph),
     },
     {
       key: "language-id",
       label: "SLI",
       installed: modelStatus?.language_id?.installed === true,
+      preparing: modelStatus?.language_id?.preparing === true,
       visible: Boolean(modelStatus?.language_id),
     },
     {
@@ -92,12 +103,16 @@ export const ConnectionSettings: React.FC<ConnectionSettingsProps> = ({
       installed:
         modelStatus?.turn_detectors?.every((status) => status.installed) ===
         true,
+      preparing:
+        modelStatus?.turn_detectors?.some((status) => status.preparing) ===
+        true,
       visible: Boolean(modelStatus?.turn_detectors?.length),
     },
     {
       key: "tts",
       label: "TTS",
       installed: modelStatus?.tts?.every((status) => status.installed) === true,
+      preparing: modelStatus?.tts?.some((status) => status.preparing) === true,
       visible: Boolean(modelStatus?.tts?.length),
     },
   ];
@@ -285,12 +300,18 @@ export const ConnectionSettings: React.FC<ConnectionSettingsProps> = ({
                 color={
                   badge.installed
                     ? notificationColor.ok
+                    : badge.preparing
+                      ? "blue"
                     : notificationColor.warn
                 }
                 variant="light"
               >
                 {badge.label}{" "}
-                {badge.installed ? t("status.ready") : t("status.missing")}
+                {badge.installed
+                  ? t("status.ready")
+                  : badge.preparing
+                    ? t("status.downloading")
+                    : t("status.missing")}
               </Badge>
             ))}
         </Group>

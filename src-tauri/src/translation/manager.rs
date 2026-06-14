@@ -14,7 +14,7 @@ use super::{
     queue::{TranslationQueueState, push_translation_request},
     request::{TranslationRequest, build_translation_request},
 };
-use crate::recognition::events::TranslationTextStatus;
+use crate::recognition::control::events::TranslationTextStatus;
 
 pub(crate) fn spawn_translation_if_needed(
     handle: &AppHandle,

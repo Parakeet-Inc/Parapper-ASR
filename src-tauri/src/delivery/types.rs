@@ -1,8 +1,8 @@
 use crate::{
     config::{AsrLanguage, AsrModel},
     recognition::{
-        events::{RecognitionSourceMeta, RecognizedTextUpdateMode},
-        route::RecognitionRoute,
+        control::events::{RecognitionSourceMeta, RecognizedTextUpdateMode},
+        transcription::route::RecognitionRoute,
     },
 };
 
@@ -65,7 +65,16 @@ impl RecognizedTextOutput {
 }
 
 impl RecognizedTextMeta {
+    #[cfg(test)]
     pub(crate) fn replace_turn(id: String, source: RecognitionSourceMeta, is_final: bool) -> Self {
+        Self::replace_turn_output(id, source, is_final)
+    }
+
+    pub(crate) fn replace_turn_output(
+        id: String,
+        source: RecognitionSourceMeta,
+        is_final: bool,
+    ) -> Self {
         Self {
             id,
             is_final,

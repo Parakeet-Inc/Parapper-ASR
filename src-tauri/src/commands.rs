@@ -332,7 +332,15 @@ pub async fn start_recognition(
     let status = state
         .start_audio_input(handle.clone())
         .await
-        .map_err(|err| command_error(ParapperErrorType::AudioInput, err.to_string()))?;
+        .map_err(|err| {
+            let detail = err.to_string();
+            let error_type = if err.is_asr() {
+                ParapperErrorType::Asr
+            } else {
+                ParapperErrorType::AudioInput
+            };
+            command_error(error_type, detail)
+        })?;
     handle
         .emit("parapper://status", status)
         .map_err(|err| command_error(ParapperErrorType::Unknown, err.to_string()))?;

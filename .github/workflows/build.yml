@@ -7,7 +7,7 @@ on:
     branches:
       - main
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
@@ -19,11 +19,11 @@ jobs:
 
     env:
       CARGO_TERM_COLOR: always
-      RUST_VERSION: 1.88.0
+      RUST_VERSION: 1.90.0
       TARGET_TRIPLE: x86_64-pc-windows-msvc
       SHERPA_ONNX_VERSION: 1.12.39
       SHERPA_PREBUILT_DIR: sherpa-onnx-v1.12.39-win-x64-shared-MT-Release-lib
-      SHERPA_PREBUILT_URL: https://sourceforge.net/projects/sherpa-onnx.mirror/files/v1.12.39/sherpa-onnx-v1.12.39-win-x64-shared-MT-Release-lib.tar.bz2/download
+      SHERPA_PREBUILT_URL: https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.39/sherpa-onnx-v1.12.39-win-x64-shared-MT-Release-lib.tar.bz2
 
     steps:
       - name: Checkout

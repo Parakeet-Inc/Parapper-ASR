@@ -10,7 +10,7 @@ use crate::{
     config::{NeoSendTiming, ParapperConfig},
     connect::{TextTransport, YncTextInputTransport},
     delivery::{RecognizedTextOutput, sinks::ui_event::emit_connection_state},
-    recognition::events::ConnectionTarget,
+    recognition::control::events::ConnectionTarget,
 };
 
 use super::{DispatchContext, RecognizedTextSink};
@@ -85,7 +85,7 @@ fn run_text_delivery_queue(receiver: &mpsc::Receiver<TextDeliveryRequest>) {
     let mut text_transport = None;
     while let Ok(request) = receiver.recv() {
         let request = latest_text_delivery_request(request, receiver);
-        let transport = text_transport_for_port(&mut text_transport, request.config.neo_http_port);
+        let transport = text_transport_for_port(&mut text_transport, request.config.neo.http_port);
         send_text_to_neo_if_needed(
             &request.handle,
             &request.config,
@@ -126,7 +126,7 @@ fn send_text_to_neo_if_needed(
     mute_check: Option<JoinHandle<bool>>,
     text: &str,
 ) {
-    let vrchat_muted = config.vrc_osc_micmute
+    let vrchat_muted = config.vrc.osc_micmute
         && ParapperConfig::vrc_osc_supported()
         && is_vrchat_muted_before_send(handle, mute_check);
     if vrchat_muted {
@@ -158,7 +158,7 @@ fn send_text_to_neo_if_needed(
 }
 
 pub(crate) fn should_send_to_neo(config: &ParapperConfig, is_final: bool) -> bool {
-    config.neo_http_enabled
+    config.neo.http_enabled
         && ParapperConfig::neo_http_supported()
-        && (config.neo_send_timing == NeoSendTiming::Interim || is_final)
+        && (config.neo.send_timing == NeoSendTiming::Interim || is_final)
 }

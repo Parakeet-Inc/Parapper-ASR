@@ -22,6 +22,7 @@ import {
   formatCsvFileTimestamp,
   formatLogTime,
 } from "../lib/recognition-log-csv";
+import { recognitionSourceRowId } from "../lib/recognition-source";
 import { notificationColor } from "../lib/theme";
 import type { RecognizedTextEvent } from "../lib/types";
 
@@ -31,16 +32,21 @@ import IconPlayArrow from "~icons/material-symbols/play-arrow";
 type RecognitionLogProps = {
   asrWarning: string | null;
   recognizedTexts: RecognizedTextEvent[];
+  reserveLanguageBadge: boolean;
   dateTimeLocale: string;
+  canClearLogs: boolean;
   onClear: () => void;
 };
 
 const formatDetectedLanguage = (language: string) => language.toUpperCase();
+const LANGUAGE_BADGE_SLOT_WIDTH = 44;
 
 export const RecognitionLog: React.FC<RecognitionLogProps> = ({
   asrWarning,
   recognizedTexts,
+  reserveLanguageBadge,
   dateTimeLocale,
+  canClearLogs,
   onClear,
 }) => {
   const { t } = useTranslation();
@@ -161,7 +167,7 @@ export const RecognitionLog: React.FC<RecognitionLogProps> = ({
             <Button
               variant="default"
               size="xs"
-              disabled={recognizedTexts.length === 0}
+              disabled={!canClearLogs}
               onClick={onClear}
             >
               {t("common.resetLogs")}
@@ -197,10 +203,10 @@ export const RecognitionLog: React.FC<RecognitionLogProps> = ({
                 {t("recognitionLog.empty")}
               </Text>
             ) : (
-              recognizedTexts.map((entry, index) => (
+              recognizedTexts.map((entry) => (
                 <Paper
-                  key={`${entry.id}-${index}`}
-                  data-log-row-id={entry.id}
+                  key={entry.id}
+                  data-log-row-id={recognitionSourceRowId(entry.source)}
                   p="xs"
                   withBorder
                   radius="sm"
@@ -216,22 +222,37 @@ export const RecognitionLog: React.FC<RecognitionLogProps> = ({
                     >
                       {entry.text}
                     </Text>
-                    {entry.detected_language ? (
-                      <Badge color="blue" variant="light" size="sm">
-                        {formatDetectedLanguage(entry.detected_language)}
-                      </Badge>
+                    {reserveLanguageBadge || entry.detected_language ? (
+                      <Box
+                        w={LANGUAGE_BADGE_SLOT_WIDTH}
+                        miw={LANGUAGE_BADGE_SLOT_WIDTH}
+                        style={{ display: "flex", justifyContent: "center" }}
+                      >
+                        {entry.detected_language ? (
+                          <Badge color="blue" variant="light" size="sm">
+                            {formatDetectedLanguage(entry.detected_language)}
+                          </Badge>
+                        ) : null}
+                      </Box>
                     ) : null}
-                    {!entry.is_final ? (
-                      <Badge color="cyan" variant="light" size="sm">
-                        {t("recognitionLog.partial")}
-                      </Badge>
-                    ) : null}
-                    <Text size="xs" c="dimmed" w={72} ta="right">
-                      {formatLogTime(
-                        entry.recognized_at_millis,
-                        dateTimeLocale,
+                    <Box
+                      w={72}
+                      miw={72}
+                      style={{ display: "flex", justifyContent: "flex-end" }}
+                    >
+                      {!entry.is_final ? (
+                        <Badge color="cyan" variant="light" size="sm">
+                          {t("recognitionLog.partial")}
+                        </Badge>
+                      ) : (
+                        <Text size="xs" c="dimmed" ta="right">
+                          {formatLogTime(
+                            entry.recognized_at_millis,
+                            dateTimeLocale,
+                          )}
+                        </Text>
                       )}
-                    </Text>
+                    </Box>
                     <Text size="xs" c="dimmed" w={72} ta="right">
                       {entry.elapsed_millis} ms
                     </Text>

@@ -53,10 +53,17 @@ fn same_tts_source(left: &QueuedSpeechRequest, right: &QueuedSpeechRequest) -> b
         && left.source_meta.turn_id == right.source_meta.turn_id
 }
 
-pub(super) type SpeechOrderKey = u64;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct SpeechOrderKey {
+    turn_session_id: u64,
+    output_sequence: u64,
+}
 
 pub(super) fn speech_order_key_for_request(request: &QueuedSpeechRequest) -> SpeechOrderKey {
-    request.source_meta.output_sequence
+    SpeechOrderKey {
+        turn_session_id: request.source_meta.turn_session_id,
+        output_sequence: request.source_meta.output_sequence,
+    }
 }
 
 #[cfg(test)]

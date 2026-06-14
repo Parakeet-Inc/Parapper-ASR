@@ -8,7 +8,7 @@ pub(crate) fn speech_timing_allows(is_final: bool) -> bool {
 }
 
 pub(crate) fn translation_timing_allows(config: &ParapperConfig, is_final: bool) -> bool {
-    config.translation_send_timing == NeoSendTiming::Interim || is_final
+    config.translation.send_timing == NeoSendTiming::Interim || is_final
 }
 
 pub(crate) fn translation_timing_allows_output(

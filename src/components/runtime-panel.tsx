@@ -47,6 +47,7 @@ type RuntimePanelProps = {
   translationPanel?: ReactNode;
   dateTimeLocale: string;
   canStartRecognition: boolean;
+  canClearLogs: boolean;
   downloadingModels: boolean;
   onClearRecognizedTexts: () => void;
   onRefreshAudioDevices: () => void;
@@ -68,6 +69,7 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
   translationPanel,
   dateTimeLocale,
   canStartRecognition,
+  canClearLogs,
   downloadingModels,
   onClearRecognizedTexts,
   onRefreshAudioDevices,
@@ -98,6 +100,7 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
     runtime.inputLevel,
     runtime.inputLevelBeforeGain,
   );
+  const runtimeLocked = runtime.running || runtime.starting;
   useSyncedLogRowHeights(panelRef, hasTranslationPanel);
 
   const refreshRecognitionStatus = async () => {
@@ -108,6 +111,7 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
       ...current,
       status: nextStatus,
       running: nextStatus === "listening",
+      starting: false,
     }));
     return nextStatus;
   };
@@ -119,6 +123,7 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
         ...current,
         status: nextStatus,
         running: false,
+        starting: false,
       }));
     } catch (error) {
       const payload = normalizeParapperErrorPayload(error);
@@ -129,16 +134,26 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
   };
 
   const startRecognition = async () => {
+    setRuntime((current) => ({
+      ...current,
+      starting: true,
+    }));
     try {
       const nextStatus = await invoke<RecognitionStatus>("start_recognition");
       setRuntime((current) => ({
         ...current,
         status: nextStatus,
         running: nextStatus === "listening",
+        starting: false,
       }));
     } catch (error) {
       const payload = normalizeParapperErrorPayload(error);
-      setRuntime((current) => ({ ...current, lastError: payload }));
+      setRuntime((current) => ({
+        ...current,
+        running: false,
+        starting: false,
+        lastError: payload,
+      }));
       notifyParapperIssue(payload);
       try {
         await invoke<RecognitionStatus>("stop_recognition");
@@ -180,7 +195,9 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
         <RecognitionLog
           asrWarning={runtime.asrWarning}
           recognizedTexts={recognizedTexts}
+          reserveLanguageBadge={config.multilingual_asr_enabled}
           dateTimeLocale={dateTimeLocale}
+          canClearLogs={canClearLogs}
           onClear={onClearRecognizedTexts}
         />
       </Box>
@@ -202,7 +219,7 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
           <Flex align="end" gap="xs" wrap="wrap">
             <Tooltip
               label={t("tooltip.runtimeLocked")}
-              disabled={!runtime.running}
+              disabled={!runtimeLocked}
               multiline
               w={280}
             >
@@ -215,7 +232,7 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
                   clearable
                   searchable
                   maxDropdownHeight={180}
-                  disabled={runtime.running}
+                  disabled={runtimeLocked}
                   onChange={(value) => {
                     if (!value) {
                       onApplyAudioDeviceConfig({
@@ -244,7 +261,7 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
             </Tooltip>
             <Tooltip
               label={
-                runtime.running
+                runtimeLocked
                   ? t("tooltip.runtimeLocked")
                   : t("settings.audioDevice.refreshTooltip")
               }
@@ -255,7 +272,7 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
                   aria-label={t("settings.audioDevice.refreshAriaLabel")}
                   variant="default"
                   size="lg"
-                  disabled={runtime.running}
+                  disabled={runtimeLocked}
                   loading={refreshingAudioDevices}
                   onClick={onRefreshAudioDevices}
                 >
@@ -269,9 +286,13 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
               miw={96}
               style={{ flexShrink: 0, whiteSpace: "nowrap" }}
               loading={
-                !runtime.running && !canStartRecognition && downloadingModels
+                runtime.starting ||
+                (!runtime.running && !canStartRecognition && downloadingModels)
               }
               onClick={() => {
+                if (runtime.starting) {
+                  return;
+                }
                 if (runtime.running) {
                   void stopRecognition();
                   return;

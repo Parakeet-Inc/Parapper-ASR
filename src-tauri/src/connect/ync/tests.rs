@@ -385,7 +385,7 @@ fn translation_commands_are_not_serialized_in_timing_subset() {
 fn recognition_delay_for_turn_detector(turn_detector: TurnDetector) -> Duration {
     match turn_detector {
         TurnDetector::Simple => Duration::from_millis(10),
-        TurnDetector::Namo => Duration::from_millis(15),
+        TurnDetector::Morph | TurnDetector::Namo => Duration::from_millis(15),
     }
 }
 

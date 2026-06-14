@@ -6,7 +6,10 @@ use std::{
 
 use anyhow::{Context, Result};
 
-use crate::connect::{TextTransport, registry::detect_dword_value_u16};
+use crate::connect::TextTransport;
+
+#[cfg(windows)]
+use crate::connect::registry::detect_dword_value_u16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct YncTextInputTransport {

@@ -27,6 +27,7 @@ export const ja = {
     open: "open",
     idle: "idle",
     ready: "ready",
+    downloading: "downloading",
     missing: "missing",
     neoNotFound: "NEO not found",
     vrcNotFound: "VRChat not found",
@@ -155,7 +156,7 @@ export const ja = {
     turnRerecognizeFull: {
       label: "完了時に全体を再ASRする",
       description:
-        "長無音で発話が完了したとき、全体音声をもう一度 ASR にかけて結果を上書きします。Namo が途中確定した場合は常に全体を再ASRします。",
+        "長無音で発話が完了したとき、全体音声をもう一度 ASR にかけて結果を上書きします。Morph / Namo では完了判定時に全体を再ASRします。",
     },
     asrModel: {
       label: "ASRモデル",
@@ -258,12 +259,15 @@ export const ja = {
     },
     asrModel: {
       reazonspeechK2V2: "日本語 (ReazonSpeech k2 v2)",
+      nemoParakeetTdtCtcJa35000Int8:
+        "日本語 (NeMo Parakeet TDT-CTC 0.6B 35000h int8)",
       nemoParakeetTdtV2Int8: "英語 (NeMo Parakeet TDT 0.6B v2 int8)",
       nemoParakeetTdtV3Int8:
         "ヨーロッパ系他言語 (NeMo Parakeet TDT 0.6B v3 int8)",
     },
     turnDetector: {
       simple: "Simple",
+      morph: "Morph",
       namo: "Namo",
     },
     noiseCancellationModel: {

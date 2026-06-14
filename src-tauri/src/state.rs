@@ -1,18 +1,16 @@
-use std::{
-    path::PathBuf,
-    sync::{Arc, RwLock},
-};
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
 use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 
 use crate::{
-    audio::RunningAudioInput,
     config::{ParapperConfig, SpeechMapping},
     config_preset::{ConfigPreset, delete_config_preset, load_config_presets, save_config_preset},
     model::{ModelStatus, any_model_installed_in, model_status_from_root, models_root},
-    recognition::RecognitionStatus,
+    recognition::{
+        RecognitionStartError, RecognitionStatus, RunningRecognitionInput, RuntimeConfigState,
+    },
     synthesis::prewarm_local_tts_engines,
 };
 
@@ -21,9 +19,9 @@ pub struct AppState {
     config_presets_path: PathBuf,
     models_root: PathBuf,
     config: Mutex<ParapperConfig>,
-    runtime_config: Arc<RwLock<ParapperConfig>>,
+    runtime_config: Arc<RuntimeConfigState>,
     recognition_status: Mutex<RecognitionStatus>,
-    audio_input: Mutex<Option<RunningAudioInput>>,
+    recognition_input: Mutex<Option<RunningRecognitionInput>>,
 }
 
 impl AppState {
@@ -41,10 +39,10 @@ impl AppState {
             config_path,
             config_presets_path,
             models_root,
-            runtime_config: Arc::new(RwLock::new(config.clone())),
+            runtime_config: Arc::new(RuntimeConfigState::new(config.clone())),
             config: Mutex::new(config),
             recognition_status: Mutex::new(RecognitionStatus::Idle),
-            audio_input: Mutex::new(None),
+            recognition_input: Mutex::new(None),
         })
     }
 
@@ -56,15 +54,14 @@ impl AppState {
         let mut config = config.normalized();
         if *self.recognition_status.lock().await == RecognitionStatus::Listening {
             let previous = self.runtime_config_snapshot()?;
-            config.speech_mappings = preserve_running_speech_model_mappings(
-                &previous.speech_mappings,
-                &config.speech_mappings,
+            preserve_running_vad_interval(&previous, &mut config);
+            config.speech.mappings = preserve_running_speech_model_mappings(
+                &previous.speech.mappings,
+                &config.speech.mappings,
             );
         }
         config.save(&self.config_path)?;
-        if let Ok(mut runtime_config) = self.runtime_config.write() {
-            *runtime_config = config.clone();
-        }
+        self.runtime_config.replace(config.clone());
         *self.config.lock().await = config.clone();
         Ok(config)
     }
@@ -90,10 +87,7 @@ impl AppState {
     }
 
     pub fn runtime_config_snapshot(&self) -> Result<ParapperConfig> {
-        self.runtime_config
-            .read()
-            .map(|config| config.clone())
-            .map_err(|_| anyhow::anyhow!("runtime config lock is poisoned"))
+        self.runtime_config.snapshot()
     }
 
     pub fn has_any_model_installed(&self) -> Result<bool> {
@@ -112,9 +106,12 @@ impl AppState {
         status
     }
 
-    pub async fn start_audio_input(&self, handle: AppHandle) -> Result<RecognitionStatus> {
-        let mut audio_input = self.audio_input.lock().await;
-        if audio_input.is_some() {
+    pub async fn start_audio_input(
+        &self,
+        handle: AppHandle,
+    ) -> Result<RecognitionStatus, RecognitionStartError> {
+        let mut recognition_input = self.recognition_input.lock().await;
+        if recognition_input.is_some() {
             return Ok(self
                 .set_recognition_status(RecognitionStatus::Listening)
                 .await);
@@ -122,10 +119,16 @@ impl AppState {
 
         let config = self.get_config().await;
         prewarm_local_tts_engines(&handle, &config);
-        let running_audio_input =
-            RunningAudioInput::start(handle, &config, self.runtime_config.clone())?;
-        *audio_input = Some(running_audio_input);
-        drop(audio_input);
+        let running_recognition_input =
+            match RunningRecognitionInput::start(handle, &config, self.runtime_config.clone()) {
+                Ok(input) => input,
+                Err(err) => {
+                    self.set_recognition_status(RecognitionStatus::Error).await;
+                    return Err(err);
+                }
+            };
+        *recognition_input = Some(running_recognition_input);
+        drop(recognition_input);
 
         Ok(self
             .set_recognition_status(RecognitionStatus::Listening)
@@ -133,15 +136,25 @@ impl AppState {
     }
 
     pub async fn stop_audio_input(&self) -> RecognitionStatus {
-        let mut audio_input = self.audio_input.lock().await;
-        if let Some(running_audio_input) = audio_input.take() {
-            running_audio_input.stop();
+        let running_recognition_input = {
+            let mut recognition_input = self.recognition_input.lock().await;
+            recognition_input.take()
+        };
+
+        if let Some(running_recognition_input) = running_recognition_input
+            && let Err(err) =
+                tauri::async_runtime::spawn_blocking(move || running_recognition_input.stop()).await
+        {
+            log::warn!("Recognition input stop task failed: {err}");
         }
-        drop(audio_input);
 
         self.set_recognition_status(RecognitionStatus::Stopped)
             .await
     }
+}
+
+fn preserve_running_vad_interval(previous: &ParapperConfig, next: &mut ParapperConfig) {
+    next.segmentation.vad_interval_ms = previous.segmentation.vad_interval_ms;
 }
 
 fn preserve_running_speech_model_mappings(
@@ -177,4 +190,65 @@ fn preserve_running_speech_model_mappings(
             mapping
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preserve_running_vad_interval;
+    use crate::config::{ParapperConfig, TurnDetector};
+
+    #[test]
+    fn running_vad_interval_is_preserved_but_timing_settings_can_update() {
+        let previous = parapper_config! {
+            vad_threshold: 0.7,
+            vad_interval_ms: 32,
+            segment_start_speech_ms: 128,
+            turn_detector: TurnDetector::Namo,
+            interim_result_enabled: false,
+            interim_result_silence_ms: 640,
+            turn_check_silence_ms: 960,
+            namo_turn_confidence_threshold: 0.65,
+            namo_context_max_tokens: 128,
+            turn_rerecognize_full_on_complete: true,
+            ..ParapperConfig::default()
+        };
+        let mut next = parapper_config! {
+            vad_threshold: 0.1,
+            vad_interval_ms: 999,
+            segment_start_speech_ms: 32,
+            turn_detector: TurnDetector::Simple,
+            interim_result_enabled: true,
+            interim_result_silence_ms: 32,
+            turn_check_silence_ms: 32,
+            namo_turn_confidence_threshold: 0.95,
+            namo_context_max_tokens: 512,
+            turn_rerecognize_full_on_complete: false,
+            input_volume_db: 6.0,
+            ..ParapperConfig::default()
+        };
+
+        preserve_running_vad_interval(&previous, &mut next);
+
+        assert_eq!(
+            next.segmentation.vad_interval_ms,
+            previous.segmentation.vad_interval_ms
+        );
+        assert_f32_close(next.segmentation.vad_threshold, 0.1);
+        assert_eq!(next.segmentation.segment_start_speech_ms, 32);
+        assert_eq!(next.turn.detector, TurnDetector::Simple);
+        assert!(next.turn.interim_result_enabled);
+        assert_eq!(next.turn.interim_result_silence_ms, 32);
+        assert_eq!(next.turn.check_silence_ms, 32);
+        assert_f32_close(next.turn.namo_confidence_threshold, 0.95);
+        assert_eq!(next.turn.namo_context_max_tokens, 512);
+        assert!(!next.turn.rerecognize_full_on_complete);
+        assert_f32_close(next.input.volume_db, 6.0);
+    }
+
+    fn assert_f32_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < f32::EPSILON,
+            "actual={actual}, expected={expected}"
+        );
+    }
 }

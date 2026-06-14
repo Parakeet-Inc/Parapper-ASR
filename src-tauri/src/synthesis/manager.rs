@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter};
 use crate::{
     config::{ParapperConfig, SpeechBackend},
     delivery::RecognizedTextOutput,
-    recognition::events::{SpeechRequestEvent, SpeechRequestStatus},
+    recognition::control::events::{SpeechRequestEvent, SpeechRequestStatus},
 };
 
 use super::{

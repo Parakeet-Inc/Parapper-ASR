@@ -12,8 +12,8 @@
 
 | モジュール | 責務 | 呼び出すもの / 依存するもの | 持たない責務 |
 | --- | --- | --- | --- |
-| `audio/` | 入力ストリーム、入力レベル、PCM 再生補助 | `commands`, `state`, `playback` | ASR、配送方針 |
-| `recognition/` | VAD、SegmentBuilder、SLI、ASR worker、Turn 状態 | `model`, `delivery` | UI layout、翻訳、TTS |
+| `audio/` | 入力ストリーム、リサンプル、デノイズ、入力レベル、PCM 再生補助 | `recognition`, `commands`, `playback` | VAD、ASR、Turn 状態、配送方針 |
+| `recognition/` | 音声入力 worker、segmentation、transcription、Turn 状態 | `audio`, `model`, `delivery` | UI layout、翻訳、TTS |
 | `delivery/` | `RecognizedTextOutput` を登録済み sink へ配送する | `translation`, `synthesis`, `connect`, Tauri emit | 翻訳キュー、TTS キュー、PCM 再生 |
 | `translation/` | 翻訳リクエスト生成、古い interim の除去、YNC 翻訳 worker、翻訳結果 event | `connect::ync`, 翻訳結果読み上げ用の `synthesis` | 認識、local TTS 生成 |
 | `synthesis/` | 読み上げリクエスト生成、YNC speech worker、local TTS 生成キュー | `connect::ync`, `playback`, local TTS engine | 翻訳 request/response、PCM device output |
@@ -27,8 +27,9 @@
 
 ```text
 commands/state
-  -> model/config/audio
+  -> model/config
   -> recognition
+  -> audio
   -> delivery
   -> translation / synthesis
   -> connect / playback
@@ -47,11 +48,15 @@ commands/state
 ```text
 start_recognition command
   -> state.rs
-  -> audio/input.rs が PCM を取得
-  -> recognition::RecognitionPipeline
+  -> recognition::RunningRecognitionInput
+     -> audio/input.rs が PCM を取得し、リサンプル/デノイズ済み chunk を返す
+     -> AudioInputProcessor
      -> VadEngine
-     -> SegmentBuilder
-     -> AsrWorker
+     -> RecognitionDriver
+     -> SegmentationFlow
+     -> RecognitionSession
+     -> transcription::flow
+     -> turn::{transcript, flow, boundary_flow}
      -> Turn / TurnDraft / TurnConfirmed
   -> delivery::dispatch_recognized_text
 ```
@@ -148,7 +153,8 @@ YNC plugin の port discovery は `HKCU\Software\YukarinetteConnectorNeo\TransSe
 
 | 関心ごと | 推奨するテスト場所 |
 | --- | --- |
-| Segment / Turn の挙動 | `recognition/segment_builder/tests.rs`, `recognition/transcription/tests.rs`, `recognition/turn/tests.rs` |
+| Segment の挙動 | `recognition/segmentation/segment/builder/tests.rs` |
+| Turn / transcription / control の横断挙動 | `recognition/control/tests`, `recognition/transcription`, `recognition/turn` |
 | Delivery mapping/timing | `delivery/tests.rs` |
 | 翻訳キュー / stale policy | `translation/queue.rs` tests, `pipeline_tests.rs` |
 | YNC request/response payload | mock HTTP server を使う `connect/ync/tests.rs` |

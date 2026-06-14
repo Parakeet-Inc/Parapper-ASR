@@ -7,7 +7,7 @@ use super::super::request::TranslationRequest;
 pub(in crate::translation) fn translate_text(
     request: &TranslationRequest,
 ) -> anyhow::Result<Vec<(String, String)>> {
-    let mut client = YncPluginClient::for_command(request.config.translation_plugin_http_port)?;
+    let mut client = YncPluginClient::for_command(request.config.translation.plugin_http_port)?;
     if request.targets.len() == 1 {
         let target = &request.targets[0];
         let response =

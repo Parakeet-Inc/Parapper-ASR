@@ -11,6 +11,7 @@ const DEFAULT_VAD_INTERVAL_MS: u32 = 32;
 pub(crate) struct MonoFastFixedInResampler {
     inner: MonoFastFixedInResamplerInner,
     pending: VecDeque<f32>,
+    input_buffer: Vec<f32>,
     input_chunk_size: usize,
 }
 
@@ -33,6 +34,7 @@ impl MonoFastFixedInResampler {
             return Ok(Self {
                 inner: MonoFastFixedInResamplerInner::Identity,
                 pending: VecDeque::new(),
+                input_buffer: Vec::with_capacity(input_chunk_size),
                 input_chunk_size,
             });
         }
@@ -51,20 +53,23 @@ impl MonoFastFixedInResampler {
         Ok(Self {
             inner: MonoFastFixedInResamplerInner::FastFixedIn { resampler, output },
             pending: VecDeque::new(),
+            input_buffer: Vec::with_capacity(input_chunk_size),
             input_chunk_size,
         })
     }
 
-    pub(crate) fn push(&mut self, samples: &[f32]) -> Result<Vec<Vec<f32>>> {
+    pub(crate) fn push_into(&mut self, samples: &[f32], chunks: &mut Vec<Vec<f32>>) -> Result<()> {
         self.pending.extend(samples.iter().copied());
-        let mut chunks = Vec::new();
+        chunks.clear();
 
         while self.pending.len() >= self.input_chunk_size {
-            let input: Vec<f32> = self.pending.drain(..self.input_chunk_size).collect();
+            self.input_buffer.clear();
+            self.input_buffer
+                .extend(self.pending.drain(..self.input_chunk_size));
             match &mut self.inner {
-                MonoFastFixedInResamplerInner::Identity => chunks.push(input),
+                MonoFastFixedInResamplerInner::Identity => chunks.push(self.input_buffer.clone()),
                 MonoFastFixedInResamplerInner::FastFixedIn { resampler, output } => {
-                    let input_adapter = SingleChannelInputAdapter::new(&input);
+                    let input_adapter = SingleChannelInputAdapter::new(&self.input_buffer);
                     let mut output_adapter = SingleChannelOutputAdapter::new(output);
                     let (_, written) =
                         resampler.process_into_buffer(&input_adapter, &mut output_adapter, None)?;
@@ -73,7 +78,7 @@ impl MonoFastFixedInResampler {
             }
         }
 
-        Ok(chunks)
+        Ok(())
     }
 }
 
@@ -103,6 +108,8 @@ impl<'a> SingleChannelInputAdapter<'a> {
 impl<'a> Adapter<'a, f32> for SingleChannelInputAdapter<'a> {
     unsafe fn read_sample_unchecked(&self, channel: usize, frame: usize) -> f32 {
         debug_assert_eq!(channel, 0);
+        // SAFETY: rubato calls this adapter with frame < self.frames() and the
+        // adapter exposes exactly one channel.
         unsafe { *self.data.get_unchecked(frame) }
     }
 
@@ -128,6 +135,8 @@ impl<'a> SingleChannelOutputAdapter<'a> {
 impl<'a> Adapter<'a, f32> for SingleChannelOutputAdapter<'a> {
     unsafe fn read_sample_unchecked(&self, channel: usize, frame: usize) -> f32 {
         debug_assert_eq!(channel, 0);
+        // SAFETY: rubato calls this adapter with frame < self.frames() and the
+        // adapter exposes exactly one channel.
         unsafe { *self.data.get_unchecked(frame) }
     }
 
@@ -143,6 +152,8 @@ impl<'a> Adapter<'a, f32> for SingleChannelOutputAdapter<'a> {
 impl<'a> AdapterMut<'a, f32> for SingleChannelOutputAdapter<'a> {
     unsafe fn write_sample_unchecked(&mut self, channel: usize, frame: usize, value: &f32) -> bool {
         debug_assert_eq!(channel, 0);
+        // SAFETY: rubato calls this adapter with frame < self.frames() and the
+        // adapter exposes exactly one mutable output channel.
         unsafe {
             *self.data.get_unchecked_mut(frame) = *value;
         }
@@ -165,7 +176,8 @@ mod tests {
     fn identity_resampler_outputs_100ms_chunks() {
         let mut resampler =
             MonoFastFixedInResampler::new(ASR_SAMPLE_RATE, ASR_SAMPLE_RATE, 100).unwrap();
-        let chunks = resampler.push(&vec![0.0; 1_600]).unwrap();
+        let mut chunks = Vec::new();
+        resampler.push_into(&vec![0.0; 1_600], &mut chunks).unwrap();
 
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].len(), 1_600);
@@ -174,7 +186,8 @@ mod tests {
     #[test]
     fn fast_fixed_in_resampler_converts_48khz_to_16khz() {
         let mut resampler = MonoFastFixedInResampler::new(48_000, ASR_SAMPLE_RATE, 100).unwrap();
-        let chunks = resampler.push(&vec![0.0; 4_800]).unwrap();
+        let mut chunks = Vec::new();
+        resampler.push_into(&vec![0.0; 4_800], &mut chunks).unwrap();
 
         assert_eq!(chunks.len(), 1);
         assert!((1_590..=1_610).contains(&chunks[0].len()));

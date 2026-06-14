@@ -22,6 +22,7 @@ export const buildTurnDetectorOptions = (
   t: (key: string) => string,
 ): SelectOption[] => [
   { label: t("options.turnDetector.simple"), value: "simple" },
+  { label: t("options.turnDetector.morph"), value: "morph" },
   { label: t("options.turnDetector.namo"), value: "namo" },
 ];
 

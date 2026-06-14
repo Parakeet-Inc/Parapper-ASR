@@ -2,9 +2,16 @@ use crate::config::{AsrLanguage, AsrModel, LocalTtsFamily, LocalTtsVoice, NoiseC
 
 pub(crate) const VAD_MODEL_URL: &str =
     "https://github.com/snakers4/silero-vad/raw/refs/tags/v6.0/src/silero_vad/data/silero_vad.onnx";
+const VIBRATO_UNIDIC_CWJ_3_1_1_URL: &str =
+    "https://github.com/daac-tools/vibrato/releases/download/v0.5.0/unidic-cwj-3_1_1.tar.xz";
+const VIBRATO_UNIDIC_CWJ_3_1_1_DIR_NAME: &str = "unidic-cwj-3_1_1";
+pub(crate) const VIBRATO_MODEL_MAGIC: &[u8] = b"VibratoTokenizerRkyv 0.6\n";
 const ASR_MODEL_BASE_URL: &str =
     "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/main";
 const ASR_MODEL_DIR_NAME_JA: &str = "sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01";
+const ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_CTC_0_6B_JA_35000_INT8: &str = "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8/resolve/main";
+const ASR_MODEL_DIR_NAME_NEMO_PARAKEET_TDT_CTC_0_6B_JA_35000_INT8: &str =
+    "sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8";
 const ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_0_6B_V2_INT8: &str =
     "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/main";
 const ASR_MODEL_DIR_NAME_NEMO_PARAKEET_TDT_0_6B_V2_INT8: &str =
@@ -77,6 +84,7 @@ const NOISE_CANCELLATION_MODEL_FILES_UL_UNAS: &[&str] = &["ulunas_stream_simple.
 
 pub(crate) const ALL_ASR_MODELS: &[AsrModel] = &[
     AsrModel::ReazonSpeechK2V2,
+    AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8,
     AsrModel::NemoParakeetTdt0_6BV2Int8,
     AsrModel::NemoParakeetTdt0_6BV3Int8,
 ];
@@ -110,6 +118,9 @@ impl NamoTurnDetectorModel {
 pub(crate) fn asr_model_base_url(model: AsrModel) -> &'static str {
     match model {
         AsrModel::ReazonSpeechK2V2 => ASR_MODEL_BASE_URL,
+        AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8 => {
+            ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_CTC_0_6B_JA_35000_INT8
+        }
         AsrModel::NemoParakeetTdt0_6BV2Int8 => ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_0_6B_V2_INT8,
         AsrModel::NemoParakeetTdt0_6BV3Int8 => ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_0_6B_V3_INT8,
     }
@@ -118,6 +129,9 @@ pub(crate) fn asr_model_base_url(model: AsrModel) -> &'static str {
 pub(crate) fn asr_model_dir_name(model: AsrModel) -> &'static str {
     match model {
         AsrModel::ReazonSpeechK2V2 => ASR_MODEL_DIR_NAME_JA,
+        AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8 => {
+            ASR_MODEL_DIR_NAME_NEMO_PARAKEET_TDT_CTC_0_6B_JA_35000_INT8
+        }
         AsrModel::NemoParakeetTdt0_6BV2Int8 => ASR_MODEL_DIR_NAME_NEMO_PARAKEET_TDT_0_6B_V2_INT8,
         AsrModel::NemoParakeetTdt0_6BV3Int8 => ASR_MODEL_DIR_NAME_NEMO_PARAKEET_TDT_0_6B_V3_INT8,
     }
@@ -148,6 +162,7 @@ pub(crate) fn asr_model_required_file_names(
                 "tokens.txt",
             ],
         },
+        AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8 => &["model.int8.onnx", "tokens.txt"],
         AsrModel::NemoParakeetTdt0_6BV2Int8 | AsrModel::NemoParakeetTdt0_6BV3Int8 => &[
             "encoder.int8.onnx",
             "decoder.int8.onnx",
@@ -167,6 +182,14 @@ pub(crate) fn language_id_model_base_url() -> &'static str {
 
 pub(crate) fn language_id_model_files() -> &'static [&'static str] {
     SPEECHBRAIN_ECAPA_FILES
+}
+
+pub(crate) fn vibrato_unidic_archive_url() -> &'static str {
+    VIBRATO_UNIDIC_CWJ_3_1_1_URL
+}
+
+pub(crate) fn vibrato_unidic_dir_name() -> &'static str {
+    VIBRATO_UNIDIC_CWJ_3_1_1_DIR_NAME
 }
 
 pub(crate) fn namo_turn_detector_base_url(model: NamoTurnDetectorModel) -> &'static str {

@@ -21,6 +21,13 @@ export const asrModelOptions: {
     defaultPrecision: "int8_float32",
   },
   {
+    labelKey: "options.asrModel.nemoParakeetTdtCtcJa35000Int8",
+    value: "nemo_parakeet_tdt_ctc_0_6b_ja_35000_int8",
+    language: "japanese",
+    supportedPrecisions: ["int8"],
+    defaultPrecision: "int8",
+  },
+  {
     labelKey: "options.asrModel.nemoParakeetTdtV2Int8",
     value: "nemo_parakeet_tdt_0_6b_v2_int8",
     language: "english",

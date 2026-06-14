@@ -140,10 +140,10 @@ fn turn_display_text_decision_table() {
 
     let cases = [
         (
-            "Japanese turn segments join without punctuation while the turn is open",
+            "Japanese turn segments preserve sentence punctuation across ASR segment boundaries",
             TextCase::JoinJapanese {
-                segments: &["今日は", "いい天気です"],
-                expected: "今日はいい天気です",
+                segments: &["今日は。", "いい天気です"],
+                expected: "今日は。いい天気です",
             },
         ),
         (
@@ -214,7 +214,7 @@ fn neo_send_timing_decision_table() {
     ];
 
     for (timing, http_enabled, is_final, expected_when_supported) in cases {
-        let config = ParapperConfig {
+        let config = parapper_config! {
             neo_http_enabled: http_enabled,
             neo_send_timing: timing,
             ..ParapperConfig::default()
@@ -239,7 +239,7 @@ fn translation_timing_decision_table() {
     ];
 
     for (timing, is_final, expected) in cases {
-        let config = ParapperConfig {
+        let config = parapper_config! {
             translation_send_timing: timing,
             ..ParapperConfig::default()
         };
@@ -255,7 +255,7 @@ fn translation_timing_decision_table() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn final_only_translation_skips_non_final_turn_results() {
-    let config = ParapperConfig {
+    let config = parapper_config! {
         translation_enabled: true,
         translation_send_timing: NeoSendTiming::Final,
         translation_mappings: vec![translation_mapping("translate-en", "en_US")],
@@ -269,7 +269,7 @@ fn final_only_translation_skips_non_final_turn_results() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn final_only_translation_skips_namo_intermediate_turn_segments() {
-    let config = ParapperConfig {
+    let config = parapper_config! {
         turn_detector: TurnDetector::Namo,
         translation_enabled: true,
         translation_send_timing: NeoSendTiming::Final,
@@ -292,7 +292,7 @@ fn final_only_translation_skips_namo_intermediate_turn_segments() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn final_only_translation_sends_namo_completed_turn_results() {
-    let config = ParapperConfig {
+    let config = parapper_config! {
         turn_detector: TurnDetector::Namo,
         translation_enabled: true,
         translation_send_timing: NeoSendTiming::Final,
@@ -319,7 +319,7 @@ fn final_only_translation_sends_namo_completed_turn_results() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn namo_completed_turn_is_eligible_for_final_translation_and_speech() {
-    let config = ParapperConfig {
+    let config = parapper_config! {
         turn_detector: TurnDetector::Namo,
         translation_enabled: true,
         translation_send_timing: NeoSendTiming::Final,
@@ -376,7 +376,7 @@ fn namo_completed_turn_is_eligible_for_final_translation_and_speech() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn final_only_translation_builds_only_one_request_for_namo_interim_and_final_pair() {
-    let config = ParapperConfig {
+    let config = parapper_config! {
         turn_detector: TurnDetector::Namo,
         translation_enabled: true,
         translation_send_timing: NeoSendTiming::Final,
@@ -414,7 +414,7 @@ fn final_only_translation_builds_only_one_request_for_namo_interim_and_final_pai
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn interim_translation_sends_non_final_turn_results_without_continuation_marker() {
-    let config = ParapperConfig {
+    let config = parapper_config! {
         translation_enabled: true,
         translation_send_timing: NeoSendTiming::Interim,
         translation_mappings: vec![translation_mapping("translate-en", "en_US")],
@@ -432,8 +432,8 @@ fn interim_translation_sends_non_final_turn_results_without_continuation_marker(
 #[test]
 fn translation_requests_work_across_turn_detector_modes() {
     for turn_detector in [TurnDetector::Simple, TurnDetector::Namo] {
-        let config = ParapperConfig {
-            turn_detector,
+        let config = parapper_config! {
+            turn_detector: turn_detector,
             translation_enabled: true,
             translation_send_timing: NeoSendTiming::Interim,
             translation_mappings: vec![translation_mapping("translate-en", "en_US")],
@@ -468,9 +468,10 @@ fn translation_requests_work_across_turn_detector_modes() {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn translation_request_survives_when_neo_text_input_is_disabled() {
-    let config = ParapperConfig {
+    let config = parapper_config! {
         neo_http_enabled: false,
         translation_enabled: true,
         translation_send_timing: NeoSendTiming::Final,
@@ -550,7 +551,7 @@ fn speech_mapping_matches_recognition_source_asr_model() {
 
 #[test]
 fn build_speech_requests_uses_all_matching_mappings() {
-    let config = ParapperConfig {
+    let config = parapper_config! {
         speech_mappings: vec![
             SpeechMapping {
                 talker: "First voice".to_string(),
@@ -617,7 +618,7 @@ fn build_speech_requests_uses_all_matching_mappings() {
 
 #[test]
 fn build_speech_requests_uses_only_matching_recognition_asr_model_mapping() {
-    let config = ParapperConfig {
+    let config = parapper_config! {
         speech_mappings: vec![
             SpeechMapping {
                 source_asr_model: Some(AsrModel::ReazonSpeechK2V2),
@@ -685,7 +686,7 @@ fn build_speech_requests_uses_only_matching_recognition_asr_model_mapping() {
 
 #[test]
 fn build_speech_requests_skips_muted_mapping() {
-    let config = ParapperConfig {
+    let config = parapper_config! {
         speech_mappings: vec![SpeechMapping {
             talker: "Muted voice".to_string(),
             muted: true,
@@ -755,7 +756,7 @@ fn build_speech_requests_sends_once_for_namo_interim_and_final_pair_by_source_ki
     ];
 
     for case in cases {
-        let config = ParapperConfig {
+        let config = parapper_config! {
             turn_detector: TurnDetector::Namo,
             speech_mappings: vec![case.mapping],
             ..ParapperConfig::default()
@@ -840,7 +841,7 @@ fn build_speech_requests_skips_namo_intermediate_segments_by_source_kind() {
     ];
 
     for case in cases {
-        let config = ParapperConfig {
+        let config = parapper_config! {
             turn_detector: TurnDetector::Namo,
             speech_mappings: vec![case.mapping],
             ..ParapperConfig::default()
@@ -859,6 +860,7 @@ fn build_speech_requests_skips_namo_intermediate_segments_by_source_kind() {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn recognition_speech_is_sent_once_for_interim_and_final_pair() {
     let server = MockHttpServer::start_until_idle(
@@ -881,7 +883,7 @@ fn recognition_speech_is_sent_once_for_interim_and_final_pair() {
             )
         },
     );
-    let config = ParapperConfig {
+    let config = parapper_config! {
         turn_detector: TurnDetector::Namo,
         translation_plugin_http_port: server.port(),
         speech_mappings: vec![speech_mapping("speech-ja", SpeechSourceKind::Recognition)],
@@ -951,7 +953,7 @@ fn speech_mapping_matches_translation_target() {
 
 #[test]
 fn build_speech_requests_uses_translated_text_for_translation_mapping() {
-    let config = ParapperConfig {
+    let config = parapper_config! {
         speech_mappings: vec![SpeechMapping {
             target_lang: Some("en_US".to_string()),
             talker: "Microsoft Zira Desktop/SAPI5".to_string(),
@@ -993,7 +995,7 @@ fn build_speech_requests_uses_translated_text_for_translation_mapping() {
 
 #[test]
 fn build_speech_requests_keeps_supertonic_language_and_speaker() {
-    let config = ParapperConfig {
+    let config = parapper_config! {
         speech_mappings: vec![SpeechMapping {
             target_lang: Some("es_ES".to_string()),
             backend: SpeechBackend::LocalTts,
@@ -1037,6 +1039,7 @@ fn build_speech_requests_keeps_supertonic_language_and_speaker() {
     );
 }
 
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn speech_requests_are_sent_in_queue_order() {
     let (id_sender, id_receiver) = mpsc::channel::<String>();
@@ -1093,6 +1096,7 @@ fn speech_requests_are_sent_in_queue_order() {
     server.join();
 }
 
+#[cfg(not(target_os = "macos"))]
 #[test]
 #[expect(clippy::too_many_lines)]
 fn consecutive_speech_requests_are_received_by_mock_in_queue_order() {
@@ -1348,7 +1352,7 @@ fn non_final_translation_result_does_not_send_speech_to_mock() {
             json_response(&body)
         },
     );
-    let config = ParapperConfig {
+    let config = parapper_config! {
         translation_send_timing: NeoSendTiming::Interim,
         ..translation_speech_config(server.port())
     };
@@ -1404,7 +1408,7 @@ fn start_translation_speech_mock(speech_response_delay: Duration) -> TimedMockHt
 }
 
 fn translation_speech_config(port: u16) -> ParapperConfig {
-    ParapperConfig {
+    parapper_config! {
         translation_enabled: true,
         translation_plugin_http_port: port,
         translation_send_timing: NeoSendTiming::Final,

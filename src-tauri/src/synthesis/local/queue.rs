@@ -10,7 +10,7 @@ use tauri::AppHandle;
 
 use crate::{
     config::{ParapperConfig, SpeechBackend},
-    recognition::events::SpeechRequestStatus,
+    recognition::control::events::SpeechRequestStatus,
     synthesis::{
         manager::emit_speech_request_event,
         queue::{SpeechOrderKey, speech_order_key_for_request},
@@ -29,7 +29,8 @@ static LOCAL_TTS_QUEUES: OnceLock<LocalTtsQueueRegistry> = OnceLock::new();
 
 pub(crate) fn prewarm_local_tts_engines(handle: &AppHandle, config: &ParapperConfig) {
     for voice in config
-        .speech_mappings
+        .speech
+        .mappings
         .iter()
         .filter(|mapping| mapping.backend == SpeechBackend::LocalTts)
         .filter_map(|mapping| mapping.local_tts_voice)
@@ -195,13 +196,13 @@ impl LocalTtsQueue {
         let mut engine = None;
         loop {
             let (prewarm_handle, item) = self.wait_for_next_item();
-            if let Some(handle) = prewarm_handle {
-                if let Err(err) = ensure_local_tts_engine(&mut engine, &handle, self.queue_key) {
-                    log::warn!(
-                        "Failed to prewarm local TTS engine queue={:?}: {err}",
-                        self.queue_key
-                    );
-                }
+            if let Some(handle) = prewarm_handle
+                && let Err(err) = ensure_local_tts_engine(&mut engine, &handle, self.queue_key)
+            {
+                log::warn!(
+                    "Failed to prewarm local TTS engine queue={:?}: {err}",
+                    self.queue_key
+                );
             }
             let Some(item) = item else {
                 continue;
@@ -323,11 +324,23 @@ mod tests {
         output_sequence: u64,
         sequence: u64,
     ) -> LocalTtsQueueItem {
+        local_tts_item_with_source(
+            source_event_id,
+            source_meta(1, output_sequence, output_sequence),
+            sequence,
+        )
+    }
+
+    fn local_tts_item_with_source(
+        source_event_id: &str,
+        source_meta: RecognitionSourceMeta,
+        sequence: u64,
+    ) -> LocalTtsQueueItem {
         let request = QueuedSpeechRequest {
             port: 0,
             id: format!("speech-{source_event_id}"),
             source_event_id: source_event_id.to_string(),
-            source_meta: source_meta(output_sequence),
+            source_meta,
             source_kind: SpeechSourceKind::Translation,
             target_lang: Some("en_US".to_string()),
             text: "test".to_string(),
@@ -348,10 +361,14 @@ mod tests {
         }
     }
 
-    fn source_meta(output_sequence: u64) -> RecognitionSourceMeta {
+    fn source_meta(
+        turn_session_id: u64,
+        turn_id: u64,
+        output_sequence: u64,
+    ) -> RecognitionSourceMeta {
         RecognitionSourceMeta {
-            turn_session_id: 1,
-            turn_id: output_sequence,
+            turn_session_id,
+            turn_id,
             turn_revision: 0,
             output_sequence,
             segment_id: output_sequence,
@@ -364,7 +381,7 @@ mod tests {
             port: 0,
             id: "speech-test".to_string(),
             source_event_id: "turn-1-1-0".to_string(),
-            source_meta: source_meta(1),
+            source_meta: source_meta(1, 1, 1),
             source_kind: SpeechSourceKind::Recognition,
             target_lang: None,
             text: "test".to_string(),
@@ -403,6 +420,31 @@ mod tests {
         assert_eq!(
             released,
             vec!["turn-1-2-0|en_US", "turn-1-2-1|en_US", "turn-1-10-0|en_US",]
+        );
+    }
+
+    #[test]
+    fn local_tts_heap_keeps_previous_recognition_session_before_restart_sequence_reset() {
+        let mut heap = BinaryHeap::new();
+        heap.push(local_tts_item_with_source(
+            "turn-2-1-0|en_US",
+            source_meta(2, 1, 1),
+            0,
+        ));
+        heap.push(local_tts_item_with_source(
+            "turn-1-5-0|en_US",
+            source_meta(1, 5, 5),
+            1,
+        ));
+
+        let released = (0..2)
+            .map(|_| heap.pop().expect("heap item").request.source_event_id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            released,
+            vec!["turn-1-5-0|en_US", "turn-2-1-0|en_US"],
+            "local TTS must not play a restarted recognition session ahead of queued older audio"
         );
     }
 

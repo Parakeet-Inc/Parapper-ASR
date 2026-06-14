@@ -7,7 +7,7 @@ use crate::{
             translation_targets_for_mappings,
         },
     },
-    recognition::events::RecognizedTextUpdateMode,
+    recognition::control::events::RecognizedTextUpdateMode,
 };
 
 pub(crate) struct TranslationRequest {
@@ -38,7 +38,7 @@ pub(crate) fn build_translation_request(
     recognized_text_id: &str,
     output: &RecognizedTextOutput,
 ) -> Option<TranslationRequest> {
-    if !config.translation_enabled {
+    if !config.translation.enabled {
         return None;
     }
 
@@ -60,7 +60,7 @@ pub(crate) fn build_translation_request(
     let source_meta = output.meta.source().clone();
 
     let targets = translation_targets_for_mappings(
-        &config.translation_mappings,
+        &config.translation.mappings,
         output.source_asr_model,
         output.source_language,
     );

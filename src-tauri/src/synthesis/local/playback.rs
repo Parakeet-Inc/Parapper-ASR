@@ -1,6 +1,6 @@
 use crate::{
     playback::{PlaybackEvent, PlaybackManager},
-    recognition::events::SpeechRequestStatus,
+    recognition::control::events::SpeechRequestStatus,
     synthesis::{artifact::TtsArtifact, manager::emit_speech_request_event},
 };
 

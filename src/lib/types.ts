@@ -1,6 +1,6 @@
 export type AsrPrecision = "int8" | "int8_float32" | "float32";
 export type AsrLanguage = "japanese" | "english" | "european_multilingual";
-export type TurnDetector = "simple" | "namo";
+export type TurnDetector = "simple" | "morph" | "namo";
 export type NoiseCancellationModel = "ul_unas";
 export type NeoSendTiming = "interim" | "final";
 export type SpeechSourceKind = "recognition" | "translation";
@@ -13,6 +13,7 @@ export type LocalTtsVoice =
   | "supertonic_3_onnx";
 export type AsrModel =
   | "reazonspeech_k2_v2"
+  | "nemo_parakeet_tdt_ctc_0_6b_ja_35000_int8"
   | "nemo_parakeet_tdt_0_6b_v2_int8"
   | "nemo_parakeet_tdt_0_6b_v3_int8";
 
@@ -110,6 +111,8 @@ export type RecognizedTextEvent = {
   is_final: boolean;
   update_mode: "append" | "replace";
   text: string;
+  source_asr_model: AsrModel;
+  source_language: AsrLanguage;
   detected_language: string | null;
   recognized_at_millis: number;
   audio_seconds: number;
@@ -156,6 +159,7 @@ export type SpeechRequestEvent = {
 };
 
 export type AsrMissingEvent = {
+  kind: "asr" | "language_id" | "turn_detector";
   reason: string;
 };
 
@@ -171,6 +175,7 @@ export type ConnectionStateEvent = {
 
 export type ModelAssetStatus = {
   installed: boolean;
+  preparing: boolean;
   path: string;
 };
 
@@ -178,6 +183,7 @@ export type ModelStatus = {
   root_dir: string;
   vad: ModelAssetStatus;
   asr: ModelAssetStatus;
+  japanese_morph: ModelAssetStatus | null;
   language_id: ModelAssetStatus | null;
   turn_detectors: ModelAssetStatus[];
   tts: ModelAssetStatus[];

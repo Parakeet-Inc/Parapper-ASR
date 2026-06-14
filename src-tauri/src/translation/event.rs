@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter};
 use crate::{
     config::AsrModel,
     delivery::common::SpeechTextSource,
-    recognition::events::{
+    recognition::control::events::{
         RecognitionSourceMeta, RecognizedTextUpdateMode, TranslationTextEvent,
         TranslationTextStatus,
     },

@@ -57,8 +57,8 @@ fn collect_devices(direction: DeviceDirection) -> Vec<DeviceInfo> {
 
 pub(crate) fn selected_input_device(config: &ParapperConfig) -> Result<InputDeviceSelection> {
     if let (Some(host), Some(id)) = (
-        config.input_device_host.as_deref(),
-        config.input_device_id.as_deref(),
+        config.input.device_host.as_deref(),
+        config.input.device_id.as_deref(),
     ) && let Some(selected) = find_input_device(host, id)?
     {
         return Ok(selected);

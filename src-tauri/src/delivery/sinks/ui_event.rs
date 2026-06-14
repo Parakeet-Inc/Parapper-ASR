@@ -4,7 +4,7 @@ use crate::{
     audio::ASR_SAMPLE_RATE,
     config::ParapperConfig,
     delivery::RecognizedTextOutput,
-    recognition::events::{ConnectionStateEvent, ConnectionTarget, RecognizedTextEvent},
+    recognition::control::events::{ConnectionStateEvent, ConnectionTarget, RecognizedTextEvent},
 };
 
 use super::{DispatchContext, RecognizedTextSink};
@@ -52,14 +52,17 @@ pub(crate) fn emit_recognized_text_event(
             is_final: output.meta.is_final,
             update_mode: output.meta.update_mode,
             text: output.text.clone(),
+            source_asr_model: output.source_asr_model,
+            source_language: output.source_language,
             detected_language: output.detected_language.clone(),
             recognized_at_millis,
             audio_seconds,
             elapsed_millis,
             audio_frames: output.phrase.len(),
-            debug_asr_audio_sample_rate: config.debug_asr_audio_playback.then_some(ASR_SAMPLE_RATE),
+            debug_asr_audio_sample_rate: config.debug.asr_audio_playback.then_some(ASR_SAMPLE_RATE),
             debug_asr_audio_samples: config
-                .debug_asr_audio_playback
+                .debug
+                .asr_audio_playback
                 .then(|| output.phrase.clone()),
         },
     );

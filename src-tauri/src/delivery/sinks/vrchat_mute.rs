@@ -6,14 +6,14 @@ use crate::{
     config::ParapperConfig,
     connect::query_current_mute_state,
     delivery::sinks::ui_event::emit_connection_state,
-    recognition::events::{ConnectionTarget, OscMuteStateEvent},
+    recognition::control::events::{ConnectionTarget, OscMuteStateEvent},
 };
 
 pub(crate) fn spawn_mute_check_if_needed(
     handle: &AppHandle,
     config: &ParapperConfig,
 ) -> Option<JoinHandle<bool>> {
-    (config.vrc_osc_micmute && ParapperConfig::vrc_osc_supported())
+    (config.vrc.osc_micmute && ParapperConfig::vrc_osc_supported())
         .then(|| spawn_vrchat_mute_check(handle.clone()))
 }
 

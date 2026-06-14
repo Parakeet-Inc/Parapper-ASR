@@ -146,13 +146,13 @@ fn built_in_config_presets() -> Vec<ConfigPreset> {
 
 fn japanese_transcription_simple_config() -> ParapperConfig {
     let mut config = base_japanese_config();
-    config.noise_cancellation_enabled = false;
-    config.turn_detector = TurnDetector::Simple;
-    config.interim_result_enabled = false;
-    config.turn_rerecognize_full_on_complete = false;
-    config.translation_enabled = false;
-    config.translation_mappings = Vec::new();
-    config.speech_mappings = Vec::new();
+    config.noise_cancellation.enabled = false;
+    config.turn.detector = TurnDetector::Simple;
+    config.turn.interim_result_enabled = false;
+    config.turn.rerecognize_full_on_complete = false;
+    config.translation.enabled = false;
+    config.translation.mappings = Vec::new();
+    config.speech.mappings = Vec::new();
     config.normalized()
 }
 
@@ -162,17 +162,17 @@ fn japanese_transcription_rich_config() -> ParapperConfig {
 
 fn japanese_to_english_translation_config() -> ParapperConfig {
     let mut config = base_rich_japanese_config();
-    config.translation_enabled = true;
-    config.translation_mappings = vec![japanese_to_english_translation_mapping()];
-    config.speech_mappings = Vec::new();
+    config.translation.enabled = true;
+    config.translation.mappings = vec![japanese_to_english_translation_mapping()];
+    config.speech.mappings = Vec::new();
     config.normalized()
 }
 
 fn japanese_to_english_translation_speech_config() -> ParapperConfig {
     let mut config = base_rich_japanese_config();
-    config.translation_enabled = true;
-    config.translation_mappings = vec![japanese_to_english_translation_mapping()];
-    config.speech_mappings = vec![supertonic_translation_speech_mapping(
+    config.translation.enabled = true;
+    config.translation.mappings = vec![japanese_to_english_translation_mapping()];
+    config.speech.mappings = vec![supertonic_translation_speech_mapping(
         "speech-en",
         "en_US",
         LocalTtsVoice::Supertonic2Onnx,
@@ -191,13 +191,13 @@ fn japanese_to_english_translation_mapping() -> TranslationMapping {
 
 fn japanese_english_bidirectional_translation_speech_config() -> ParapperConfig {
     let mut config = base_rich_japanese_config();
-    config.multilingual_asr_enabled = true;
-    config.enabled_asr_models = vec![
+    config.asr.multilingual_enabled = true;
+    config.asr.enabled_models = vec![
         AsrModel::ReazonSpeechK2V2,
         AsrModel::NemoParakeetTdt0_6BV2Int8,
     ];
-    config.translation_enabled = true;
-    config.translation_mappings = vec![
+    config.translation.enabled = true;
+    config.translation.mappings = vec![
         TranslationMapping {
             id: "translate-ja-en".to_string(),
             source_asr_model: Some(AsrModel::ReazonSpeechK2V2),
@@ -209,7 +209,7 @@ fn japanese_english_bidirectional_translation_speech_config() -> ParapperConfig 
             target_lang: "ja_JP".to_string(),
         },
     ];
-    config.speech_mappings = vec![
+    config.speech.mappings = vec![
         supertonic_translation_speech_mapping(
             "speech-en",
             "en_US",
@@ -227,41 +227,39 @@ fn japanese_english_bidirectional_translation_speech_config() -> ParapperConfig 
 }
 
 fn base_japanese_config() -> ParapperConfig {
-    ParapperConfig {
-        input_volume_db: 0.0,
-        asr_language: AsrLanguage::Japanese,
-        asr_model: AsrModel::ReazonSpeechK2V2,
-        asr_precision: AsrPrecision::Int8Float32,
-        asr_num_threads: 4,
-        asr_normalize_input_audio: true,
-        multilingual_asr_enabled: false,
-        enabled_asr_models: vec![AsrModel::ReazonSpeechK2V2],
-        turn_detector: TurnDetector::Simple,
-        interim_result_enabled: false,
-        interim_result_silence_ms: 96,
-        turn_check_silence_ms: 320,
-        segment_start_speech_ms: 96,
-        turn_rerecognize_full_on_complete: false,
-        noise_cancellation_enabled: false,
-        noise_cancellation_model: NoiseCancellationModel::UlUnas,
-        translation_enabled: false,
-        translation_mappings: Vec::new(),
-        speech_mappings: Vec::new(),
-        ..ParapperConfig::default()
-    }
+    let mut config = ParapperConfig::default();
+    config.input.volume_db = 0.0;
+    config.asr.language = AsrLanguage::Japanese;
+    config.asr.model = AsrModel::ReazonSpeechK2V2;
+    config.asr.precision = AsrPrecision::Int8Float32;
+    config.asr.num_threads = 4;
+    config.asr.normalize_input_audio = true;
+    config.asr.multilingual_enabled = false;
+    config.asr.enabled_models = vec![AsrModel::ReazonSpeechK2V2];
+    config.turn.detector = TurnDetector::Simple;
+    config.turn.interim_result_enabled = false;
+    config.turn.interim_result_silence_ms = 96;
+    config.turn.check_silence_ms = 320;
+    config.segmentation.segment_start_speech_ms = 96;
+    config.turn.rerecognize_full_on_complete = false;
+    config.noise_cancellation.enabled = false;
+    config.noise_cancellation.model = NoiseCancellationModel::UlUnas;
+    config.translation.enabled = false;
+    config.translation.mappings = Vec::new();
+    config.speech.mappings = Vec::new();
+    config
 }
 
 fn base_rich_japanese_config() -> ParapperConfig {
-    ParapperConfig {
-        noise_cancellation_enabled: true,
-        turn_detector: TurnDetector::Namo,
-        interim_result_enabled: true,
-        turn_check_silence_ms: 320,
-        interim_result_silence_ms: 320,
-        segment_start_speech_ms: 96,
-        turn_rerecognize_full_on_complete: true,
-        ..base_japanese_config()
-    }
+    let mut config = base_japanese_config();
+    config.noise_cancellation.enabled = true;
+    config.turn.detector = TurnDetector::Namo;
+    config.turn.interim_result_enabled = true;
+    config.turn.check_silence_ms = 320;
+    config.turn.interim_result_silence_ms = 320;
+    config.segmentation.segment_start_speech_ms = 96;
+    config.turn.rerecognize_full_on_complete = true;
+    config
 }
 
 fn supertonic_translation_speech_mapping(
@@ -297,26 +295,26 @@ mod tests {
     fn bidirectional_translation_speech_preset_uses_enabled_asr_models() {
         let config = japanese_english_bidirectional_translation_speech_config();
 
-        assert!(config.multilingual_asr_enabled);
+        assert!(config.asr.multilingual_enabled);
         assert_eq!(
-            config.enabled_asr_models,
+            config.asr.enabled_models,
             vec![
                 AsrModel::ReazonSpeechK2V2,
                 AsrModel::NemoParakeetTdt0_6BV2Int8
             ]
         );
-        assert_eq!(config.translation_mappings.len(), 2);
-        assert_eq!(config.speech_mappings.len(), 2);
+        assert_eq!(config.translation.mappings.len(), 2);
+        assert_eq!(config.speech.mappings.len(), 2);
         assert_eq!(
-            config.speech_mappings[0].local_tts_voice,
+            config.speech.mappings[0].local_tts_voice,
             Some(LocalTtsVoice::Supertonic2Onnx)
         );
         assert_eq!(
-            config.speech_mappings[1].local_tts_voice,
+            config.speech.mappings[1].local_tts_voice,
             Some(LocalTtsVoice::Supertonic3Onnx)
         );
-        assert_eq!(config.speech_mappings[0].local_tts_speaker_id, Some(2));
-        assert_eq!(config.speech_mappings[1].local_tts_speaker_id, Some(2));
+        assert_eq!(config.speech.mappings[0].local_tts_speaker_id, Some(2));
+        assert_eq!(config.speech.mappings[1].local_tts_speaker_id, Some(2));
     }
 
     #[test]
@@ -339,7 +337,7 @@ mod tests {
 
         for preset in presets.iter().filter(|preset| preset.built_in) {
             assert_eq!(
-                preset.config.segment_start_speech_ms, 96,
+                preset.config.segmentation.segment_start_speech_ms, 96,
                 "preset={}",
                 preset.name
             );

@@ -1,4 +1,6 @@
 use super::YncPluginClient;
+
+#[cfg(windows)]
 use crate::connect::registry::detect_dword_value_u16;
 
 pub fn detect_ync_plugin_http_port() -> Option<u16> {

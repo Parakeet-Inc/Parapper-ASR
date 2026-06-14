@@ -40,7 +40,11 @@ export const VadSettings: React.FC<VadSettingsProps> = ({
           allowDeselect={false}
           disabled={runtimeLocked}
           onChange={(value) => {
-            if (value === "simple" || value === "namo") {
+            if (
+              value === "simple" ||
+              value === "morph" ||
+              value === "namo"
+            ) {
               onUpdateConfig("turn_detector", value);
             }
           }}

@@ -19,11 +19,6 @@ pub(crate) fn detect_dword_value_u16(subkey: &str, value_name: &str) -> Option<u
         .find_map(|line| parse_reg_dword(line, value_name))
 }
 
-#[cfg(not(windows))]
-pub(crate) fn detect_dword_value_u16(_subkey: &str, _value_name: &str) -> Option<u16> {
-    None
-}
-
 #[cfg(windows)]
 fn parse_reg_dword(line: &str, value_name: &str) -> Option<u16> {
     let mut parts = line.split_whitespace();

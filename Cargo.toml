@@ -2,12 +2,13 @@
 resolver = "3"
 members = [
   "src-tauri",
+  "diagnostics",
   "scripts",
 ]
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.90"
 
 [workspace.dependencies]
 tauri-build = { version = "=2.5.1", features = [] }

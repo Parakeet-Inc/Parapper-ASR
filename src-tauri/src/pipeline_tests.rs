@@ -66,9 +66,11 @@ fn speech_mapping(id: &str, source_kind: SpeechSourceKind) -> SpeechMapping {
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn recognized_text_pipeline_dispatches_translation_and_speech_sinks() {
-    let app = tauri::Builder::default()
-        .any_thread()
-        .build(tauri::generate_context!())
+    let builder = tauri::Builder::default();
+    #[cfg(any(windows, target_os = "linux"))]
+    let builder = builder.any_thread();
+    let app = builder
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .expect("test app should build");
     let handle = app.handle().clone();
     let (translated_sender, translated_receiver) = mpsc::channel::<String>();
@@ -154,7 +156,7 @@ fn recognized_text_pipeline_dispatches_translation_and_speech_sinks() {
 }
 
 fn pipeline_test_config(port: u16) -> ParapperConfig {
-    ParapperConfig {
+    parapper_config! {
         neo_http_enabled: false,
         translation_enabled: true,
         translation_plugin_http_port: port,

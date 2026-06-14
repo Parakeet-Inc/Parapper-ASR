@@ -56,7 +56,7 @@ mod tests {
     use crate::{
         config::{AsrModel, ParapperConfig},
         delivery::RecognitionSourceMeta,
-        recognition::events::RecognizedTextUpdateMode,
+        recognition::control::events::RecognizedTextUpdateMode,
     };
 
     fn source_meta(

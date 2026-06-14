@@ -1,4 +1,4 @@
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::Sender;
 
 use anyhow::{Context, Result};
 use cpal::{Device, Sample, SampleFormat, SizedSample, Stream, StreamConfig, traits::DeviceTrait};
@@ -13,7 +13,7 @@ pub(crate) fn build_input_stream(
     device: &Device,
     config: &StreamConfig,
     sample_format: SampleFormat,
-    sender: SyncSender<InputChunk>,
+    sender: Sender<InputChunk>,
 ) -> Result<Stream> {
     crate::dispatch_cpal_sample_format!(
         sample_format,
@@ -28,7 +28,7 @@ pub(crate) fn build_input_stream(
 fn build_input_stream_inner<T>(
     device: &Device,
     config: &StreamConfig,
-    sender: SyncSender<InputChunk>,
+    sender: Sender<InputChunk>,
 ) -> Result<Stream>
 where
     T: Sample + SizedSample + ToSample<f32>,
@@ -45,7 +45,7 @@ where
 
                 let samples = interleaved_to_mono(data, channels);
                 let chunk = InputChunk { samples };
-                let _ = sender.try_send(chunk);
+                enqueue_input_chunk(&sender, chunk);
             },
             err_fn,
             None,
@@ -68,8 +68,46 @@ where
         .collect()
 }
 
+fn enqueue_input_chunk(sender: &Sender<InputChunk>, chunk: InputChunk) {
+    // Receiver drop is the shutdown signal; there is nothing useful for the realtime
+    // callback to do once the recognition worker has gone away.
+    let _ = sender.send(chunk);
+}
+
 pub(crate) fn peak_level(samples: &[f32]) -> f32 {
     samples
         .iter()
         .fold(0.0_f32, |acc, sample| acc.max(sample.abs()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::{InputChunk, enqueue_input_chunk};
+
+    #[test]
+    fn input_queue_keeps_all_chunks_in_fifo_order_when_producer_gets_ahead() {
+        let (sender, receiver) = mpsc::channel();
+
+        for sample in 0_u16..32 {
+            enqueue_input_chunk(
+                &sender,
+                InputChunk {
+                    samples: vec![f32::from(sample)],
+                },
+            );
+        }
+        drop(sender);
+
+        let captured_chunks = receiver
+            .iter()
+            .map(|chunk| chunk.samples[0].to_bits())
+            .collect::<Vec<_>>();
+        let expected = (0_u16..32)
+            .map(|sample| f32::from(sample).to_bits())
+            .collect::<Vec<_>>();
+
+        assert_eq!(captured_chunks, expected);
+    }
 }

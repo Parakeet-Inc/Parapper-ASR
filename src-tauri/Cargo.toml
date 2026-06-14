@@ -1,6 +1,6 @@
 [package]
 name = "parapper"
-version = "0.2.0"
+version = "0.3.0"
 description = "YukariNet and Yukari Connect NEO ASR bridge"
 authors = ["Parakeet"]
 license = "MIT"
@@ -8,13 +8,26 @@ repository = ""
 edition.workspace = true
 rust-version.workspace = true
 default-run = "parapper"
+autobins = false
 
 [lints]
 workspace = true
 
+[features]
+real-asr-tests = []
+
 [lib]
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "parapper"
+path = "src/main.rs"
+
+[[test]]
+name = "jvs_asr"
+path = "tests/jvs_asr.rs"
+required-features = ["real-asr-tests"]
 
 [build-dependencies]
 tauri-build = { workspace = true }
@@ -44,9 +57,15 @@ tauri-plugin-log = { workspace = true }
 tar = "0.4.44"
 tokio = { workspace = true }
 unicode-normalization = "0.1"
+vibrato-rkyv = { version = "0.7.8", default-features = false, features = ["legacy"] }
+xz2 = "0.1.7"
+zstd = "0.13"
 # Keep tokenizers pinned with ort's current dependency graph to avoid native
 # feature drift while loading Namo tokenizer.json files.
 tokenizers = { version = "=0.22.2", default-features = false, features = ["onig"] }
+
+[dev-dependencies]
+tauri = { workspace = true, features = ["test"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 mdns-sd = "0.19.0"

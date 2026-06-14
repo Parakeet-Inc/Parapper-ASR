@@ -1,0 +1,42 @@
+[package]
+name = "parapper-diagnostics"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+real-asr-tests = []
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "measure_ync_audio_latency"
+path = "src/bin/measure_ync_audio_latency.rs"
+
+[[bin]]
+name = "mock_ync_server"
+path = "src/bin/mock_ync_server.rs"
+
+[[bin]]
+name = "replay_mock_recognition"
+path = "src/bin/replay_mock_recognition.rs"
+
+[[bin]]
+name = "verify_jvs_asr"
+path = "src/bin/verify_jvs_asr.rs"
+required-features = ["real-asr-tests"]
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+cpal = "0.17.3"
+dasp_sample = "0.11.0"
+ort = { version = "=2.0.0-rc.12", features = ["load-dynamic"] }
+reqwest.workspace = true
+rubato = "1.0.1"
+serde.workspace = true
+serde_json.workspace = true
+sherpa-onnx = { version = "=1.12.39", default-features = false, features = ["shared"] }
+unicode-normalization = "0.1"

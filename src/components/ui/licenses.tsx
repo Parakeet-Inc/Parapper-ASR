@@ -13,6 +13,11 @@ const modelLicenses = [
     url: "https://huggingface.co/reazon-research/reazonspeech-k2-v2",
   },
   {
+    name: "NeMo Parakeet TDT CTC 0.6B Ja 35000 int8",
+    license: "CC-BY-4.0",
+    url: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8",
+  },
+  {
     name: "NeMo Parakeet TDT 0.6B v2 int8",
     license: "CC-BY-4.0",
     url: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
@@ -20,7 +25,7 @@ const modelLicenses = [
   {
     name: "NeMo Parakeet TDT 0.6B v3 int8",
     license: "CC-BY-4.0",
-    url: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3",
+    url: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
   },
   {
     name: "Silero VAD",
@@ -46,6 +51,11 @@ const modelLicenses = [
     name: "SpeechBrain ECAPA-TDNN VoxLingua107",
     license: "Apache-2.0",
     url: "https://huggingface.co/drakulavich/SpeechBrain-coreml",
+  },
+  {
+    name: "Vibrato UniDic CWJ 3.1.1 dictionary",
+    license: "See archive license files",
+    url: "https://github.com/daac-tools/vibrato/releases/tag/v0.5.0",
   },
   {
     name: "piper-voices en_US Kristin medium",

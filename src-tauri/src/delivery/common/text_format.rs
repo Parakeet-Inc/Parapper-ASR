@@ -12,7 +12,6 @@ pub(crate) fn join_turn_segments(segments: &[String], language: AsrLanguage) -> 
             continue;
         }
         if language == AsrLanguage::Japanese {
-            text = trim_japanese_sentence_end(&text).to_string();
             text.push_str(segment);
         } else {
             text.push(' ');
@@ -36,10 +35,6 @@ pub(crate) fn finalize_turn_text(text: &str, language: AsrLanguage) -> String {
         return text.to_string();
     }
     format!("{text}。")
-}
-
-fn trim_japanese_sentence_end(text: &str) -> &str {
-    text.trim_end_matches(['。', '、', '！', '？'])
 }
 
 pub(crate) fn trim_continuation_marker(text: &str) -> &str {

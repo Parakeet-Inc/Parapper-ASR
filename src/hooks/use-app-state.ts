@@ -39,6 +39,7 @@ import type {
 export type RuntimeState = {
   status: RecognitionStatus;
   running: boolean;
+  starting: boolean;
   inputLevel: number;
   inputLevelBeforeGain: number;
   vadState: VadStateEvent | null;
@@ -69,6 +70,7 @@ export type OnboardingState = {
 const initialRuntimeState: RuntimeState = {
   status: "idle",
   running: false,
+  starting: false,
   inputLevel: 0,
   inputLevelBeforeGain: 0,
   vadState: null,
@@ -220,6 +222,7 @@ export const useAppState = ({
           ...current,
           status: loadedStatus,
           running: loadedStatus === "listening",
+          starting: false,
         }));
 
         const loadedModelStatus = await invoke<ModelStatus>("get_model_status");
@@ -491,6 +494,11 @@ const upsertRecognizedText = (
     return [...texts, event];
   }
 
+  const current = texts[index];
+  if (!shouldReplaceRecognitionEvent(current, event)) {
+    return texts;
+  }
+
   return texts.map((text, currentIndex) =>
     currentIndex === index ? event : text,
   );
@@ -513,6 +521,11 @@ const upsertTranslatedText = (
     return [...texts, event];
   }
 
+  const current = texts[index];
+  if (!shouldReplaceRecognitionEvent(current, event)) {
+    return texts;
+  }
+
   return texts.map((text, currentIndex) =>
     currentIndex === index ? event : text,
   );
@@ -524,3 +537,28 @@ const sameRecognitionSource = (
 ) =>
   left.turn_session_id === right.turn_session_id &&
   left.turn_id === right.turn_id;
+
+const shouldReplaceRecognitionEvent = (
+  current: {
+    source: {
+      turn_revision: number;
+      output_sequence: number;
+    };
+    is_final: boolean;
+  },
+  incoming: {
+    source: {
+      turn_revision: number;
+      output_sequence: number;
+    };
+    is_final: boolean;
+  },
+) => {
+  if (incoming.source.turn_revision !== current.source.turn_revision) {
+    return incoming.source.turn_revision > current.source.turn_revision;
+  }
+  if (incoming.source.output_sequence !== current.source.output_sequence) {
+    return incoming.source.output_sequence > current.source.output_sequence;
+  }
+  return incoming.is_final || !current.is_final;
+};
