@@ -1,18 +1,58 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex as StdMutex, mpsc::Sender},
+};
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 
 use crate::{
-    config::{ParapperConfig, SpeechMapping},
-    config_preset::{ConfigPreset, delete_config_preset, load_config_presets, save_config_preset},
+    config::{
+        ConfigPreset, DeveloperConnectionMode, InputSourceKind, ParapperConfig, SpeechMapping,
+        StreamingRecognitionOutputMode, delete_config_preset, load_config_presets,
+        save_config_preset,
+    },
     model::{ModelStatus, any_model_installed_in, model_status_from_root, models_root},
     recognition::{
-        RecognitionStartError, RecognitionStatus, RunningRecognitionInput, RuntimeConfigState,
+        RecognitionShutdownResult, RecognitionStartError, RecognitionStatus,
+        RecognitionStreamEvent, RunningInputSource, RunningRecognitionInput, RuntimeConfigState,
+        TurnOutputSink,
+    },
+    streaming_recognition::{
+        NetworkOutputMode, StreamingRecognitionServer, StreamingRecognitionServerConfig,
     },
     synthesis::prewarm_local_tts_engines,
+    translation::TranslationHttpListener,
 };
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TranslationHttpListenerState {
+    Stopped,
+    Starting,
+    Running,
+    Stopping,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TranslationHttpListenerStatus {
+    pub state: TranslationHttpListenerState,
+    pub port: Option<u16>,
+    pub error: Option<String>,
+}
+
+impl Default for TranslationHttpListenerStatus {
+    fn default() -> Self {
+        Self {
+            state: TranslationHttpListenerState::Stopped,
+            port: None,
+            error: None,
+        }
+    }
+}
 
 pub struct AppState {
     config_path: PathBuf,
@@ -21,7 +61,56 @@ pub struct AppState {
     config: Mutex<ParapperConfig>,
     runtime_config: Arc<RuntimeConfigState>,
     recognition_status: Mutex<RecognitionStatus>,
-    recognition_input: Mutex<Option<RunningRecognitionInput>>,
+    recognition_session: Mutex<RecognitionSessionSlot<RunningRecognitionInput>>,
+    streaming_recognition_server: Mutex<Option<StreamingRecognitionServer>>,
+    translation_http_listener: StdMutex<Option<TranslationHttpListener>>,
+    translation_http_listener_status: StdMutex<TranslationHttpListenerStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RecognitionSessionOwner {
+    Desktop,
+    WebSocket { session_id: String },
+}
+
+struct RunningRecognitionSession<T> {
+    owner: RecognitionSessionOwner,
+    input: T,
+}
+
+struct RecognitionSessionSlot<T> {
+    active: Option<RunningRecognitionSession<T>>,
+}
+
+impl<T> Default for RecognitionSessionSlot<T> {
+    fn default() -> Self {
+        Self { active: None }
+    }
+}
+
+impl<T> RecognitionSessionSlot<T> {
+    fn insert(
+        &mut self,
+        owner: RecognitionSessionOwner,
+        input: T,
+    ) -> Result<(), RecognitionSessionOwner> {
+        if let Some(active) = &self.active {
+            return Err(active.owner.clone());
+        }
+        self.active = Some(RunningRecognitionSession { owner, input });
+        Ok(())
+    }
+
+    fn owner(&self) -> Option<&RecognitionSessionOwner> {
+        self.active.as_ref().map(|active| &active.owner)
+    }
+
+    fn take(&mut self, owner: &RecognitionSessionOwner) -> Option<T> {
+        if self.owner() != Some(owner) {
+            return None;
+        }
+        self.active.take().map(|active| active.input)
+    }
 }
 
 impl AppState {
@@ -34,7 +123,6 @@ impl AppState {
         let config_presets_path = app_config_dir.join("config-presets.json");
         let models_root = models_root(handle)?;
         let config = ParapperConfig::load(&config_path)?;
-
         Ok(Self {
             config_path,
             config_presets_path,
@@ -42,7 +130,12 @@ impl AppState {
             runtime_config: Arc::new(RuntimeConfigState::new(config.clone())),
             config: Mutex::new(config),
             recognition_status: Mutex::new(RecognitionStatus::Idle),
-            recognition_input: Mutex::new(None),
+            recognition_session: Mutex::new(RecognitionSessionSlot::default()),
+            streaming_recognition_server: Mutex::new(None),
+            translation_http_listener: StdMutex::new(None),
+            translation_http_listener_status: StdMutex::new(
+                TranslationHttpListenerStatus::default(),
+            ),
         })
     }
 
@@ -52,8 +145,20 @@ impl AppState {
 
     pub async fn set_config(&self, config: ParapperConfig) -> Result<ParapperConfig> {
         let mut config = config.normalized();
-        if *self.recognition_status.lock().await == RecognitionStatus::Listening {
+        if matches!(
+            *self.recognition_status.lock().await,
+            RecognitionStatus::WaitingForClient
+                | RecognitionStatus::Listening
+                | RecognitionStatus::Draining
+        ) {
             let previous = self.runtime_config_snapshot()?;
+            if previous.input.source_kind != config.input.source_kind
+                || previous.streaming_recognition != config.streaming_recognition
+            {
+                anyhow::bail!(
+                    "recognition input source and listener settings cannot change while recognition is running"
+                );
+            }
             preserve_running_vad_interval(&previous, &mut config);
             config.speech.mappings = preserve_running_speech_model_mappings(
                 &previous.speech.mappings,
@@ -97,6 +202,107 @@ impl AppState {
         Ok(any_model_installed_in(&self.models_root))
     }
 
+    pub fn translation_http_listener_status(&self) -> TranslationHttpListenerStatus {
+        self.translation_http_listener_status
+            .lock()
+            .expect("translation HTTP listener status lock poisoned")
+            .clone()
+    }
+
+    pub fn start_translation_http_listener(
+        &self,
+        handle: AppHandle,
+        port: u16,
+        local_model: crate::config::LocalTranslationModel,
+    ) -> Result<TranslationHttpListenerStatus> {
+        let mut listener = self
+            .translation_http_listener
+            .lock()
+            .expect("translation HTTP listener lock poisoned");
+        if listener.is_some() {
+            anyhow::bail!("translation HTTP listener is already running");
+        }
+        self.set_translation_http_listener_status(TranslationHttpListenerStatus {
+            state: TranslationHttpListenerState::Starting,
+            port: Some(port),
+            error: None,
+        });
+        match TranslationHttpListener::start(handle, port, local_model) {
+            Ok(started) => {
+                let bound_port = started.local_addr().port();
+                *listener = Some(started);
+                Ok(
+                    self.set_translation_http_listener_status(TranslationHttpListenerStatus {
+                        state: TranslationHttpListenerState::Running,
+                        port: Some(bound_port),
+                        error: None,
+                    }),
+                )
+            }
+            Err(err) => {
+                self.set_translation_http_listener_status(TranslationHttpListenerStatus {
+                    state: TranslationHttpListenerState::Error,
+                    port: Some(port),
+                    error: Some(err.to_string()),
+                });
+                Err(err)
+            }
+        }
+    }
+
+    pub async fn stop_translation_http_listener(&self) -> Result<TranslationHttpListenerStatus> {
+        let listener = self
+            .translation_http_listener
+            .lock()
+            .expect("translation HTTP listener lock poisoned")
+            .take();
+        let Some(listener) = listener else {
+            return Ok(
+                self.set_translation_http_listener_status(TranslationHttpListenerStatus::default())
+            );
+        };
+        let port = listener.local_addr().port();
+        self.set_translation_http_listener_status(TranslationHttpListenerStatus {
+            state: TranslationHttpListenerState::Stopping,
+            port: Some(port),
+            error: None,
+        });
+        match tauri::async_runtime::spawn_blocking(move || listener.stop()).await {
+            Ok(Ok(())) => {
+                Ok(self
+                    .set_translation_http_listener_status(TranslationHttpListenerStatus::default()))
+            }
+            Ok(Err(err)) => {
+                self.set_translation_http_listener_status(TranslationHttpListenerStatus {
+                    state: TranslationHttpListenerState::Error,
+                    port: Some(port),
+                    error: Some(err.to_string()),
+                });
+                Err(err)
+            }
+            Err(err) => {
+                let error = anyhow::anyhow!("translation HTTP listener stop task failed: {err}");
+                self.set_translation_http_listener_status(TranslationHttpListenerStatus {
+                    state: TranslationHttpListenerState::Error,
+                    port: Some(port),
+                    error: Some(error.to_string()),
+                });
+                Err(error)
+            }
+        }
+    }
+
+    fn set_translation_http_listener_status(
+        &self,
+        status: TranslationHttpListenerStatus,
+    ) -> TranslationHttpListenerStatus {
+        *self
+            .translation_http_listener_status
+            .lock()
+            .expect("translation HTTP listener status lock poisoned") = status.clone();
+        status
+    }
+
     pub async fn get_recognition_status(&self) -> RecognitionStatus {
         *self.recognition_status.lock().await
     }
@@ -110,14 +316,27 @@ impl AppState {
         &self,
         handle: AppHandle,
     ) -> Result<RecognitionStatus, RecognitionStartError> {
-        let mut recognition_input = self.recognition_input.lock().await;
-        if recognition_input.is_some() {
-            return Ok(self
-                .set_recognition_status(RecognitionStatus::Listening)
-                .await);
+        let config = self.get_config().await;
+        if config.input.source_kind == InputSourceKind::WebSocket {
+            return self.start_streaming_recognition(handle, &config).await;
         }
 
-        let config = self.get_config().await;
+        // Keep the listener slot locked through desktop session acquisition so a
+        // concurrent WebSocket start cannot pass its reciprocal ownership check.
+        let streaming_server = self.streaming_recognition_server.lock().await;
+        if streaming_server.is_some() {
+            return Err(RecognitionStartError::Busy);
+        }
+        let mut recognition_session = self.recognition_session.lock().await;
+        if let Some(owner) = recognition_session.owner() {
+            if *owner == RecognitionSessionOwner::Desktop {
+                return Ok(self
+                    .set_recognition_status(RecognitionStatus::Listening)
+                    .await);
+            }
+            return Err(RecognitionStartError::Busy);
+        }
+
         prewarm_local_tts_engines(&handle, &config);
         let running_recognition_input =
             match RunningRecognitionInput::start(handle, &config, self.runtime_config.clone()) {
@@ -127,8 +346,11 @@ impl AppState {
                     return Err(err);
                 }
             };
-        *recognition_input = Some(running_recognition_input);
-        drop(recognition_input);
+        recognition_session
+            .insert(RecognitionSessionOwner::Desktop, running_recognition_input)
+            .map_err(|_| RecognitionStartError::Busy)?;
+        drop(recognition_session);
+        drop(streaming_server);
 
         Ok(self
             .set_recognition_status(RecognitionStatus::Listening)
@@ -136,20 +358,165 @@ impl AppState {
     }
 
     pub async fn stop_audio_input(&self) -> RecognitionStatus {
-        let running_recognition_input = {
-            let mut recognition_input = self.recognition_input.lock().await;
-            recognition_input.take()
+        let streaming_server = self.streaming_recognition_server.lock().await.take();
+        if let Some(server) = streaming_server {
+            self.set_recognition_status(RecognitionStatus::Draining)
+                .await;
+            if let Err(err) = tauri::async_runtime::spawn_blocking(move || server.stop()).await {
+                log::warn!("Streaming recognition server stop task failed: {err}");
+            }
+            return self
+                .set_recognition_status(RecognitionStatus::Stopped)
+                .await;
+        }
+
+        let (running_recognition_input, another_owner_is_active) = {
+            let mut recognition_session = self.recognition_session.lock().await;
+            let another_owner_is_active = recognition_session
+                .owner()
+                .is_some_and(|owner| *owner != RecognitionSessionOwner::Desktop);
+            (
+                recognition_session.take(&RecognitionSessionOwner::Desktop),
+                another_owner_is_active,
+            )
         };
 
-        if let Some(running_recognition_input) = running_recognition_input
-            && let Err(err) =
-                tauri::async_runtime::spawn_blocking(move || running_recognition_input.stop()).await
-        {
-            log::warn!("Recognition input stop task failed: {err}");
+        if another_owner_is_active {
+            return self.get_recognition_status().await;
+        }
+
+        if let Some(running_recognition_input) = running_recognition_input {
+            match tauri::async_runtime::spawn_blocking(move || running_recognition_input.stop())
+                .await
+            {
+                Ok(RecognitionShutdownResult::TimedOut) => {
+                    return self.set_recognition_status(RecognitionStatus::Error).await;
+                }
+                Ok(RecognitionShutdownResult::Completed | RecognitionShutdownResult::Cancelled) => {
+                }
+                Err(err) => {
+                    log::warn!("Recognition input stop task failed: {err}");
+                    return self.set_recognition_status(RecognitionStatus::Error).await;
+                }
+            }
         }
 
         self.set_recognition_status(RecognitionStatus::Stopped)
             .await
+    }
+
+    pub(crate) async fn start_network_input(
+        &self,
+        handle: AppHandle,
+        session_id: String,
+        source: RunningInputSource,
+        output_sink: Box<dyn TurnOutputSink>,
+        activity_sender: Sender<RecognitionStreamEvent>,
+    ) -> Result<(), RecognitionStartError> {
+        let owner = RecognitionSessionOwner::WebSocket { session_id };
+        let mut recognition_session = self.recognition_session.lock().await;
+        if recognition_session.owner().is_some() {
+            return Err(RecognitionStartError::Busy);
+        }
+
+        let config = self.get_config().await;
+        let running = RunningRecognitionInput::start_with_source_and_sink(
+            handle,
+            &config,
+            self.runtime_config.clone(),
+            source,
+            output_sink,
+            Some(activity_sender),
+        )?;
+        recognition_session
+            .insert(owner, running)
+            .map_err(|_| RecognitionStartError::Busy)?;
+        drop(recognition_session);
+        self.set_recognition_status(RecognitionStatus::Listening)
+            .await;
+        Ok(())
+    }
+
+    pub(crate) async fn stop_network_input(
+        &self,
+        session_id: &str,
+        cancel: bool,
+    ) -> (RecognitionStatus, RecognitionShutdownResult) {
+        let owner = RecognitionSessionOwner::WebSocket {
+            session_id: session_id.to_string(),
+        };
+        let running = self.recognition_session.lock().await.take(&owner);
+        if let Some(running) = running {
+            let stop = tauri::async_runtime::spawn_blocking(move || {
+                if cancel {
+                    running.cancel()
+                } else {
+                    running.stop()
+                }
+            });
+            let shutdown_result = match stop.await {
+                Ok(result) => result,
+                Err(err) => {
+                    log::warn!("Network recognition stop task failed: {err}");
+                    RecognitionShutdownResult::Cancelled
+                }
+            };
+            let next = if self.streaming_recognition_server.lock().await.is_some() {
+                RecognitionStatus::WaitingForClient
+            } else {
+                RecognitionStatus::Stopped
+            };
+            return (self.set_recognition_status(next).await, shutdown_result);
+        }
+        (
+            self.get_recognition_status().await,
+            RecognitionShutdownResult::Cancelled,
+        )
+    }
+
+    async fn start_streaming_recognition(
+        &self,
+        handle: AppHandle,
+        config: &ParapperConfig,
+    ) -> Result<RecognitionStatus, RecognitionStartError> {
+        if !config.streaming_recognition.enabled
+            || config.streaming_recognition.mode != DeveloperConnectionMode::WebSocket
+        {
+            return Err(RecognitionStartError::AudioInput(anyhow::anyhow!(
+                "WebSocket input is selected but external recognition input is disabled"
+            )));
+        }
+        let mut server_slot = self.streaming_recognition_server.lock().await;
+        if server_slot.is_some() {
+            return Ok(self.get_recognition_status().await);
+        }
+        if self.recognition_session.lock().await.owner().is_some() {
+            return Err(RecognitionStartError::Busy);
+        }
+        let bind_addr = config
+            .streaming_recognition
+            .validated_bind_addr()
+            .map_err(RecognitionStartError::AudioInput)?;
+        let output_mode = match config.streaming_recognition.output_mode {
+            StreamingRecognitionOutputMode::WebSocketOnly => NetworkOutputMode::WebSocketOnly,
+            StreamingRecognitionOutputMode::WebSocketAndDesktop => {
+                NetworkOutputMode::WebSocketAndDesktop
+            }
+        };
+        let server = StreamingRecognitionServer::start(
+            handle,
+            StreamingRecognitionServerConfig {
+                bind_addr,
+                api_key: config.streaming_recognition.api_key.clone(),
+                output_mode,
+            },
+        )
+        .map_err(RecognitionStartError::AudioInput)?;
+        log::info!("Streaming recognition listening on {}", server.local_addr());
+        *server_slot = Some(server);
+        Ok(self
+            .set_recognition_status(RecognitionStatus::WaitingForClient)
+            .await)
     }
 }
 
@@ -194,7 +561,7 @@ fn preserve_running_speech_model_mappings(
 
 #[cfg(test)]
 mod tests {
-    use super::preserve_running_vad_interval;
+    use super::{RecognitionSessionOwner, RecognitionSessionSlot, preserve_running_vad_interval};
     use crate::config::{ParapperConfig, TurnDetector};
 
     #[test]
@@ -243,6 +610,48 @@ mod tests {
         assert_eq!(next.turn.namo_context_max_tokens, 512);
         assert!(!next.turn.rerecognize_full_on_complete);
         assert_f32_close(next.input.volume_db, 6.0);
+    }
+
+    #[test]
+    fn recognition_slot_rejects_desktop_and_websocket_double_ownership_symmetrically() {
+        let cases = [
+            (
+                RecognitionSessionOwner::Desktop,
+                RecognitionSessionOwner::WebSocket {
+                    session_id: "network".to_string(),
+                },
+            ),
+            (
+                RecognitionSessionOwner::WebSocket {
+                    session_id: "network".to_string(),
+                },
+                RecognitionSessionOwner::Desktop,
+            ),
+        ];
+
+        for (first, second) in cases {
+            let mut slot = RecognitionSessionSlot::default();
+            slot.insert(first.clone(), 1_u8).unwrap();
+
+            let active = slot.insert(second, 2_u8).unwrap_err();
+
+            assert_eq!(active, first);
+            assert_eq!(slot.owner(), Some(&first));
+        }
+    }
+
+    #[test]
+    fn recognition_slot_releases_only_the_matching_owner() {
+        let network = RecognitionSessionOwner::WebSocket {
+            session_id: "network".to_string(),
+        };
+        let mut slot = RecognitionSessionSlot::default();
+        slot.insert(network.clone(), 7_u8).unwrap();
+
+        assert_eq!(slot.take(&RecognitionSessionOwner::Desktop), None);
+        assert_eq!(slot.owner(), Some(&network));
+        assert_eq!(slot.take(&network), Some(7));
+        assert_eq!(slot.owner(), None);
     }
 
     fn assert_f32_close(actual: f32, expected: f32) {

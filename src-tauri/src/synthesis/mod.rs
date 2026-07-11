@@ -5,6 +5,7 @@ mod clients;
 mod engines;
 mod local;
 mod manager;
+mod provider;
 mod queue;
 mod request;
 

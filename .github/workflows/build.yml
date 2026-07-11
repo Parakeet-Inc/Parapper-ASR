@@ -21,9 +21,9 @@ jobs:
       CARGO_TERM_COLOR: always
       RUST_VERSION: 1.90.0
       TARGET_TRIPLE: x86_64-pc-windows-msvc
-      SHERPA_ONNX_VERSION: 1.12.39
-      SHERPA_PREBUILT_DIR: sherpa-onnx-v1.12.39-win-x64-shared-MT-Release-lib
-      SHERPA_PREBUILT_URL: https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.39/sherpa-onnx-v1.12.39-win-x64-shared-MT-Release-lib.tar.bz2
+      SHERPA_ONNX_VERSION: 1.13.3
+      SHERPA_PREBUILT_DIR: sherpa-onnx-v1.13.3-win-x64-shared-MT-Release-lib
+      SHERPA_PREBUILT_URL: https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/sherpa-onnx-v1.13.3-win-x64-shared-MT-Release-lib.tar.bz2
 
     steps:
       - name: Checkout
@@ -47,7 +47,7 @@ jobs:
           rustup toolchain install $env:RUST_VERSION
           rustup default $env:RUST_VERSION
           rustup target add $env:TARGET_TRIPLE
-          rustup component add rustfmt --toolchain $env:RUST_VERSION
+          rustup component add rustfmt clippy --toolchain $env:RUST_VERSION
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -97,8 +97,20 @@ jobs:
       - name: Rust format check
         run: cargo fmt --all -- --check
 
+      - name: Rust check
+        run: cargo check -p parapper
+
+      - name: Rust clippy
+        run: cargo clippy -p parapper --all-targets
+
       - name: Rust tests
         run: cargo test -p parapper
+
+      - name: Frontend lint
+        run: pnpm exec eslint ./src
+
+      - name: Frontend build
+        run: pnpm build
 
       - name: Build MSI
         uses: tauri-apps/tauri-action@v0
@@ -136,3 +148,4 @@ jobs:
         with:
           files: ${{ steps.msi.outputs.paths }}
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

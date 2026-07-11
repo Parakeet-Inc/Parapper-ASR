@@ -1,5 +1,8 @@
 use super::{GrammarBoundaryClass, TurnBoundaryCandidate, TurnDraft};
-use crate::{config::AsrLanguage, recognition::transcription::route::RecognitionRoute};
+use crate::{
+    config::AsrLanguage,
+    recognition::{segmentation::vad::engine::VadResult, transcription::route::RecognitionRoute},
+};
 
 #[test]
 fn new_turn_draft_starts_empty() {
@@ -23,6 +26,38 @@ fn replace_with_full_turn_transcription_keeps_full_audio_and_replaces_text() {
     assert_eq!(draft.segment_texts, vec!["今日は晴れです"]);
     assert_eq!(draft.combined_text, "今日は晴れです");
     assert_eq!(draft.processing_millis, 35);
+}
+
+#[test]
+fn repeated_segment_interim_updates_replace_audio_and_text_instead_of_appending_duplicates() {
+    let route = RecognitionRoute::from_language(AsrLanguage::Japanese);
+    let mut draft = TurnDraft::new("turn-1".to_string(), 0);
+
+    draft.append_recognized_segment(
+        1,
+        None,
+        &[1.0, 2.0],
+        &[vad(true)],
+        route,
+        "最初".to_string(),
+        10,
+    );
+    draft.replace_latest_recognized_segment(
+        1,
+        None,
+        &[1.0, 2.0, 3.0, 4.0],
+        &[vad(true), vad(true)],
+        route,
+        "最初の続き".to_string(),
+        20,
+    );
+
+    assert_eq!(draft.segment_ids, vec![1]);
+    assert_eq!(draft.segment_texts, vec!["最初の続き"]);
+    assert_eq!(draft.combined_text, "最初の続き");
+    assert_eq!(draft.full_audio, vec![1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(draft.vad_results, vec![vad(true), vad(true)]);
+    assert_eq!(draft.latest_previous_segment_id, None);
 }
 
 #[test]
@@ -59,4 +94,11 @@ fn boundary_candidate_offset_moves_text_and_audio_coordinates_together() {
             class: GrammarBoundaryClass::NormalEnd,
         }
     );
+}
+
+fn vad(is_speech: bool) -> VadResult {
+    VadResult {
+        probability: if is_speech { 0.9 } else { 0.0 },
+        is_speech,
+    }
 }

@@ -4,17 +4,22 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
-    audio::{DeviceInfo, collect_input_devices, collect_output_devices},
-    config::ParapperConfig,
-    config_preset::ConfigPreset,
+    audio::{
+        DeviceInfo, collect_input_devices, collect_output_devices, open_system_audio_settings,
+        request_system_audio_permission,
+    },
+    config::{ConfigPreset, LocalTranslationModel, ParapperConfig},
     connect::{
         SpeechRequest, YncPluginClient, detect_ync_plugin_http_port,
         detect_ync_text_input_http_port, query_current_mute_state, ync_text_input_http_available,
     },
     error_event::{ErrorSeverity, ParapperErrorPayload, ParapperErrorType, parapper_error_payload},
-    model::{ModelStatus, ensure_models_downloaded},
+    model::{
+        ModelStatus, ensure_local_translation_model_downloaded, ensure_models_downloaded,
+        local_translation_model_is_installed,
+    },
     recognition::RecognitionStatus,
-    state::AppState,
+    state::{AppState, TranslationHttpListenerStatus},
 };
 
 type CommandResult<T> = Result<T, ParapperErrorPayload>;
@@ -141,6 +146,24 @@ pub fn get_output_audio_devices() -> Vec<DeviceInfo> {
     collect_output_devices()
 }
 
+/// Requests the macOS System Audio Recording permission needed for speaker
+/// (loopback) capture, showing the system prompt if the decision is pending.
+/// Returns `true` if capture is allowed. On non-macOS platforms this is a no-op
+/// that returns `true`.
+#[tauri::command]
+pub async fn request_loopback_audio_permission() -> CommandResult<bool> {
+    tauri::async_runtime::spawn_blocking(|| request_system_audio_permission().is_granted())
+        .await
+        .map_err(|err| command_error(ParapperErrorType::AudioInput, err.to_string()))
+}
+
+/// Opens the System Settings pane where the System Audio Recording permission can
+/// be granted manually (used when the prompt was previously dismissed/denied).
+#[tauri::command]
+pub fn open_system_audio_permission_settings() {
+    open_system_audio_settings();
+}
+
 #[tauri::command]
 pub fn find_neo_http_port() -> Option<u16> {
     if !ParapperConfig::neo_http_supported() {
@@ -246,12 +269,74 @@ pub async fn has_any_model_installed(state: State<'_, AppState>) -> CommandResul
 }
 
 #[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri::command requires State<'_, T> by value"
+)]
+pub fn get_translation_http_listener_status(
+    state: State<'_, AppState>,
+) -> TranslationHttpListenerStatus {
+    state.translation_http_listener_status()
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri::command requires State<'_, T> by value"
+)]
+pub fn start_translation_http_listener(
+    handle: AppHandle,
+    state: State<'_, AppState>,
+    port: u16,
+    local_model: LocalTranslationModel,
+) -> CommandResult<TranslationHttpListenerStatus> {
+    state
+        .start_translation_http_listener(handle, port, local_model)
+        .map_err(|err| command_error(ParapperErrorType::Config, err.to_string()))
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri::command requires State<'_, T> by value"
+)]
+pub async fn stop_translation_http_listener(
+    state: State<'_, AppState>,
+) -> CommandResult<TranslationHttpListenerStatus> {
+    state
+        .stop_translation_http_listener()
+        .await
+        .map_err(|err| command_error(ParapperErrorType::Unknown, err.to_string()))
+}
+
+#[tauri::command]
 pub async fn download_models(
     handle: AppHandle,
     config: ParapperConfig,
 ) -> CommandResult<ModelStatus> {
     ensure_models_downloaded(&handle, &config)
         .await
+        .map_err(|err| command_error(ParapperErrorType::ModelDownload, err.to_string()))
+}
+
+#[tauri::command]
+pub async fn get_local_translation_model_installed(
+    handle: AppHandle,
+    model: LocalTranslationModel,
+) -> CommandResult<bool> {
+    local_translation_model_is_installed(&handle, model)
+        .map_err(|err| command_error(ParapperErrorType::ModelDownload, err.to_string()))
+}
+
+#[tauri::command]
+pub async fn download_local_translation_model(
+    handle: AppHandle,
+    model: LocalTranslationModel,
+) -> CommandResult<bool> {
+    ensure_local_translation_model_downloaded(&handle, model)
+        .await
+        .map_err(|err| command_error(ParapperErrorType::ModelDownload, err.to_string()))?;
+    local_translation_model_is_installed(&handle, model)
         .map_err(|err| command_error(ParapperErrorType::ModelDownload, err.to_string()))
 }
 
@@ -334,10 +419,14 @@ pub async fn start_recognition(
         .await
         .map_err(|err| {
             let detail = err.to_string();
-            let error_type = if err.is_asr() {
-                ParapperErrorType::Asr
-            } else {
-                ParapperErrorType::AudioInput
+            let error_type = match &err {
+                crate::recognition::RecognitionStartError::Asr(_) => ParapperErrorType::Asr,
+                crate::recognition::RecognitionStartError::Busy => {
+                    ParapperErrorType::RecognitionBusy
+                }
+                crate::recognition::RecognitionStartError::AudioInput(_) => {
+                    ParapperErrorType::AudioInput
+                }
             };
             command_error(error_type, detail)
         })?;
@@ -352,6 +441,17 @@ pub async fn stop_recognition(
     handle: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<RecognitionStatus> {
+    if matches!(
+        state.get_recognition_status().await,
+        RecognitionStatus::WaitingForClient | RecognitionStatus::Listening
+    ) {
+        let draining = state
+            .set_recognition_status(RecognitionStatus::Draining)
+            .await;
+        handle
+            .emit("parapper://status", draining)
+            .map_err(|err| command_error(ParapperErrorType::Unknown, err.to_string()))?;
+    }
     let status = state.stop_audio_input().await;
     handle
         .emit("parapper://status", status)

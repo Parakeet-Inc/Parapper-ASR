@@ -66,6 +66,7 @@ pub(crate) enum SegmentBuilderEvent {
     reason = "segment_builder README とテストで close threshold 到達理由として明示している"
 )]
 pub(crate) enum SegmentCloseReason {
+    InterimChunkReached,
     InterimResultSilenceReached,
     EndSilenceReached,
     SegmentMaxChunksReached,
@@ -439,6 +440,9 @@ fn state_after_close(
     config: &SegmentBuilderConfig,
 ) -> SegmentBuilderState {
     match reason {
+        SegmentCloseReason::InterimChunkReached => {
+            unreachable!("streaming interim chunk is not a segment-builder close reason")
+        }
         SegmentCloseReason::InterimResultSilenceReached => {
             let trailing_silence = trailing_silence_chunks(active);
             let silence_chunks = trailing_silence.len().try_into().unwrap_or(u32::MAX);

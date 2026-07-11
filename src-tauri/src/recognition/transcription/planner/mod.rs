@@ -33,7 +33,8 @@ pub(in crate::recognition) struct PendingAsrSegment {
 impl PendingAsrSegment {
     pub(in crate::recognition) fn kind(&self) -> AsrTaskKind {
         match self.reason {
-            SegmentCloseReason::InterimResultSilenceReached => AsrTaskKind::InterimDisplay,
+            SegmentCloseReason::InterimChunkReached
+            | SegmentCloseReason::InterimResultSilenceReached => AsrTaskKind::InterimDisplay,
             SegmentCloseReason::EndSilenceReached | SegmentCloseReason::SegmentMaxChunksReached => {
                 AsrTaskKind::CompletionCheck
             }
@@ -69,12 +70,16 @@ impl AsrRequestSegmentPlan {
         &self,
         config: &ParapperConfig,
         open_turn_id: Option<u64>,
+        open_turn_accepts_root_segment: bool,
     ) -> u64 {
         let first = self
             .segments
             .first()
             .expect("ASR request plan requires at least one pending segment");
         if !config.can_connect_interim_after_completion() && first.previous_segment_id.is_none() {
+            return first.segment_id;
+        }
+        if first.previous_segment_id.is_none() && !open_turn_accepts_root_segment {
             return first.segment_id;
         }
         open_turn_id.unwrap_or_else(|| first.turn_id().0)
@@ -134,7 +139,7 @@ impl AsrRequestSegmentPlan {
             source_audio.extend_from_slice(&segment.source_audio);
             source_vad_results.extend_from_slice(&segment.source_vad_results);
         }
-        if self.kind == AsrTaskKind::InterimDisplay {
+        if self.kind == AsrTaskKind::InterimDisplay && !route_selection.route.model.is_nemotron() {
             ensure_asr_request_edge_silence(
                 config,
                 &mut audio,

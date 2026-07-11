@@ -4,5 +4,7 @@
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>Parapper uses the microphone to transcribe speech from the selected input device.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Parapper captures system audio to transcribe speech playing through the selected speaker (loopback) device.</string>
 </dict>
 </plist>

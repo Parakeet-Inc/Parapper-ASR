@@ -564,6 +564,404 @@ fn turn_runtime_enqueues_interim_asr_without_finishing_turn() {
 }
 
 #[test]
+fn turn_runtime_nemotron_interim_dispatches_160ms_chunks_during_active_speech() {
+    const FRAME_SAMPLES: usize = 256;
+    const NEMOTRON_CHUNK_SAMPLES: usize = 2_560;
+    let mut builder = RecognitionSessionTestBuilder::new()
+        .asr_model(AsrModel::ReazonSpeechK2V2)
+        .interim_asr_model(AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8)
+        .vad_interval_ms(16)
+        .turn_check_silence_ms(320)
+        .segment_start_speech_ms(1)
+        .interim_display(true);
+    let asr_handle = builder.use_manual_asr();
+    let (mut runtime, config) = builder.build();
+
+    replay_vad_frames_for_runtime(
+        &mut runtime,
+        &config,
+        (0..9).map(|_| (vec![1.0; FRAME_SAMPLES], vad(true))),
+    );
+
+    assert!(
+        asr_handle.submitted_requests().is_empty(),
+        "Nemotron interim must wait until the first full 160ms chunk is available"
+    );
+
+    replay_vad_frames_for_runtime(
+        &mut runtime,
+        &config,
+        vec![(vec![1.0; FRAME_SAMPLES], vad(true))],
+    );
+
+    let submitted = asr_handle.submitted_requests();
+    assert_eq!(submitted.len(), 1);
+    let request = &submitted[0];
+    assert_eq!(request.kind, AsrTaskKind::InterimDisplay);
+    assert_eq!(
+        request.route,
+        RecognitionRoute::from_model(AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8)
+    );
+    assert_eq!(
+        request.close_reason,
+        Some(SegmentCloseReason::InterimChunkReached)
+    );
+    assert_eq!(
+        request.audio.len(),
+        NEMOTRON_CHUNK_SAMPLES,
+        "the runtime request should stay on the 160ms grid before Nemotron-specific worker padding"
+    );
+    assert_eq!(request.target.range.start_sample, GlobalSampleIndex(0));
+    assert_eq!(
+        request.target.range.end_sample,
+        GlobalSampleIndex(NEMOTRON_CHUNK_SAMPLES as u64)
+    );
+}
+
+#[test]
+fn turn_runtime_streaming_interim_ignores_silence_snapshot_request() {
+    let mut builder = RecognitionSessionTestBuilder::new()
+        .asr_model(AsrModel::ReazonSpeechK2V2)
+        .interim_asr_model(AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8)
+        .vad_interval_ms(16)
+        .segment_start_speech_ms(1)
+        .interim_display(true)
+        .interim_result_silence_ms(16)
+        .turn_check_silence_ms(320);
+    let asr_handle = builder.use_manual_asr();
+    let (mut runtime, config) = builder.build();
+
+    replay_vad_frames_for_runtime(
+        &mut runtime,
+        &config,
+        vec![
+            (vec![1.0; 256], vad(true)),
+            (vec![0.0; 256], vad(false)),
+            (vec![2.0; 256], vad(true)),
+        ],
+    );
+
+    let submitted = asr_handle.submitted_requests();
+    assert!(
+        submitted.is_empty(),
+        "streaming interim ASR must not also submit the non-streaming silence snapshot request"
+    );
+}
+
+#[test]
+fn turn_runtime_streaming_interim_silence_threshold_does_not_split_completion_request() {
+    const FRAME_SAMPLES: usize = 256;
+    let mut builder = RecognitionSessionTestBuilder::new()
+        .asr_model(AsrModel::ReazonSpeechK2V2)
+        .interim_asr_model(AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8)
+        .vad_interval_ms(16)
+        .segment_start_speech_ms(1)
+        .interim_display(true)
+        .interim_result_silence_ms(16)
+        .turn_check_silence_ms(64);
+    let asr_handle = builder.use_manual_asr();
+    let (mut runtime, config) = builder.build();
+
+    replay_vad_frames_for_runtime(
+        &mut runtime,
+        &config,
+        (0..10).map(|_| (vec![1.0; FRAME_SAMPLES], vad(true))),
+    );
+    let streaming_request = runtime
+        .requests
+        .in_flight_request
+        .clone()
+        .expect("first streaming interim request should be in flight");
+    assert_eq!(streaming_request.kind, AsrTaskKind::InterimDisplay);
+    assert_eq!(
+        streaming_request.close_reason,
+        Some(SegmentCloseReason::InterimChunkReached)
+    );
+    asr_handle.complete_request_with_text(&streaming_request, "途中");
+    runtime.step();
+
+    replay_vad_frames_for_runtime(
+        &mut runtime,
+        &config,
+        std::iter::once((vec![0.0; FRAME_SAMPLES], vad(false)))
+            .chain(std::iter::once((vec![2.0; FRAME_SAMPLES], vad(true))))
+            .chain((0..4).map(|_| (vec![0.0; FRAME_SAMPLES], vad(false)))),
+    );
+
+    let completion = runtime
+        .requests
+        .in_flight_request
+        .as_ref()
+        .expect("turn-check silence should dispatch completion ASR");
+    assert_eq!(completion.kind, AsrTaskKind::CompletionCheck);
+    assert_eq!(
+        completion.target.first_segment_id,
+        Some(SegmentId(1)),
+        "streaming interim must not let interim_result_silence_ms split the logical completion segment"
+    );
+    assert_eq!(
+        completion.target.last_segment_id,
+        Some(SegmentId(1)),
+        "completion should still target the original segment instead of a silence-threshold child segment"
+    );
+    assert_eq!(
+        completion.source_audio.len(),
+        FRAME_SAMPLES * 16,
+        "completion source audio should cover the whole utterance regardless of interim_result_silence_ms"
+    );
+}
+
+#[test]
+fn turn_runtime_streaming_interim_continues_across_interim_silence_without_duplicate_prespeech() {
+    const FRAME_SAMPLES: usize = 256;
+    const NEMOTRON_CHUNK_SAMPLES: usize = 2_560;
+    let mut builder = RecognitionSessionTestBuilder::new()
+        .asr_model(AsrModel::ReazonSpeechK2V2)
+        .interim_asr_model(AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8)
+        .vad_interval_ms(16)
+        .segment_start_speech_ms(1)
+        .interim_display(true)
+        .interim_result_silence_ms(16)
+        .turn_check_silence_ms(320);
+    let asr_handle = builder.use_manual_asr();
+    let (mut runtime, config) = builder.build();
+
+    replay_vad_frames_for_runtime(
+        &mut runtime,
+        &config,
+        (0..10).map(|_| (vec![1.0; FRAME_SAMPLES], vad(true))),
+    );
+    let first_request = runtime
+        .requests
+        .in_flight_request
+        .clone()
+        .expect("first 160ms streaming interim request should be in flight");
+    asr_handle.complete_request_with_text(&first_request, "最初");
+    runtime.step();
+
+    replay_vad_frames_for_runtime(
+        &mut runtime,
+        &config,
+        std::iter::once((vec![0.0; FRAME_SAMPLES], vad(false)))
+            .chain((0..9).map(|_| (vec![2.0; FRAME_SAMPLES], vad(true)))),
+    );
+
+    let submitted = asr_handle.submitted_requests();
+    assert_eq!(submitted.len(), 2);
+    let second_request = &submitted[1];
+    assert_eq!(second_request.kind, AsrTaskKind::InterimDisplay);
+    assert_eq!(
+        second_request.close_reason,
+        Some(SegmentCloseReason::InterimChunkReached)
+    );
+    assert_eq!(
+        second_request.target.first_segment_id,
+        Some(SegmentId(1)),
+        "streaming interim should keep updating the logical utterance segment across interim-threshold silence"
+    );
+    assert_eq!(
+        second_request.target.last_segment_id,
+        Some(SegmentId(1)),
+        "streaming interim output should replace the same draft segment instead of appending duplicate cumulative audio"
+    );
+    assert_eq!(second_request.audio.len(), NEMOTRON_CHUNK_SAMPLES);
+    assert!(
+        second_request.audio[..FRAME_SAMPLES]
+            .iter()
+            .all(|sample| *sample == 0.0),
+        "the next streaming delta should include the real silence that occurred after the first chunk"
+    );
+    assert!(
+        second_request.audio[FRAME_SAMPLES..]
+            .iter()
+            .all(|sample| *sample == 2.0),
+        "interim-threshold silence must not create copied pre-speech audio in the streaming delta"
+    );
+    assert_eq!(
+        second_request.source_audio.len(),
+        NEMOTRON_CHUNK_SAMPLES * 2
+    );
+    assert!(
+        second_request.source_audio[..NEMOTRON_CHUNK_SAMPLES]
+            .iter()
+            .all(|sample| *sample == 1.0)
+    );
+    assert!(
+        second_request.source_audio[NEMOTRON_CHUNK_SAMPLES..NEMOTRON_CHUNK_SAMPLES + FRAME_SAMPLES]
+            .iter()
+            .all(|sample| *sample == 0.0)
+    );
+    assert!(
+        second_request.source_audio[NEMOTRON_CHUNK_SAMPLES + FRAME_SAMPLES..]
+            .iter()
+            .all(|sample| *sample == 2.0)
+    );
+}
+
+#[test]
+fn turn_runtime_end_silence_discards_queued_nemotron_streaming_interim_chunks() {
+    const FRAME_SAMPLES: usize = 256;
+    let mut builder = RecognitionSessionTestBuilder::new()
+        .asr_model(AsrModel::ReazonSpeechK2V2)
+        .interim_asr_model(AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8)
+        .vad_interval_ms(16)
+        .segment_start_speech_ms(1)
+        .interim_display(true)
+        .turn_check_silence_ms(32);
+    let asr_handle = builder.use_manual_asr();
+    let (mut runtime, config) = builder.build();
+
+    replay_vad_frames_for_runtime(
+        &mut runtime,
+        &config,
+        (0..20).map(|_| (vec![1.0; FRAME_SAMPLES], vad(true))),
+    );
+
+    assert!(
+        runtime.requests.in_flight_request.is_some(),
+        "the first Nemotron interim chunk should already be in flight"
+    );
+    assert!(
+        runtime
+            .pending
+            .asr_segments
+            .iter()
+            .any(|segment| { segment.reason == SegmentCloseReason::InterimChunkReached }),
+        "the second Nemotron interim chunk should be queued before the utterance closes"
+    );
+
+    replay_vad_frames_for_runtime(
+        &mut runtime,
+        &config,
+        (0..2).map(|_| (vec![0.0; FRAME_SAMPLES], vad(false))),
+    );
+
+    assert!(
+        runtime
+            .pending
+            .asr_segments
+            .iter()
+            .all(|segment| { segment.reason != SegmentCloseReason::InterimChunkReached }),
+        "queued Nemotron interim audio that was not submitted yet must be discarded when the utterance closes"
+    );
+    assert!(
+        runtime
+            .pending
+            .asr_segments
+            .iter()
+            .any(|segment| { segment.reason == SegmentCloseReason::EndSilenceReached }),
+        "the final completion candidate must remain queued after discarding interim-only audio"
+    );
+    assert_eq!(
+        asr_handle.streaming_reset_count(),
+        1,
+        "closing the utterance must reset the Nemotron streaming cache before the next interim session"
+    );
+}
+
+#[test]
+fn turn_runtime_non_streaming_interim_keeps_silence_snapshot_request() {
+    let mut builder = RecognitionSessionTestBuilder::new()
+        .asr_model(AsrModel::ReazonSpeechK2V2)
+        .interim_asr_model(AsrModel::NemoParakeetTdt0_6BV2Int8)
+        .vad_interval_ms(16)
+        .segment_start_speech_ms(1)
+        .interim_display(true)
+        .interim_result_silence_ms(16)
+        .turn_check_silence_ms(320);
+    let asr_handle = builder.use_manual_asr();
+    let (mut runtime, config) = builder.build();
+
+    replay_vad_frames_for_runtime(
+        &mut runtime,
+        &config,
+        vec![
+            (vec![1.0; 256], vad(true)),
+            (vec![0.0; 256], vad(false)),
+            (vec![2.0; 256], vad(true)),
+        ],
+    );
+
+    let submitted = asr_handle.submitted_requests();
+    assert_eq!(submitted.len(), 1);
+    assert_eq!(submitted[0].kind, AsrTaskKind::InterimDisplay);
+    assert_eq!(
+        submitted[0].close_reason,
+        Some(SegmentCloseReason::InterimResultSilenceReached)
+    );
+    assert_eq!(
+        submitted[0].route,
+        RecognitionRoute::from_model(AsrModel::NemoParakeetTdt0_6BV2Int8)
+    );
+}
+
+#[test]
+fn turn_runtime_nemotron_interim_updates_same_segment_without_duplicating_turn_audio() {
+    const FRAME_SAMPLES: usize = 256;
+    const NEMOTRON_CHUNK_SAMPLES: usize = 2_560;
+    let mut builder = RecognitionSessionTestBuilder::new()
+        .asr_model(AsrModel::ReazonSpeechK2V2)
+        .interim_asr_model(AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8)
+        .vad_interval_ms(16)
+        .turn_check_silence_ms(320)
+        .segment_start_speech_ms(1)
+        .interim_display(true);
+    let asr_handle = builder.use_manual_asr();
+    let outputs = builder.use_recording_phrase_sink();
+    let (mut runtime, config) = builder.build();
+
+    replay_vad_frames_for_runtime(
+        &mut runtime,
+        &config,
+        (0..10).map(|_| (vec![1.0; FRAME_SAMPLES], vad(true))),
+    );
+    let first_request = runtime
+        .requests
+        .in_flight_request
+        .clone()
+        .expect("the first 160ms Nemotron interim request should be in flight");
+    asr_handle.complete_request_with_text(&first_request, "あ");
+    runtime.step();
+
+    replay_vad_frames_for_runtime(
+        &mut runtime,
+        &config,
+        (0..10).map(|_| (vec![2.0; FRAME_SAMPLES], vad(true))),
+    );
+    runtime.step();
+    let second_request = runtime
+        .requests
+        .in_flight_request
+        .clone()
+        .expect("the second 160ms boundary should dispatch another interim request");
+    assert_eq!(second_request.target.first_segment_id, Some(SegmentId(1)));
+    assert_eq!(second_request.target.last_segment_id, Some(SegmentId(1)));
+    assert_eq!(
+        second_request.audio.len(),
+        NEMOTRON_CHUNK_SAMPLES,
+        "Nemotron streaming input must send only the next 160ms delta to the ASR worker"
+    );
+    assert_eq!(
+        second_request.source_audio.len(),
+        NEMOTRON_CHUNK_SAMPLES * 2,
+        "Turn replacement must still keep the cumulative source audio for UI output"
+    );
+    asr_handle.complete_request_with_text(&second_request, "あいう");
+    runtime.step();
+
+    let outputs = outputs.lock().expect("phrase outputs should be readable");
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0].text, "あ...");
+    assert_eq!(outputs[0].phrase.len(), NEMOTRON_CHUNK_SAMPLES);
+    assert_eq!(outputs[1].text, "あいう...");
+    assert_eq!(
+        outputs[1].phrase.len(),
+        NEMOTRON_CHUNK_SAMPLES * 2,
+        "same-segment interim updates must replace the previous source audio instead of appending duplicate audio"
+    );
+}
+
+#[test]
 fn turn_runtime_keeps_only_one_asr_request_in_flight() {
     let (mut runtime, config) = RecognitionSessionTestBuilder::new()
         .vad_interval_ms(32)
@@ -1688,7 +2086,7 @@ fn turn_runtime_shutdown_flushes_active_segment_and_finalizes_tail_audio() {
             turn_id: 1,
             segment_id: 1,
             output_sequence: 1,
-            phrase: vec![1.0, 2.0, 3.0],
+            phrase: vec![1.0, 2.0, 3.0].into(),
             elapsed_millis: 0,
         }],
         "shutdown must flush an active segment so final text and saved phrase audio include the tail"

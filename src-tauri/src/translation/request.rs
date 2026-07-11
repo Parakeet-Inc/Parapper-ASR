@@ -1,10 +1,10 @@
 use crate::{
-    config::{AsrModel, ParapperConfig},
+    config::{AsrModel, ParapperConfig, TranslationBackend},
     delivery::{
         RecognitionSourceMeta, RecognizedTextOutput,
         common::{
-            text_format::trim_continuation_marker, timing::translation_timing_allows_output,
-            translation_targets_for_mappings,
+            TranslationTarget, text_format::trim_continuation_marker,
+            timing::translation_timing_allows_output, translation_targets_for_mappings,
         },
     },
     recognition::control::events::RecognizedTextUpdateMode,
@@ -17,9 +17,18 @@ pub(crate) struct TranslationRequest {
     pub(super) source_asr_model: AsrModel,
     pub(super) source_text: String,
     pub(super) source_detected_language: Option<String>,
-    pub(super) targets: Vec<String>,
+    pub(super) targets: Vec<TranslationTarget>,
     pub(super) is_final: bool,
     pub(super) update_mode: RecognizedTextUpdateMode,
+}
+
+impl TranslationRequest {
+    pub(super) fn target_lang_codes(&self) -> Vec<&'static str> {
+        self.targets
+            .iter()
+            .map(|target| target.target_lang_code())
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -42,13 +51,6 @@ pub(crate) fn build_translation_request(
         return None;
     }
 
-    if !ParapperConfig::neo_http_supported() {
-        log::warn!(
-            "Skipping translation for {recognized_text_id}: translation plugin HTTP is unsupported"
-        );
-        return None;
-    }
-
     if !translation_timing_allows_output(config, output) {
         return None;
     }
@@ -59,10 +61,22 @@ pub(crate) fn build_translation_request(
     }
     let source_meta = output.meta.source().clone();
 
+    let mut translation_mappings = config.translation.mappings.clone();
+    if !ParapperConfig::neo_http_supported() {
+        let before = translation_mappings.len();
+        translation_mappings.retain(|mapping| mapping.backend != TranslationBackend::Ync);
+        if before != translation_mappings.len() {
+            log::warn!(
+                "Skipping YNC translation mappings for {recognized_text_id}: translation plugin HTTP is unsupported"
+            );
+        }
+    }
+
     let targets = translation_targets_for_mappings(
-        &config.translation.mappings,
+        &translation_mappings,
         output.source_asr_model,
         output.source_language,
+        output.detected_language.as_deref(),
     );
     if targets.is_empty() {
         log::warn!(

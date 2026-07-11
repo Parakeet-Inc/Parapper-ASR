@@ -21,6 +21,27 @@ pub(crate) struct GlobalSampleIndex(pub(crate) u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct VadFrameIndex(pub(crate) u64);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct AsrStreamingSessionKey {
+    pub(crate) model: crate::config::AsrModel,
+    pub(crate) turn_id: TurnId,
+    pub(crate) segment_id: Option<SegmentId>,
+}
+
+impl AsrStreamingSessionKey {
+    pub(crate) fn new(
+        model: crate::config::AsrModel,
+        turn_id: TurnId,
+        segment_id: Option<SegmentId>,
+    ) -> Self {
+        Self {
+            model,
+            turn_id,
+            segment_id,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AsrTaskKind {
     InterimDisplay,
@@ -142,5 +163,15 @@ impl From<&AsrRequest> for AsrInFlight {
             kind: request.kind,
             target: request.target.clone(),
         }
+    }
+}
+
+impl AsrRequest {
+    pub(crate) fn streaming_session_key(&self) -> AsrStreamingSessionKey {
+        AsrStreamingSessionKey::new(
+            self.route.model,
+            self.target.turn_id,
+            self.target.last_segment_id,
+        )
     }
 }

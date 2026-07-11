@@ -1,4 +1,7 @@
-use crate::config::{AsrLanguage, AsrModel, LocalTtsFamily, LocalTtsVoice, NoiseCancellationModel};
+use crate::config::{
+    AsrLanguage, AsrModel, LocalTranslationModel, LocalTtsFamily, LocalTtsVoice,
+    NoiseCancellationModel,
+};
 
 pub(crate) const VAD_MODEL_URL: &str =
     "https://github.com/snakers4/silero-vad/raw/refs/tags/v6.0/src/silero_vad/data/silero_vad.onnx";
@@ -20,6 +23,16 @@ const ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_0_6B_V3_INT8: &str =
     "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main";
 const ASR_MODEL_DIR_NAME_NEMO_PARAKEET_TDT_0_6B_V3_INT8: &str =
     "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8";
+const ASR_MODEL_BASE_URL_SHERPA_ONNX_RELEASES: &str =
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
+const ASR_MODEL_DIR_NAME_NEMOTRON_SPEECH_STREAMING_EN_0_6B_160MS_INT8: &str =
+    "sherpa-onnx-nemotron-speech-streaming-en-0.6b-160ms-int8-2026-04-25";
+const ASR_MODEL_DIR_NAME_NEMOTRON_SPEECH_STREAMING_EN_0_6B_560MS_INT8: &str =
+    "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25";
+const ASR_MODEL_DIR_NAME_NEMOTRON_3_5_ASR_STREAMING_0_6B_160MS_INT8: &str =
+    "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-160ms-int8-2026-06-11";
+const ASR_MODEL_DIR_NAME_NEMOTRON_3_5_ASR_STREAMING_0_6B_560MS_INT8: &str =
+    "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11";
 const SPEECHBRAIN_ECAPA_MODEL_DIR: &str = "speechbrain-lang-id-voxlingua107-ecapa-onnx";
 const SPEECHBRAIN_ECAPA_BASE_URL: &str =
     "https://huggingface.co/drakulavich/SpeechBrain-coreml/resolve/main";
@@ -59,6 +72,32 @@ const SUPERTONIC2_MODEL_BASE_URL: &str =
     "https://huggingface.co/Supertone/supertonic-2/resolve/main";
 const SUPERTONIC3_MODEL_BASE_URL: &str =
     "https://huggingface.co/Supertone/supertonic-3/resolve/main";
+const LOCAL_TRANSLATION_MODEL_BASE_URL_LFM2_Q4: Option<&str> =
+    Some("https://huggingface.co/onnx-community/LFM2-350M-ENJP-MT-ONNX/resolve/main");
+const LOCAL_TRANSLATION_MODEL_BASE_URL_CAT_TRANSLATE_0_8B_Q4_K_QUANT: Option<&str> = None;
+const LOCAL_TRANSLATION_MODEL_DIR_NAME_LFM2_Q4: &str = "lfm2-350m-enjp-mt-onnx-q4";
+const LOCAL_TRANSLATION_MODEL_DIR_NAME_CAT_TRANSLATE_0_8B_Q4_K_QUANT: &str =
+    "cat-translate-0.8b-onnx-q4-k-quant";
+const LOCAL_TRANSLATION_MODEL_FILES_LFM2_Q4: &[&str] = &[
+    "chat_template.jinja",
+    "config.json",
+    "generation_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "onnx/model_q4.onnx",
+    "onnx/model_q4.onnx_data",
+];
+const LOCAL_TRANSLATION_MODEL_FILES_CAT_TRANSLATE_0_8B_Q4_K_QUANT: &[&str] = &[
+    "chat_template.jinja",
+    "genai_config.json",
+    "model_q4.onnx",
+    "model_q4.onnx.data",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer.model",
+    "tokenizer_config.json",
+];
 const LOCAL_TTS_MODEL_REQUIRED_FILES: &[&str] = &["tokens.txt"];
 const SUPERTONIC_ONNX_TTS_REQUIRED_FILES: &[&str] = &[
     "onnx/duration_predictor.onnx",
@@ -87,6 +126,10 @@ pub(crate) const ALL_ASR_MODELS: &[AsrModel] = &[
     AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8,
     AsrModel::NemoParakeetTdt0_6BV2Int8,
     AsrModel::NemoParakeetTdt0_6BV3Int8,
+    AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8,
+    AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8,
+    AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8,
+    AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8,
 ];
 
 pub(crate) const ALL_NAMO_TURN_DETECTOR_MODELS: &[NamoTurnDetectorModel] = &[
@@ -97,6 +140,11 @@ pub(crate) const ALL_NAMO_TURN_DETECTOR_MODELS: &[NamoTurnDetectorModel] = &[
 
 pub(crate) const ALL_NOISE_CANCELLATION_MODELS: &[NoiseCancellationModel] =
     &[NoiseCancellationModel::UlUnas];
+pub(crate) const ALL_LOCAL_TRANSLATION_MODELS: &[LocalTranslationModel] = &[
+    LocalTranslationModel::Lfm2Q4,
+    // CAT-Translate is intentionally disabled until its distribution path is restored.
+    // LocalTranslationModel::CatTranslate0_8BQ4KQuant,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NamoTurnDetectorModel {
@@ -110,7 +158,7 @@ impl NamoTurnDetectorModel {
         match language {
             AsrLanguage::Japanese => Self::Japanese,
             AsrLanguage::English => Self::English,
-            AsrLanguage::EuropeanMultilingual => Self::Multilingual,
+            AsrLanguage::EuropeanMultilingual | AsrLanguage::Multilingual => Self::Multilingual,
         }
     }
 }
@@ -123,6 +171,10 @@ pub(crate) fn asr_model_base_url(model: AsrModel) -> &'static str {
         }
         AsrModel::NemoParakeetTdt0_6BV2Int8 => ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_0_6B_V2_INT8,
         AsrModel::NemoParakeetTdt0_6BV3Int8 => ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_0_6B_V3_INT8,
+        AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8
+        | AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8 => ASR_MODEL_BASE_URL_SHERPA_ONNX_RELEASES,
     }
 }
 
@@ -134,7 +186,25 @@ pub(crate) fn asr_model_dir_name(model: AsrModel) -> &'static str {
         }
         AsrModel::NemoParakeetTdt0_6BV2Int8 => ASR_MODEL_DIR_NAME_NEMO_PARAKEET_TDT_0_6B_V2_INT8,
         AsrModel::NemoParakeetTdt0_6BV3Int8 => ASR_MODEL_DIR_NAME_NEMO_PARAKEET_TDT_0_6B_V3_INT8,
+        AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8 => {
+            ASR_MODEL_DIR_NAME_NEMOTRON_SPEECH_STREAMING_EN_0_6B_160MS_INT8
+        }
+        AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8 => {
+            ASR_MODEL_DIR_NAME_NEMOTRON_SPEECH_STREAMING_EN_0_6B_560MS_INT8
+        }
+        AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8 => {
+            ASR_MODEL_DIR_NAME_NEMOTRON_3_5_ASR_STREAMING_0_6B_160MS_INT8
+        }
+        AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8 => {
+            ASR_MODEL_DIR_NAME_NEMOTRON_3_5_ASR_STREAMING_0_6B_560MS_INT8
+        }
     }
+}
+
+pub(crate) fn asr_model_archive_name(model: AsrModel) -> Option<String> {
+    model
+        .is_nemotron()
+        .then(|| format!("{}.tar.bz2", asr_model_dir_name(model)))
 }
 
 pub(crate) fn asr_model_required_file_names(
@@ -163,7 +233,12 @@ pub(crate) fn asr_model_required_file_names(
             ],
         },
         AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8 => &["model.int8.onnx", "tokens.txt"],
-        AsrModel::NemoParakeetTdt0_6BV2Int8 | AsrModel::NemoParakeetTdt0_6BV3Int8 => &[
+        AsrModel::NemoParakeetTdt0_6BV2Int8
+        | AsrModel::NemoParakeetTdt0_6BV3Int8
+        | AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8
+        | AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8 => &[
             "encoder.int8.onnx",
             "decoder.int8.onnx",
             "joiner.int8.onnx",
@@ -246,6 +321,37 @@ pub(crate) fn local_tts_model_required_dir_names(voice: LocalTtsVoice) -> &'stat
     match voice.family() {
         LocalTtsFamily::Vits => &["espeak-ng-data"],
         LocalTtsFamily::Supertonic => &[],
+    }
+}
+
+pub(crate) fn local_translation_model_base_url(
+    model: LocalTranslationModel,
+) -> Option<&'static str> {
+    match model {
+        LocalTranslationModel::Lfm2Q4 => LOCAL_TRANSLATION_MODEL_BASE_URL_LFM2_Q4,
+        LocalTranslationModel::CatTranslate0_8BQ4KQuant => {
+            LOCAL_TRANSLATION_MODEL_BASE_URL_CAT_TRANSLATE_0_8B_Q4_K_QUANT
+        }
+    }
+}
+
+pub(crate) fn local_translation_model_dir_name(model: LocalTranslationModel) -> &'static str {
+    match model {
+        LocalTranslationModel::Lfm2Q4 => LOCAL_TRANSLATION_MODEL_DIR_NAME_LFM2_Q4,
+        LocalTranslationModel::CatTranslate0_8BQ4KQuant => {
+            LOCAL_TRANSLATION_MODEL_DIR_NAME_CAT_TRANSLATE_0_8B_Q4_K_QUANT
+        }
+    }
+}
+
+pub(crate) fn local_translation_model_required_file_names(
+    model: LocalTranslationModel,
+) -> &'static [&'static str] {
+    match model {
+        LocalTranslationModel::Lfm2Q4 => LOCAL_TRANSLATION_MODEL_FILES_LFM2_Q4,
+        LocalTranslationModel::CatTranslate0_8BQ4KQuant => {
+            LOCAL_TRANSLATION_MODEL_FILES_CAT_TRANSLATE_0_8B_Q4_K_QUANT
+        }
     }
 }
 

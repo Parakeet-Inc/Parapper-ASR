@@ -28,7 +28,12 @@ name = "verify_jvs_asr"
 path = "src/bin/verify_jvs_asr.rs"
 required-features = ["real-asr-tests"]
 
+[[bin]]
+name = "streaming_recognition_smoke_server"
+path = "src/bin/streaming_recognition_smoke_server.rs"
+
 [dependencies]
+app_lib = { package = "parapper", path = "../src-tauri", features = ["smoke-server"] }
 anyhow.workspace = true
 chrono.workspace = true
 cpal = "0.17.3"
@@ -38,5 +43,5 @@ reqwest.workspace = true
 rubato = "1.0.1"
 serde.workspace = true
 serde_json.workspace = true
-sherpa-onnx = { version = "=1.12.39", default-features = false, features = ["shared"] }
+sherpa-onnx = { version = "=1.13.3", default-features = false, features = ["shared"] }
 unicode-normalization = "0.1"

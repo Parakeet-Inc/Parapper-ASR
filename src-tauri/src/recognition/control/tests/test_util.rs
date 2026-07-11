@@ -8,10 +8,10 @@ use std::{
 use anyhow::{Result, anyhow};
 
 use super::{
-    AsrRequestRunner, PendingAsrSegment, PendingTurnCheck, RecognitionDriver,
-    RecognitionDriverHandle, RecognitionSession, RerecognitionPurpose, SegmentCloseReason,
-    TurnDecisionRunner, TurnOutputSink, replay_vad_frames_for_runtime, run_engine_asr_request,
-    LanguageIdRuntime,
+    AsrRequestRunner, LanguageIdRuntime, PendingAsrSegment, PendingTurnCheck, RecognitionDriver,
+    RecognitionDriverHandle, RecognitionSession, RecognitionShutdownResult, RerecognitionPurpose,
+    SegmentCloseReason, TurnDecisionRunner, TurnOutputSink, replay_vad_frames_for_runtime,
+    run_engine_asr_request,
 };
 use crate::{
     config::{AsrLanguage, AsrModel, AsrPrecision, ParapperConfig, TurnDetector},
@@ -24,8 +24,9 @@ use crate::{
                 engine::{AsrEngine, AsrTranscript},
                 input::MIN_LANGUAGE_ID_SAMPLES,
                 task::{
-                    AsrRequest, AsrRequestId, AsrResult, AsrResultStatus, AsrTarget, AsrTaskKind,
-                    AudioRange, GlobalSampleIndex, SegmentId, TurnId, TurnRevision, VadFrameIndex,
+                    AsrRequest, AsrRequestId, AsrResult, AsrResultStatus, AsrStreamingSessionKey,
+                    AsrTarget, AsrTaskKind, AudioRange, GlobalSampleIndex, SegmentId, TurnId,
+                    TurnRevision, VadFrameIndex,
                 },
             },
             route::{
@@ -71,11 +72,13 @@ struct TestLanguageIdRuntime;
 struct ManualAsrHandle {
     submitted: Arc<Mutex<VecDeque<AsrRequest>>>,
     completed: Arc<Mutex<VecDeque<AsrResult>>>,
+    streaming_reset_count: Arc<Mutex<u32>>,
 }
 
 struct ManualAsrRunner {
     submitted: Arc<Mutex<VecDeque<AsrRequest>>>,
     completed: Arc<Mutex<VecDeque<AsrResult>>>,
+    streaming_reset_count: Arc<Mutex<u32>>,
 }
 
 impl ManualAsrHandle {
@@ -154,26 +157,43 @@ impl ManualAsrHandle {
             .expect("completed ASR results should be writable")
             .push_back(result);
     }
+
+    fn streaming_reset_count(&self) -> u32 {
+        *self
+            .streaming_reset_count
+            .lock()
+            .expect("streaming reset count should be readable")
+    }
 }
 
 impl ManualAsrRunner {
     fn new() -> (Self, ManualAsrHandle) {
         let submitted = Arc::new(Mutex::new(VecDeque::new()));
         let completed = Arc::new(Mutex::new(VecDeque::new()));
+        let streaming_reset_count = Arc::new(Mutex::new(0));
         (
             Self {
                 submitted: submitted.clone(),
                 completed: completed.clone(),
+                streaming_reset_count: streaming_reset_count.clone(),
             },
             ManualAsrHandle {
                 submitted,
                 completed,
+                streaming_reset_count,
             },
         )
     }
 }
 
 impl AsrRequestRunner for ManualAsrRunner {
+    fn reset_streaming_sessions(&mut self) {
+        *self
+            .streaming_reset_count
+            .lock()
+            .expect("streaming reset count should be writable") += 1;
+    }
+
     fn submit(&mut self, request: AsrRequest) -> bool {
         self.submitted
             .lock()
@@ -352,7 +372,7 @@ impl From<&RecognizedTextOutput> for PhraseOutputSnapshot {
             turn_id: output.meta.source().turn_id,
             segment_id: output.meta.source().segment_id,
             output_sequence: output.meta.source().output_sequence,
-            phrase: output.phrase.clone(),
+            phrase: output.phrase.to_vec(),
             elapsed_millis: output.elapsed_millis,
         }
     }
@@ -387,8 +407,9 @@ impl RecognitionDriverHandle for RecordingRecognitionSession {
         self.calls.push(RuntimeCall::Step);
     }
 
-    fn shutdown(&mut self) {
+    fn shutdown(&mut self) -> RecognitionShutdownResult {
         self.shutdown_called = true;
+        RecognitionShutdownResult::Completed
     }
 }
 
@@ -460,12 +481,14 @@ impl RuntimeStateBuilder<'_> {
 
     fn open_turn(self, turn_id: u64) -> Self {
         self.runtime.turn_store.open_turn_id = Some(turn_id);
+        self.runtime.turn_store.open_turn_accepts_root_segment = true;
         self
     }
 
     fn open_turn_since(self, turn_id: u64, since_tick: u64) -> Self {
         let activity_epoch = self.runtime.activity.segment_activity_epoch;
         self.runtime.turn_store.open_turn_id = Some(turn_id);
+        self.runtime.turn_store.open_turn_accepts_root_segment = true;
         self.runtime.activity.open_turn_since_tick = Some(since_tick);
         self.runtime.activity.open_turn_activity_epoch = activity_epoch;
         self
@@ -550,6 +573,11 @@ impl RecognitionSessionTestBuilder {
     fn asr_model(mut self, model: AsrModel) -> Self {
         self.config.asr.model = model;
         self.config.asr.language = model.language();
+        self
+    }
+
+    fn interim_asr_model(mut self, model: AsrModel) -> Self {
+        self.config.asr.interim_model = Some(model);
         self
     }
 
@@ -849,10 +877,8 @@ fn test_env_path(key: &str) -> PathBuf {
 }
 
 fn diagnostic_models_root() -> PathBuf {
-    std::env::var_os("PARAPPER_MODELS_ROOT").map_or_else(
-        || test_app_data_dir().join("models"),
-        PathBuf::from,
-    )
+    std::env::var_os("PARAPPER_MODELS_ROOT")
+        .map_or_else(|| test_app_data_dir().join("models"), PathBuf::from)
 }
 
 fn test_app_data_dir() -> PathBuf {

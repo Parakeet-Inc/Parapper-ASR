@@ -1,8 +1,28 @@
 use std::collections::HashSet;
 
 use crate::config::{
-    AsrLanguage, AsrModel, SpeechBackend, SpeechMapping, SpeechSourceKind, TranslationMapping,
+    AsrLanguage, AsrModel, LocalTranslationModel, SpeechBackend, SpeechMapping, SpeechSourceKind,
+    TranslationBackend, TranslationLanguage, TranslationMapping,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct TranslationTarget {
+    pub(crate) provider_id: TranslationProviderId,
+    pub(crate) source_lang: TranslationLanguage,
+    pub(crate) target_lang: TranslationLanguage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum TranslationProviderId {
+    Ync,
+    Local(LocalTranslationModel),
+}
+
+impl TranslationTarget {
+    pub(crate) fn target_lang_code(self) -> &'static str {
+        self.target_lang.as_code()
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum SpeechTextSource<'a> {
@@ -48,7 +68,15 @@ pub(crate) fn translation_targets_for_mappings(
     mappings: &[TranslationMapping],
     source_asr_model: AsrModel,
     source_language: AsrLanguage,
-) -> Vec<String> {
+    detected_language: Option<&str>,
+) -> Vec<TranslationTarget> {
+    let Some(source_lang) = detected_language
+        .and_then(TranslationLanguage::from_code)
+        .or_else(|| TranslationLanguage::from_asr_language(source_language))
+    else {
+        return Vec::new();
+    };
+
     let mut seen = HashSet::new();
     mappings
         .iter()
@@ -57,19 +85,16 @@ pub(crate) fn translation_targets_for_mappings(
                 .source_asr_model
                 .is_none_or(|model| model == source_asr_model)
         })
-        .map(|mapping| mapping.target_lang.trim())
-        .filter(|target| !target.is_empty())
-        .filter(|target| !translation_target_matches_source_language(target, source_language))
-        .filter(|target| seen.insert((*target).to_string()))
-        .map(ToString::to_string)
+        .filter(|mapping| mapping.source_lang == source_lang)
+        .filter(|mapping| mapping.target_lang != source_lang)
+        .map(|mapping| TranslationTarget {
+            provider_id: match mapping.backend {
+                TranslationBackend::Ync => TranslationProviderId::Ync,
+                TranslationBackend::Local => TranslationProviderId::Local(mapping.local_model),
+            },
+            source_lang: mapping.source_lang,
+            target_lang: mapping.target_lang,
+        })
+        .filter(|target| seen.insert(target.target_lang))
         .collect()
-}
-
-fn translation_target_matches_source_language(target: &str, source_language: AsrLanguage) -> bool {
-    let normalized = target.to_ascii_lowercase();
-    match source_language {
-        AsrLanguage::Japanese => normalized.starts_with("ja"),
-        AsrLanguage::English => normalized.starts_with("en"),
-        AsrLanguage::EuropeanMultilingual => false,
-    }
 }

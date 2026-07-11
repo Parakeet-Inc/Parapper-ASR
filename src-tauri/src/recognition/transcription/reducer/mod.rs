@@ -53,7 +53,6 @@ pub(in crate::recognition) enum AsrResultAction {
     ApplyInterimTranscript {
         transcript: AsrTranscript,
         elapsed_millis: u128,
-        emit_interim: bool,
     },
     ApplyCompletionTranscript {
         transcript: AsrTranscript,
@@ -71,15 +70,16 @@ pub(in crate::recognition) enum AsrResultAction {
 pub(in crate::recognition) struct AsrRequestStaleInput {
     pub(in crate::recognition) current_revision: u64,
     pub(in crate::recognition) confirmed_until_sample: GlobalSampleIndex,
+    pub(in crate::recognition) target_turn_is_finalized: bool,
     pub(in crate::recognition) turn_route: Option<RecognitionRoute>,
     pub(in crate::recognition) last_recognition_route: Option<RecognitionRoute>,
     pub(in crate::recognition) default_route: RecognitionRoute,
+    pub(in crate::recognition) split_route: Option<RecognitionRoute>,
 }
 
 #[derive(Clone, Copy)]
 pub(in crate::recognition) struct AsrResultReductionInput {
     pub(in crate::recognition) stale_input: AsrRequestStaleInput,
-    pub(in crate::recognition) interim_is_covered_by_completion: bool,
     pub(in crate::recognition) completion_has_non_empty_draft: bool,
     pub(in crate::recognition) completion_failure_action: AsrResultCompletionFailureAction,
     pub(in crate::recognition) completion_rerecognition_purpose:
@@ -123,7 +123,6 @@ pub(in crate::recognition) fn reduce_asr_result(
         AsrTaskKind::InterimDisplay => AsrResultAction::ApplyInterimTranscript {
             transcript,
             elapsed_millis: result.elapsed_millis,
-            emit_interim: !input.interim_is_covered_by_completion,
         },
         AsrTaskKind::CompletionCheck => AsrResultAction::ApplyCompletionTranscript {
             transcript,
@@ -179,8 +178,14 @@ pub(in crate::recognition) fn is_stale_asr_request(
     if input.current_revision != request.target.turn_revision.0 {
         return true;
     }
+    if input.target_turn_is_finalized {
+        return true;
+    }
     if request.target.range.end_sample <= input.confirmed_until_sample {
         return true;
+    }
+    if input.split_route == Some(request.route) {
+        return false;
     }
     if let Some(route) = input.turn_route {
         return route != request.route;
@@ -255,9 +260,11 @@ mod tests {
             AsrRequestStaleInput {
                 current_revision: 1,
                 confirmed_until_sample: GlobalSampleIndex(0),
+                target_turn_is_finalized: false,
                 turn_route: None,
                 last_recognition_route: Some(route),
                 default_route: route,
+                split_route: None,
             }
         ));
         assert!(is_stale_asr_request(
@@ -265,9 +272,11 @@ mod tests {
             AsrRequestStaleInput {
                 current_revision: 0,
                 confirmed_until_sample: GlobalSampleIndex(10),
+                target_turn_is_finalized: false,
                 turn_route: None,
                 last_recognition_route: Some(route),
                 default_route: route,
+                split_route: None,
             }
         ));
         assert!(is_stale_asr_request(
@@ -275,11 +284,66 @@ mod tests {
             AsrRequestStaleInput {
                 current_revision: 0,
                 confirmed_until_sample: GlobalSampleIndex(0),
+                target_turn_is_finalized: true,
+                turn_route: None,
+                last_recognition_route: Some(route),
+                default_route: route,
+                split_route: None,
+            }
+        ));
+        assert!(is_stale_asr_request(
+            &request,
+            AsrRequestStaleInput {
+                current_revision: 0,
+                confirmed_until_sample: GlobalSampleIndex(0),
+                target_turn_is_finalized: false,
                 turn_route: Some(RecognitionRoute::from_model(
                     AsrModel::NemoParakeetTdt0_6BV2Int8
                 )),
                 last_recognition_route: Some(route),
                 default_route: route,
+                split_route: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn stale_request_accepts_configured_split_route_over_existing_turn_route() {
+        let interim_route = RecognitionRoute::from_model(AsrModel::NemoParakeetTdt0_6BV2Int8);
+        let final_route =
+            RecognitionRoute::from_model(AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8);
+        let request = asr_request(AsrTaskKind::CompletionCheck, final_route, None, 0..10);
+
+        assert!(!is_stale_asr_request(
+            &request,
+            AsrRequestStaleInput {
+                current_revision: 0,
+                confirmed_until_sample: GlobalSampleIndex(0),
+                target_turn_is_finalized: false,
+                turn_route: Some(interim_route),
+                last_recognition_route: Some(interim_route),
+                default_route: RecognitionRoute::from_model(ParapperConfig::default().asr.model),
+                split_route: Some(final_route),
+            }
+        ));
+    }
+
+    #[test]
+    fn stale_request_accepts_configured_split_route_before_turn_route_exists() {
+        let split_route =
+            RecognitionRoute::from_model(AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8);
+        let request = asr_request(AsrTaskKind::InterimDisplay, split_route, None, 0..10);
+
+        assert!(!is_stale_asr_request(
+            &request,
+            AsrRequestStaleInput {
+                current_revision: 0,
+                confirmed_until_sample: GlobalSampleIndex(0),
+                target_turn_is_finalized: false,
+                turn_route: None,
+                last_recognition_route: None,
+                default_route: RecognitionRoute::from_model(ParapperConfig::default().asr.model),
+                split_route: Some(split_route),
             }
         ));
     }
@@ -299,9 +363,11 @@ mod tests {
             AsrRequestStaleInput {
                 current_revision: 0,
                 confirmed_until_sample: GlobalSampleIndex(0),
+                target_turn_is_finalized: false,
                 turn_route: None,
                 last_recognition_route: None,
                 default_route,
+                split_route: None,
             }
         ));
         assert!(!is_stale_asr_request(
@@ -309,9 +375,11 @@ mod tests {
             AsrRequestStaleInput {
                 current_revision: 0,
                 confirmed_until_sample: GlobalSampleIndex(0),
+                target_turn_is_finalized: false,
                 turn_route: None,
                 last_recognition_route: Some(route),
                 default_route,
+                split_route: None,
             }
         ));
     }
@@ -326,7 +394,6 @@ mod tests {
                 AsrResultAction::ApplyInterimTranscript {
                     transcript: AsrTranscript::from_text("hello"),
                     elapsed_millis: 1,
-                    emit_interim: true,
                 },
             ),
             (
@@ -458,11 +525,12 @@ mod tests {
             stale_input: AsrRequestStaleInput {
                 current_revision: 0,
                 confirmed_until_sample: GlobalSampleIndex(0),
+                target_turn_is_finalized: false,
                 turn_route: None,
                 last_recognition_route: Some(route),
                 default_route: route,
+                split_route: None,
             },
-            interim_is_covered_by_completion: false,
             completion_has_non_empty_draft: false,
             completion_failure_action: AsrResultCompletionFailureAction::CompleteWithoutGrammar,
             completion_rerecognition_purpose: None,

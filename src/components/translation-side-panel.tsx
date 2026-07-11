@@ -15,6 +15,7 @@ import type {
   ParapperConfig,
   RecognitionSourceMeta,
   RecognizedTextEvent,
+  TranslationLanguage,
   TranslationMapping,
   TranslationTextEvent,
 } from "../lib/types";
@@ -117,9 +118,7 @@ const TranslationLogPanel: React.FC<{
               rows.map((row) => (
                 <Paper
                   key={row.rowId}
-                  data-log-row-id={
-                    row.entries.length === 1 ? row.rowId : undefined
-                  }
+                  data-log-row-id={row.rowId}
                   p="xs"
                   withBorder
                   radius="sm"
@@ -212,8 +211,22 @@ const buildTranslationLogRows = (
       config.translation_mappings,
       recognized.source_asr_model,
       recognized.source_language,
+      recognized.detected_language,
     );
     if (targets.length === 0) {
+      if (shouldReservePlaceholderTranslationRow(config, recognized)) {
+        return [
+          {
+            rowId: recognitionSourceRowId(recognized.source),
+            entries: [
+              {
+                kind: "placeholder",
+                id: `${recognitionSourceRowId(recognized.source)}|placeholder`,
+              },
+            ],
+          },
+        ];
+      }
       return [];
     }
 
@@ -299,7 +312,15 @@ const translationTargetsForRecognizedText = (
   mappings: TranslationMapping[],
   sourceAsrModel: AsrModel,
   sourceLanguage: AsrLanguage,
+  detectedLanguage: string | null,
 ) => {
+  const sourceLang =
+    translationLanguageFromCode(detectedLanguage) ??
+    translationLanguageFromAsrLanguage(sourceLanguage);
+  if (sourceLang === null) {
+    return [];
+  }
+
   const seen = new Set<string>();
   return mappings
     .filter(
@@ -307,12 +328,9 @@ const translationTargetsForRecognizedText = (
         mapping.source_asr_model === null ||
         mapping.source_asr_model === sourceAsrModel,
     )
-    .map((mapping) => mapping.target_lang.trim())
-    .filter((target) => target.length > 0)
-    .filter(
-      (target) =>
-        !translationTargetMatchesSourceLanguage(target, sourceLanguage),
-    )
+    .filter((mapping) => mapping.source_lang === sourceLang)
+    .filter((mapping) => mapping.target_lang !== sourceLang)
+    .map((mapping) => mapping.target_lang)
     .filter((target) => {
       if (seen.has(target)) {
         return false;
@@ -322,18 +340,29 @@ const translationTargetsForRecognizedText = (
     });
 };
 
-const translationTargetMatchesSourceLanguage = (
-  target: string,
+const translationLanguageFromCode = (
+  value: string | null,
+): TranslationLanguage | null => {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized?.startsWith("ja")) {
+    return "ja";
+  }
+  if (normalized?.startsWith("en")) {
+    return "en";
+  }
+  return null;
+};
+
+const translationLanguageFromAsrLanguage = (
   sourceLanguage: AsrLanguage,
-) => {
-  const normalized = target.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+): TranslationLanguage | null => {
   if (sourceLanguage === "japanese") {
-    return normalized.startsWith("ja");
+    return "ja";
   }
   if (sourceLanguage === "english") {
-    return normalized.startsWith("en");
+    return "en";
   }
-  return false;
+  return null;
 };
 
 const translationMapKey = (event: TranslationTextEvent) =>

@@ -63,7 +63,7 @@ pub(crate) fn emit_recognized_text_event(
             debug_asr_audio_samples: config
                 .debug
                 .asr_audio_playback
-                .then(|| output.phrase.clone()),
+                .then(|| output.phrase.to_vec()),
         },
     );
 }

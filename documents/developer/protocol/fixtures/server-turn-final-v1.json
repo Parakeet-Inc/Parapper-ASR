@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "type": "turn.final",
+  "session_id": "fixture-session",
+  "turn_session_id": 7,
+  "turn_id": 3,
+  "revision": 2,
+  "segment_id": 8,
+  "previous_segment_id": 7,
+  "text": "こんにちは。",
+  "source_asr_model": "reazonspeech_k2_v2",
+  "source_language": "ja",
+  "detected_language": null,
+  "audio_duration_ms": 1280,
+  "elapsed_ms": 96
+}

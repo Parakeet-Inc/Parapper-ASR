@@ -28,6 +28,16 @@ const modelLicenses = [
     url: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
   },
   {
+    name: "Nemotron Speech Streaming 0.6B English",
+    license: "openmdw-1.1",
+    url: "https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b",
+  },
+  {
+    name: "Nemotron 3.5 ASR Streaming 0.6B",
+    license: "openmdw-1.1",
+    url: "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
+  },
+  {
     name: "Silero VAD",
     license: "MIT",
     url: "https://github.com/snakers4/silero-vad",
@@ -53,6 +63,17 @@ const modelLicenses = [
     url: "https://huggingface.co/drakulavich/SpeechBrain-coreml",
   },
   {
+    name: "LFM2-350M-ENJP-MT ONNX (ONNX Community conversion)",
+    license: "LFM Open License v1.0",
+    url: "https://huggingface.co/onnx-community/LFM2-350M-ENJP-MT-ONNX",
+  },
+  // CAT-Translateは配布を一時停止しているため、ライセンス一覧からも非表示にしています。
+  // {
+  //   name: "CAT-Translate-0.8b",
+  //   license: "MIT",
+  //   url: "https://huggingface.co/cyberagent/CAT-Translate-0.8b",
+  // },
+  {
     name: "Vibrato UniDic CWJ 3.1.1 dictionary",
     license: "See archive license files",
     url: "https://github.com/daac-tools/vibrato/releases/tag/v0.5.0",
@@ -71,6 +92,11 @@ const modelLicenses = [
     name: "piper-voices en_US Norman medium",
     license: "MIT",
     url: "https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/norman/medium",
+  },
+  {
+    name: "espeak-ng-data",
+    license: "GPL-3.0-or-later",
+    url: "https://github.com/espeak-ng/espeak-ng/tree/master/espeak-ng-data",
   },
   {
     name: "Supertonic 2 ONNX",

@@ -5,7 +5,9 @@ use crate::{
         transcription::route::RecognitionRoute,
     },
 };
+use std::sync::Arc;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RecognizedTextMeta {
     pub(crate) id: String,
     pub(crate) is_final: bool,
@@ -13,8 +15,9 @@ pub(crate) struct RecognizedTextMeta {
     pub(crate) source: RecognitionSourceMeta,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RecognizedTextOutput {
-    pub(crate) phrase: Vec<f32>,
+    pub(crate) phrase: Arc<[f32]>,
     pub(crate) text: String,
     pub(crate) source_asr_model: AsrModel,
     pub(crate) source_language: AsrLanguage,
@@ -34,7 +37,7 @@ impl RecognizedTextOutput {
         elapsed_millis: u128,
     ) -> Self {
         Self {
-            phrase,
+            phrase: phrase.into(),
             text,
             source_asr_model,
             source_language,

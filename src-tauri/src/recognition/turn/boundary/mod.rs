@@ -32,7 +32,7 @@ pub(crate) fn candidates_for_transcript(
         AsrLanguage::Japanese => {
             japanese_candidates_from_tokens(transcript, audio.len(), vad_results)
         }
-        AsrLanguage::English | AsrLanguage::EuropeanMultilingual => {
+        AsrLanguage::English | AsrLanguage::EuropeanMultilingual | AsrLanguage::Multilingual => {
             english_candidates_from_tokens(transcript, audio.len(), vad_results)
         }
     };

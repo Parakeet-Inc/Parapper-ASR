@@ -41,6 +41,7 @@ pub(crate) struct TurnDraft {
     pub(crate) segment_texts: Vec<String>,
     pub(crate) segment_ids: Vec<u64>,
     pub(crate) segment_audio_lens: Vec<usize>,
+    pub(crate) segment_vad_lens: Vec<usize>,
     pub(crate) boundary_candidates: Vec<TurnBoundaryCandidate>,
     pub(crate) vad_results: Vec<VadResult>,
     pub(crate) combined_text: String,
@@ -51,6 +52,7 @@ pub(crate) struct TurnDraft {
     pub(crate) latest_segment_id: Option<u64>,
     pub(crate) latest_previous_segment_id: Option<u64>,
     pub(crate) revision: u64,
+    pub(crate) last_emitted_interim_text: Option<String>,
 }
 
 impl TurnDraft {
@@ -82,7 +84,80 @@ impl TurnDraft {
         text: String,
         elapsed_millis: u128,
     ) {
-        self.latest_previous_segment_id = previous_segment_id.or(self.latest_segment_id);
+        self.record_recognized_segment(
+            segment_id,
+            previous_segment_id,
+            full_audio,
+            vad_results,
+            route,
+            text,
+            elapsed_millis,
+            false,
+        );
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "TurnDraft keeps the replacement ASR segment text, audio, VAD, route, and source metadata together."
+    )]
+    pub(crate) fn replace_latest_recognized_segment(
+        &mut self,
+        segment_id: u64,
+        previous_segment_id: Option<u64>,
+        full_audio: &[f32],
+        vad_results: &[VadResult],
+        route: RecognitionRoute,
+        text: String,
+        elapsed_millis: u128,
+    ) {
+        self.record_recognized_segment(
+            segment_id,
+            previous_segment_id,
+            full_audio,
+            vad_results,
+            route,
+            text,
+            elapsed_millis,
+            true,
+        );
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "TurnDraft keeps the ASR segment text, audio, VAD, route, and source metadata together."
+    )]
+    fn record_recognized_segment(
+        &mut self,
+        segment_id: u64,
+        previous_segment_id: Option<u64>,
+        full_audio: &[f32],
+        vad_results: &[VadResult],
+        route: RecognitionRoute,
+        text: String,
+        elapsed_millis: u128,
+        replace_latest_segment: bool,
+    ) {
+        let replacing_latest_segment = replace_latest_segment && !self.segment_ids.is_empty();
+        let previous_latest_segment_id = self.latest_segment_id;
+        let previous_latest_previous_segment_id = self.latest_previous_segment_id;
+        if replacing_latest_segment {
+            self.segment_texts.pop();
+            self.segment_ids.pop();
+            if let Some(audio_len) = self.segment_audio_lens.pop() {
+                self.full_audio
+                    .truncate(self.full_audio.len().saturating_sub(audio_len));
+            }
+            if let Some(vad_len) = self.segment_vad_lens.pop() {
+                self.vad_results
+                    .truncate(self.vad_results.len().saturating_sub(vad_len));
+            }
+        }
+
+        self.latest_previous_segment_id = previous_segment_id.or(if replacing_latest_segment {
+            previous_latest_previous_segment_id
+        } else {
+            previous_latest_segment_id
+        });
         self.latest_segment_id = Some(segment_id);
         self.full_audio.extend_from_slice(full_audio);
         self.vad_results.extend_from_slice(vad_results);
@@ -90,6 +165,7 @@ impl TurnDraft {
         self.segment_texts.push(text);
         self.segment_ids.push(segment_id);
         self.segment_audio_lens.push(full_audio.len());
+        self.segment_vad_lens.push(vad_results.len());
         self.combined_text = join_turn_segments(&self.segment_texts, route.language);
         self.processing_millis += elapsed_millis;
     }
@@ -106,6 +182,7 @@ impl TurnDraft {
         self.segment_texts.push(text);
         self.segment_ids.clear();
         self.segment_audio_lens.clear();
+        self.segment_vad_lens.clear();
         self.boundary_candidates.clear();
         self.combined_text = join_turn_segments(&self.segment_texts, route.language);
         self.processing_millis += elapsed_millis;

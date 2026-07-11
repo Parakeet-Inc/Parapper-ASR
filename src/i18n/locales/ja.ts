@@ -34,7 +34,9 @@ export const ja = {
     asrWarning: "ASR warning",
     recognition: {
       idle: "idle",
+      waiting_for_client: "クライアント待機中",
       listening: "listening",
+      draining: "終了処理中",
       stopped: "stopped",
       error: "error",
     },
@@ -97,8 +99,6 @@ export const ja = {
       description:
         "VRChat のミュート状態を OSCQuery で読み取り、ミュート中はゆかコネNEOへ送信しないための設定です。",
       muteSyncLabel: "VRChatでミュートの時は送信しない(要OSC)",
-      muteSyncDescription:
-        "ON にするとASR開始時に VRChat OSCQuery から MuteSelf を確認します。Parapper は OSC UDP 受信ポートを bind しません。",
     },
     turnDetector: {
       label: "Turn Detector",
@@ -162,6 +162,12 @@ export const ja = {
       label: "ASRモデル",
       description:
         "言語と sherpa-onnx モデルを選びます。NeMo は重い代わりに精度が期待できます。",
+    },
+    interimAsrModel: {
+      label: "途中表示ASRモデル",
+      description:
+        "途中表示だけに使うASRモデルです。デフォルトではASRモデルと同じモデルを使います。",
+      primary: "ASRモデルと同じ",
     },
     asrPrecision: {
       label: "ASR precision",
@@ -237,7 +243,25 @@ export const ja = {
     inputAudioDevice: {
       label: "入力デバイス",
       placeholder: "既定の入力デバイス",
+      loopbackGroup: "スピーカー出力（ループバック）",
+      networkGroup: "ネットワーク入力",
+      webSocket: "WebSocket (PCM 16 kHz)",
     },
+  },
+  connectionSettings: {
+    neoEnabled: "ゆかコネNEOに接続する",
+    developerEnabled: "HTTP / WebSocket接続をする（開発者向け）",
+    connectionMode: "接続モード",
+    httpUrl: "HTTP送信先URL",
+    httpPayloadExample: "HTTPで送信する値の例",
+    bindAddress: "待受アドレス",
+    port: "WebSocket port",
+    apiKey: "API key",
+    apiKeyPlaceholder: "ローカル接続では省略可",
+    outputMode: "認識結果の出力先",
+    webSocketOnly: "WebSocketのみ",
+    webSocketAndDesktop: "WebSocket + 画面/連携",
+    endpoint: "接続先: ws://{{address}}:{{port}}/ws/recognition",
   },
   noiseCancellationSettings: {
     enable: {
@@ -264,6 +288,14 @@ export const ja = {
       nemoParakeetTdtV2Int8: "英語 (NeMo Parakeet TDT 0.6B v2 int8)",
       nemoParakeetTdtV3Int8:
         "ヨーロッパ系他言語 (NeMo Parakeet TDT 0.6B v3 int8)",
+      nemotronSpeechStreamingEn160MsInt8:
+        "英語 (Nemotron Speech Streaming 0.6B 160ms int8)",
+      nemotronSpeechStreamingEn560MsInt8:
+        "英語 (Nemotron Speech Streaming 0.6B 560ms int8)",
+      nemotron35AsrStreaming160MsInt8:
+        "多言語(日本語を含む) (Nemotron 3.5 ASR Streaming 0.6B 160ms int8)",
+      nemotron35AsrStreaming560MsInt8:
+        "多言語(日本語を含む) (Nemotron 3.5 ASR Streaming 0.6B 560ms int8)",
     },
     turnDetector: {
       simple: "Simple",
@@ -302,20 +334,69 @@ export const ja = {
     enable: {
       label: "翻訳を有効化",
       description:
-        "ONにするとASRテキストをゆかコネNEOの翻訳/発話連携サーバプラグインへ送ります。",
+        "ASRテキストをゆかコネNEOプラグインまたはローカルの日英翻訳モデルで翻訳します。",
     },
     sendTiming: {
       label: "翻訳タイミング",
+    },
+    localServer: {
+      title: "翻訳HTTPサーバーをローカルに立てる",
+      start: "起動",
+      stop: "停止",
+      downloadModel: "モデルをダウンロード",
+      status: {
+        stopped: "停止中",
+        starting: "起動中…",
+        running: "127.0.0.1:{{port}} で待受中",
+        stopping: "停止中…",
+        error: "エラー",
+        modelMissing: "サーバーモデルが未ダウンロードです",
+      },
+      setup: {
+        title: "ゆかコネNEOへの設定方法",
+        engine:
+          "ゆかコネNEOの翻訳設定で、翻訳先言語のエンジンに「ローカル翻訳（個人 / Custom API）」を選びます。",
+        url: "URLに http://127.0.0.1:{{port}} を設定します。",
+        postMode: "POST modeは「OpenAI Format」を選びます。",
+        model:
+          "Modelは任意の表示名で構いません。実際に使うモデルは、上の「サーバーモデル」で選択します。",
+        avoidInputApi:
+          "ゆかコネNEO本体の /api/input やポート15520は指定しないでください。",
+      },
+      mode: {
+        off: "OFF",
+        auto: "翻訳ON時",
+        on: "サーバーのみ",
+      },
+      port: {
+        label: "受信 port",
+        description:
+          "外部アプリから POST /v1/chat/completions で翻訳 request を受ける localhost port です。通常は 18081 です。",
+      },
+      model: {
+        label: "サーバーモデル",
+        description:
+          "外部アプリからの翻訳 request に使うローカル翻訳モデルです。",
+      },
     },
     mapping: {
       title: "翻訳マッピング",
       anyModel: "すべてのASRモデル",
       sourceModel: "元ASRモデル",
+      sourceLang: "翻訳元言語",
       targetLang: "翻訳先言語",
       addRow: "翻訳マッピングを追加",
       deleteRow: "翻訳マッピングを削除",
       moveUp: "翻訳マッピングを上へ移動",
       moveDown: "翻訳マッピングを下へ移動",
+    },
+    backend: {
+      label: "翻訳先",
+      ync: "ゆかコネNEO",
+      local: "ローカル",
+    },
+    localModel: {
+      label: "ローカル翻訳モデル",
     },
   },
   speechSettings: {
@@ -471,6 +552,11 @@ export const ja = {
     },
     speechStopFailed: {
       title: "読み上げ中断に失敗しました",
+    },
+    loopbackPermissionRequired: {
+      title: "システム音声録音の許可が必要です",
+      message:
+        "システム設定 →「プライバシーとセキュリティ」→「システム音声の録音」で Parapper を許可してください。許可しないとスピーカー音声は無音のままになります。",
     },
   },
   downloadProgress: {

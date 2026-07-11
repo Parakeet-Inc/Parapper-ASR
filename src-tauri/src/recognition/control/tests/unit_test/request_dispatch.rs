@@ -302,6 +302,44 @@ fn turn_runtime_batched_turn_check_promotes_pending_interim_to_completion_before
 }
 
 #[test]
+fn turn_runtime_turn_check_promotes_real_interim_when_nemotron_streaming_chunk_is_queued_first() {
+    let (mut runtime, _config) = RecognitionSessionTestBuilder::new()
+        .turn_detector(TurnDetector::Simple)
+        .interim_display(true)
+        .build();
+    runtime_state(&mut runtime)
+        .pending_segment(1, None, SegmentCloseReason::InterimChunkReached, 0..160)
+        .pending_segment(
+            1,
+            None,
+            SegmentCloseReason::InterimResultSilenceReached,
+            0..320,
+        )
+        .pending_turn_check(1);
+
+    runtime.step();
+
+    let request = runtime
+        .requests
+        .in_flight_request
+        .as_ref()
+        .expect("turn-check should promote the real interim segment to completion");
+    assert_eq!(request.kind, AsrTaskKind::CompletionCheck);
+    assert_eq!(
+        request.close_reason,
+        Some(SegmentCloseReason::EndSilenceReached)
+    );
+    assert_eq!(
+        request.target.range,
+        AudioRange::new(GlobalSampleIndex(0), GlobalSampleIndex(320))
+    );
+    assert!(
+        runtime.pending.asr_segments.is_empty(),
+        "covered streaming chunks must be dropped before the promoted completion dispatches"
+    );
+}
+
+#[test]
 fn turn_runtime_new_root_interim_after_open_simple_turn_is_emitted_as_next_turn() {
     let mut builder = RecognitionSessionTestBuilder::new()
         .turn_detector(TurnDetector::Simple)

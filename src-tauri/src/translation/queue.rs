@@ -54,8 +54,11 @@ fn same_translation_source(left: &TranslationRequest, right: &TranslationRequest
 mod tests {
     use super::*;
     use crate::{
-        config::{AsrModel, ParapperConfig},
-        delivery::RecognitionSourceMeta,
+        config::{AsrModel, ParapperConfig, TranslationLanguage},
+        delivery::{
+            RecognitionSourceMeta,
+            common::{TranslationProviderId, TranslationTarget},
+        },
         recognition::control::events::RecognizedTextUpdateMode,
     };
 
@@ -90,7 +93,11 @@ mod tests {
             source_asr_model: AsrModel::ReazonSpeechK2V2,
             source_text: id.to_string(),
             source_detected_language: None,
-            targets: vec!["en_US".to_string()],
+            targets: vec![TranslationTarget {
+                provider_id: TranslationProviderId::Ync,
+                source_lang: TranslationLanguage::Ja,
+                target_lang: TranslationLanguage::En,
+            }],
             is_final,
             update_mode: RecognizedTextUpdateMode::Replace,
         }

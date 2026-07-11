@@ -11,28 +11,10 @@ pub struct TranslateResponse {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct TranslatedText {
-    pub lang: String,
-    pub text: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct TranslatesResponse {
-    pub result: Vec<TranslatedText>,
-}
-
 #[derive(Debug, Serialize)]
 struct TranslateParams<'a> {
     id: &'a str,
     lang: &'a str,
-    text: &'a str,
-}
-
-#[derive(Debug, Serialize)]
-struct TranslatesParams<'a> {
-    id: &'a str,
-    lang: &'a [String],
     text: &'a str,
 }
 
@@ -41,13 +23,6 @@ struct RawTranslateResponse {
     operation: String,
     status: String,
     text: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawTranslatesResponse {
-    operation: String,
-    status: String,
-    result: Vec<TranslatedText>,
 }
 
 impl YncPluginClient {
@@ -60,27 +35,6 @@ impl YncPluginClient {
         ensure_success(&response.operation, &response.status, "translate")?;
         Ok(TranslateResponse {
             text: response.text,
-        })
-    }
-
-    pub fn translates(
-        &mut self,
-        id: &str,
-        langs: &[String],
-        text: &str,
-    ) -> Result<TranslatesResponse> {
-        let request = CommandRequest {
-            operation: "translates",
-            params: vec![TranslatesParams {
-                id,
-                lang: langs,
-                text,
-            }],
-        };
-        let response = self.post_command::<_, RawTranslatesResponse>(&request)?;
-        ensure_success(&response.operation, &response.status, "translates")?;
-        Ok(TranslatesResponse {
-            result: response.result,
         })
     }
 }

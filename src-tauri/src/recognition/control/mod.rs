@@ -3,6 +3,7 @@ mod driver;
 pub(crate) mod engine_cache;
 pub(crate) mod events;
 pub(crate) mod input;
+mod input_source;
 mod pending;
 pub(crate) mod runtime_event;
 mod session;
@@ -30,7 +31,8 @@ pub(crate) use crate::recognition::turn::port::output_sink::{
 };
 #[cfg(test)]
 pub(crate) use driver::replay_vad_frames_for_runtime;
-pub(crate) use driver::{RecognitionDriver, RecognitionDriverHandle};
+pub(crate) use driver::{RecognitionDriver, RecognitionDriverHandle, RecognitionShutdownResult};
+pub(crate) use input_source::{BoundedInputSendError, BoundedInputSender, RunningInputSource};
 pub(in crate::recognition) use pending::PendingFinalization;
 #[cfg(test)]
 use pending::PendingTurnCheck;

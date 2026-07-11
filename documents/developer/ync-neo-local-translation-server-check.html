@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ゆかコネNEO ローカル翻訳サーバー確認手順</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --paper: #ffffff;
+      --text: #1f2933;
+      --muted: #607080;
+      --line: #d8dee6;
+      --accent: #1769aa;
+      --accent-soft: #e8f2fb;
+      --warn: #9a5b00;
+      --warn-soft: #fff4d8;
+      --ok: #1f7a4d;
+      --code: #f2f5f8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", Meiryo, sans-serif;
+      line-height: 1.72;
+    }
+
+    main {
+      width: min(1040px, calc(100% - 32px));
+      margin: 32px auto 56px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 32px;
+      box-shadow: 0 14px 36px rgba(31, 41, 51, 0.08);
+    }
+
+    h1,
+    h2,
+    h3 {
+      line-height: 1.35;
+      margin: 0;
+      color: #102333;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 8px;
+    }
+
+    h2 {
+      font-size: 1.35rem;
+      margin-top: 34px;
+      padding-top: 24px;
+      border-top: 1px solid var(--line);
+    }
+
+    h3 {
+      font-size: 1.05rem;
+      margin-top: 22px;
+    }
+
+    p {
+      margin: 12px 0;
+    }
+
+    a {
+      color: var(--accent);
+    }
+
+    ul,
+    ol {
+      margin: 12px 0 0;
+      padding-left: 1.35rem;
+    }
+
+    li {
+      margin: 6px 0;
+    }
+
+    code {
+      padding: 0.12rem 0.32rem;
+      border-radius: 4px;
+      background: var(--code);
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 0.94em;
+    }
+
+    pre {
+      overflow-x: auto;
+      margin: 12px 0;
+      padding: 14px 16px;
+      border-radius: 6px;
+      background: #101820;
+      color: #eef6ff;
+      line-height: 1.5;
+    }
+
+    pre code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      font-size: 0.92rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 0.95rem;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #f1f5f9;
+      font-weight: 700;
+    }
+
+    .lead {
+      margin-top: 0;
+      color: var(--muted);
+      font-size: 1rem;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 18px 0 26px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: #124f80;
+      font-size: 0.88rem;
+      font-weight: 600;
+    }
+
+    .note,
+    .warning,
+    .success {
+      margin: 16px 0;
+      padding: 14px 16px;
+      border-radius: 6px;
+      border: 1px solid;
+    }
+
+    .note {
+      background: var(--accent-soft);
+      border-color: #b8d8ef;
+    }
+
+    .warning {
+      background: var(--warn-soft);
+      border-color: #f0c35a;
+      color: #5f3d00;
+    }
+
+    .success {
+      background: #e9f8f0;
+      border-color: #9fd4b8;
+      color: #125536;
+    }
+
+    .checklist td:first-child {
+      width: 7rem;
+      white-space: nowrap;
+    }
+
+    .kbd {
+      display: inline-block;
+      min-width: 1.65em;
+      padding: 0.08rem 0.36rem;
+      border: 1px solid #b8c2cc;
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      background: #fff;
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 0.86em;
+      text-align: center;
+    }
+
+    @media (max-width: 720px) {
+      main {
+        width: min(100% - 20px, 1040px);
+        margin-top: 10px;
+        padding: 20px;
+      }
+
+      h1 {
+        font-size: 1.55rem;
+      }
+
+      table,
+      thead,
+      tbody,
+      tr,
+      th,
+      td {
+        display: block;
+      }
+
+      th {
+        border-bottom: 0;
+      }
+
+      td + td,
+      th + th {
+        border-top: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ゆかコネNEO ローカル翻訳サーバー確認手順</h1>
+    <p class="lead">Parapper の localhost 翻訳サーバーを、ゆかコネNEO の「Local Translation(Custom API)」から OpenAI Format で呼ぶための確認手順です。</p>
+    <div class="meta">
+      <span class="pill">対象: Windows</span>
+      <span class="pill">Parapper v0.4 以降</span>
+      <span class="pill">既定ポート: 18081</span>
+    </div>
+
+    <div class="warning">
+      <strong>重要:</strong> NEO 本体の入力 API である <code>/api/input</code> と、翻訳エンジンの <code>Local Translation(Custom API)</code> は別物です。
+      この確認では NEO の翻訳エンジン設定から Parapper の <code>http://127.0.0.1:18081</code> に送ります。NEO 本体の既定ポート <code>15520</code> には送らないでください。
+    </div>
+
+    <h2>1. 役割の整理</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>通信先</th>
+          <th>用途</th>
+          <th>今回使うか</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>http://127.0.0.1:15520/api/input</code></td>
+          <td>ゆかコネNEO 本体へ認識テキストを入力する API。</td>
+          <td>使いません。</td>
+        </tr>
+        <tr>
+          <td><code>http://127.0.0.1:18081/v1/chat/completions</code></td>
+          <td>Parapper が受ける OpenAI chat completions 互換 endpoint です。</td>
+          <td>使います。NEO 側には base URL の <code>http://127.0.0.1:18081</code> を設定します。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>2. Parapper 側の事前設定</h2>
+    <p>Parapper の <span class="kbd">MT</span> タブで、翻訳マッピング一覧の上にある「localhost 翻訳サーバー」を設定します。</p>
+    <ol>
+      <li>mode を <code>サーバーのみ</code> にします。内部翻訳 ON 時だけ起動したい場合は <code>翻訳ON時</code> にします。</li>
+      <li>受信 port を <code>18081</code> にします。</li>
+      <li>サーバーモデルを <code>LFM2-350M-ENJP-MT-ONNX / ONNX Community Q4</code> にします。</li>
+      <li>mode / port / model の変更後、Parapper を再起動します。</li>
+    </ol>
+
+    <p>設定ファイルで確認する場合、通常の保存先は次の場所です。</p>
+    <pre><code>%APPDATA%\com.parakeet-inc.parapper\config.json</code></pre>
+
+    <p>ローカルサーバーだけを明示的に起動する場合は、設定 JSON のトップレベルに次の値を入れます。</p>
+    <pre><code>{
+  "translation_local_server_mode": "on",
+  "translation_local_server_port": 18081,
+  "translation_local_server_model": "lfm2_q4"
+}</code></pre>
+
+    <p>内部翻訳を ON にした時だけサーバーも起動する確認にしたい場合は、次の組み合わせにします。</p>
+    <pre><code>{
+  "translation_enabled": true,
+  "translation_local_server_mode": "auto",
+  "translation_local_server_port": 18081,
+  "translation_local_server_model": "lfm2_q4"
+}</code></pre>
+
+    <table>
+      <thead>
+        <tr>
+          <th>項目</th>
+          <th>推奨値</th>
+          <th>意味</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>translation_local_server_mode</code></td>
+          <td><code>on</code></td>
+          <td>内部翻訳 ON/OFF と独立して localhost 翻訳サーバーを起動します。</td>
+        </tr>
+        <tr>
+          <td><code>translation_local_server_port</code></td>
+          <td><code>18081</code></td>
+          <td>NEO 側、または確認コマンドから接続するポートです。</td>
+        </tr>
+        <tr>
+          <td><code>translation_local_server_model</code></td>
+          <td><code>lfm2_q4</code></td>
+          <td>LiquidAI のモデルを変換した ONNX Community 配布のQ4ローカル翻訳モデルです。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <strong>モデル取得について:</strong> Hugging Face の ONNX Community repository からQ4モデルを取得します。base model は <code>LiquidAI/LFM2-350M-ENJP-MT</code> です。
+    </div>
+
+    <h2>3. ゆかコネNEO 側で見るべき設定</h2>
+    <p>NEO の翻訳設定で、翻訳先言語のエンジンに <code>ローカル翻訳（個人 / Custom API）</code> を選びます。翻訳/発話連携サーバプラグインの設定画面を探す必要はありません。</p>
+    <ol>
+      <li>URL は <code>http://127.0.0.1:18081</code> にします。</li>
+      <li>POST mode は <code>OpenAI Format</code> を選びます。</li>
+      <li>Model は <code>LFM2-350M-ENJP-MT-ONNX</code> など任意の表示名で構いません。実際に使うモデルは Parapper の MT タブにある「サーバーモデル」です。</li>
+      <li><code>/api/input</code> や <code>15520</code> は指定しません。</li>
+    </ol>
+
+    <div class="warning">
+      <strong>バージョン注意:</strong> ゆかコネNEO のバージョンによっては Custom API への送信に対応していない場合があります。
+      リクエストが送信されない場合は、利用中のバージョンが Local Translation(Custom API) の OpenAI Format に対応しているか確認してください。
+    </div>
+
+    <div class="note">
+      <strong>考え方:</strong> 今回は「NEO から Parapper に翻訳を依頼する」構成です。
+      Parapper から NEO に認識テキストを送る通常の連携とは向きが逆になるため、ポート番号も <code>15520</code> ではなく <code>18081</code> を使います。
+    </div>
+
+    <h2>4. PowerShell で先に疎通確認する</h2>
+    <p>NEO 側を触る前に、Parapper のローカル翻訳サーバーだけで確認します。Parapper を起動した状態で PowerShell を開き、次を実行します。</p>
+
+    <h3>4.1 OpenAI Format の確認</h3>
+    <pre><code>$openai = "http://127.0.0.1:18081/v1/chat/completions"
+Invoke-RestMethod -Method Post -Uri $openai -ContentType "application/json" -Body '{"model":"LFM2-350M-ENJP-MT-ONNX","messages":[{"role":"system","content":"Translate into English."},{"role":"user","content":"こんにちは。"}]}'</code></pre>
+    <p>期待する結果は、<code>object</code> が <code>chat.completion</code>、<code>choices[0].message.content</code> に翻訳結果が入る JSON です。</p>
+
+    <h2>5. 間違った接続先の確認</h2>
+    <p>誤設定を検出するため、次の確認もしておくと切り分けが楽になります。</p>
+    <pre><code>Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:18081/api/input" -ContentType "application/json" -Body '{"model":"LFM2-350M-ENJP-MT-ONNX","messages":[{"role":"user","content":"こんにちは。"}]}'</code></pre>
+    <p>この request は翻訳 request として扱われないのが正しい結果です。<code>/api/input</code> で翻訳が通る構成にしないでください。</p>
+
+    <h2>6. 確認チェックリスト</h2>
+    <table class="checklist">
+      <thead>
+        <tr>
+          <th>結果</th>
+          <th>確認項目</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>□ OK</td>
+          <td>Parapper の <code>translation_local_server_mode</code> が <code>on</code>、または <code>auto</code> かつ <code>translation_enabled: true</code> になっている。</td>
+        </tr>
+        <tr>
+          <td>□ OK</td>
+          <td>Parapper 再起動後、<code>POST http://127.0.0.1:18081/v1/chat/completions</code> の疎通確認が成功する。</td>
+        </tr>
+        <tr>
+          <td>□ OK</td>
+          <td>NEO 側の翻訳エンジンが <code>ローカル翻訳（個人 / Custom API）</code> で、URL が <code>127.0.0.1:18081</code> 系になっている。</td>
+        </tr>
+        <tr>
+          <td>□ OK</td>
+          <td>POST mode は <code>OpenAI Format</code> になっている。</td>
+        </tr>
+        <tr>
+          <td>□ OK</td>
+          <td>NEO 側で <code>/api/input</code> や <code>15520</code> を翻訳サーバーとして指定していない。</td>
+        </tr>
+        <tr>
+          <td>□ OK</td>
+          <td>OpenAI Format の request が <code>/v1/chat/completions</code> に届いている。</td>
+        </tr>
+        <tr>
+          <td>□ OK</td>
+          <td>実翻訳で <code>object: chat.completion</code> と <code>choices[0].message.content</code> が返る。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>7. トラブルシュート</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>確認すること</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>接続できない</td>
+          <td>Parapper を再起動したか、<code>translation_local_server_mode</code> が <code>off</code> のままではないか、port が <code>18081</code> で一致しているかを確認します。</td>
+        </tr>
+        <tr>
+          <td>OpenAI Format の確認が error になる</td>
+          <td>model file が存在するか、指定 model が <code>lfm2_q4</code> になっているか、request text が空でないかを確認します。</td>
+        </tr>
+        <tr>
+          <td>NEO 側から翻訳が来ない</td>
+          <td>NEO 側の翻訳エンジンが <code>ローカル翻訳（個人 / Custom API）</code> になっているか、URL が <code>http://127.0.0.1:18081</code> になっているか、利用中のバージョンが OpenAI Format の送信に対応しているかを確認します。</td>
+        </tr>
+        <tr>
+          <td>別アプリの 18081 と競合する</td>
+          <td>Parapper 側の <code>translation_local_server_port</code> と NEO 側の接続先 port を同じ別番号に変更し、Parapper を再起動します。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="success">
+      <strong>完了条件:</strong> PowerShell の OpenAI Format 確認が成功し、NEO 側からも <code>/v1/chat/completions</code> に対して翻訳 request が届けば、ローカル翻訳サーバー連携の確認は完了です。
+    </div>
+
+    <h2>参考</h2>
+    <ul>
+      <li><a href="https://nmori.github.io/yncneo-Docs/plugin/plugin_transSrv/">ゆかコネNEO: 翻訳・発話連携</a></li>
+      <li><a href="https://nmori.github.io/yncneo-Docs/tech/tech_api_plugin/">ゆかコネNEO: プラグイン系API</a></li>
+      <li><a href="https://nmori.github.io/yncneo-Docs/tech/tech_api_neo/">ゆかコネNEO: 本体内蔵API</a></li>
+    </ul>
+  </main>
+</body>
+</html>

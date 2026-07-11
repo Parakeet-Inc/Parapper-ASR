@@ -145,6 +145,365 @@ fn turn_runtime_stale_asr_result_with_revision_mismatch_does_not_recreate_turn()
 }
 
 #[test]
+fn turn_runtime_interim_after_finalized_turn_does_not_recreate_or_overwrite_final_output() {
+    let mut builder = RecognitionSessionTestBuilder::new()
+        .interim_display(true)
+        .scripted_asr_texts(vec!["遅い途中表示"]);
+    let outputs = builder.use_recording_sink();
+    let (mut runtime, _config) = builder.build();
+    runtime_state(&mut runtime)
+        .turn(1, recognized_turn_with_audio(1, "確定済み", &[1.0]))
+        .turn_audio_range(1, 0..1);
+
+    runtime.complete_turn_without_grammar(1);
+    assert_eq!(
+        *outputs.lock().expect("outputs should be readable"),
+        vec![output_snapshot("確定済み。", true, 1, 1)]
+    );
+
+    runtime_state(&mut runtime).pending_segment(
+        1,
+        None,
+        SegmentCloseReason::InterimResultSilenceReached,
+        1..2,
+    );
+    runtime.step();
+    runtime.step();
+
+    assert_eq!(
+        *outputs.lock().expect("outputs should be readable"),
+        vec![output_snapshot("確定済み。", true, 1, 1)],
+        "a finalized turn output must be immutable even if a late interim segment appears"
+    );
+    assert!(
+        !runtime.turn_store.turns.contains_key(&1),
+        "late interim for a finalized turn must not recreate a mutable draft"
+    );
+}
+
+#[test]
+fn turn_runtime_completion_after_streaming_interim_does_not_append_duplicate_tail_text() {
+    let mut builder = RecognitionSessionTestBuilder::new().interim_display(true);
+    let asr_handle = builder.use_manual_asr();
+    let outputs = builder.use_recording_sink();
+    let (mut runtime, _config) = builder.build();
+
+    let mut streaming_interim = interim_request_for_turn(1, 1);
+    streaming_interim.close_reason = Some(SegmentCloseReason::InterimChunkReached);
+    streaming_interim.target = AsrTarget::new(
+        TurnId(1),
+        TurnRevision(0),
+        AudioRange::new(GlobalSampleIndex(0), GlobalSampleIndex(320)),
+        Some(SegmentId(1)),
+        Some(SegmentId(1)),
+    );
+    streaming_interim.source_audio = vec![1.0; 320];
+    streaming_interim.source_vad_results = vec![vad(true)];
+    runtime_state(&mut runtime).in_flight(streaming_interim.clone());
+    asr_handle.complete_request_with_text(&streaming_interim, "全体末尾");
+    runtime.step();
+
+    let mut completion = interim_request_for_turn(2, 1);
+    completion.kind = AsrTaskKind::CompletionCheck;
+    completion.close_reason = Some(SegmentCloseReason::EndSilenceReached);
+    completion.target = AsrTarget::new(
+        TurnId(1),
+        TurnRevision(0),
+        AudioRange::new(GlobalSampleIndex(160), GlobalSampleIndex(352)),
+        Some(SegmentId(1)),
+        Some(SegmentId(2)),
+    );
+    completion.source_audio = [vec![2.0; 160], vec![0.0; 32]].concat();
+    completion.source_vad_results = vec![vad(true), vad(false)];
+    runtime_state(&mut runtime).in_flight(completion.clone());
+    asr_handle.complete_request_with_text(&completion, "末尾");
+    runtime.step();
+
+    assert_eq!(
+        *outputs.lock().expect("outputs should be readable"),
+        vec![
+            output_snapshot("全体末尾...", false, 1, 1),
+            output_snapshot("全体末尾。", true, 1, 1),
+        ],
+        "a completion segment already covered by a cumulative streaming interim must finalize the draft without appending the tail again"
+    );
+}
+
+#[test]
+fn turn_runtime_completion_after_streaming_interim_keeps_uncovered_tail_speech() {
+    let mut builder = RecognitionSessionTestBuilder::new().interim_display(true);
+    let asr_handle = builder.use_manual_asr();
+    let outputs = builder.use_recording_sink();
+    let (mut runtime, _config) = builder.build();
+
+    let mut streaming_interim = interim_request_for_turn(1, 1);
+    streaming_interim.close_reason = Some(SegmentCloseReason::InterimChunkReached);
+    streaming_interim.target = AsrTarget::new(
+        TurnId(1),
+        TurnRevision(0),
+        AudioRange::new(GlobalSampleIndex(0), GlobalSampleIndex(320)),
+        Some(SegmentId(1)),
+        Some(SegmentId(1)),
+    );
+    streaming_interim.source_audio = vec![1.0; 320];
+    streaming_interim.source_vad_results = vec![vad(true)];
+    runtime_state(&mut runtime).in_flight(streaming_interim.clone());
+    asr_handle.complete_request_with_text(&streaming_interim, "全体");
+    runtime.step();
+
+    let mut completion = interim_request_for_turn(2, 1);
+    completion.kind = AsrTaskKind::CompletionCheck;
+    completion.close_reason = Some(SegmentCloseReason::EndSilenceReached);
+    completion.target = AsrTarget::new(
+        TurnId(1),
+        TurnRevision(0),
+        AudioRange::new(GlobalSampleIndex(160), GlobalSampleIndex(352)),
+        Some(SegmentId(1)),
+        Some(SegmentId(2)),
+    );
+    completion.source_audio = vec![2.0; 192];
+    completion.source_vad_results = vec![vad(true), vad(true)];
+    runtime_state(&mut runtime).in_flight(completion.clone());
+    asr_handle.complete_request_with_text(&completion, "追加");
+    runtime.step();
+
+    assert_eq!(
+        *outputs.lock().expect("outputs should be readable"),
+        vec![
+            output_snapshot("全体...", false, 1, 1),
+            output_snapshot("全体追加。", true, 1, 2),
+        ],
+        "completion text must still be appended when it contains speech not covered by the streaming interim"
+    );
+}
+
+#[test]
+fn turn_runtime_completion_after_streaming_interim_appends_only_uncovered_tail_audio() {
+    let mut builder = RecognitionSessionTestBuilder::new().interim_display(true);
+    let asr_handle = builder.use_manual_asr();
+    let outputs = builder.use_recording_phrase_sink();
+    let (mut runtime, _config) = builder.build();
+
+    let mut streaming_interim = interim_request_for_turn(1, 1);
+    streaming_interim.close_reason = Some(SegmentCloseReason::InterimChunkReached);
+    streaming_interim.target = AsrTarget::new(
+        TurnId(1),
+        TurnRevision(0),
+        AudioRange::new(GlobalSampleIndex(0), GlobalSampleIndex(320)),
+        Some(SegmentId(1)),
+        Some(SegmentId(1)),
+    );
+    streaming_interim.source_audio = (0..320).map(|sample| sample as f32).collect();
+    streaming_interim.source_vad_results = vec![vad(true)];
+    runtime_state(&mut runtime).in_flight(streaming_interim.clone());
+    asr_handle.complete_request_with_text(&streaming_interim, "全体");
+    runtime.step();
+
+    let mut completion = interim_request_for_turn(2, 1);
+    completion.kind = AsrTaskKind::CompletionCheck;
+    completion.close_reason = Some(SegmentCloseReason::EndSilenceReached);
+    completion.target = AsrTarget::new(
+        TurnId(1),
+        TurnRevision(0),
+        AudioRange::new(GlobalSampleIndex(160), GlobalSampleIndex(352)),
+        Some(SegmentId(1)),
+        Some(SegmentId(2)),
+    );
+    completion.source_audio = (160..352).map(|sample| sample as f32).collect();
+    completion.source_vad_results = vec![vad(true), vad(true)];
+    runtime_state(&mut runtime).in_flight(completion.clone());
+    asr_handle.complete_request_with_text(&completion, "追加");
+    runtime.step();
+
+    let outputs = outputs.lock().expect("outputs should be readable");
+    assert_eq!(
+        outputs
+            .iter()
+            .map(|output| output.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["全体...", "全体追加。"]
+    );
+    assert_eq!(
+        outputs
+            .last()
+            .expect("final output should be emitted")
+            .phrase,
+        (0..352).map(|sample| sample as f32).collect::<Vec<_>>(),
+        "completion audio that overlaps a cumulative streaming interim must not be appended twice to the saved phrase"
+    );
+}
+
+#[test]
+fn streaming_interim_prespeech_padding_is_not_reused_by_final_completion_audio() {
+    let mut builder = RecognitionSessionTestBuilder::new().interim_display(true);
+    let asr_handle = builder.use_manual_asr();
+    let outputs = builder.use_recording_phrase_sink();
+    let (mut runtime, _config) = builder.build();
+
+    let mut streaming_interim = interim_request_for_turn(1, 1);
+    streaming_interim.close_reason = Some(SegmentCloseReason::InterimChunkReached);
+    streaming_interim.target = AsrTarget::new(
+        TurnId(1),
+        TurnRevision(0),
+        AudioRange::new(GlobalSampleIndex(0), GlobalSampleIndex(480)),
+        Some(SegmentId(1)),
+        Some(SegmentId(1)),
+    );
+    streaming_interim.source_audio = (0..480).map(|sample| sample as f32).collect();
+    streaming_interim.source_vad_results = vec![vad(false), vad(true)];
+    runtime_state(&mut runtime).in_flight(streaming_interim.clone());
+    asr_handle.complete_request_with_text(&streaming_interim, "全体");
+    runtime.step();
+
+    let mut completion = interim_request_for_turn(2, 1);
+    completion.kind = AsrTaskKind::CompletionCheck;
+    completion.close_reason = Some(SegmentCloseReason::EndSilenceReached);
+    completion.target = AsrTarget::new(
+        TurnId(1),
+        TurnRevision(0),
+        AudioRange::new(GlobalSampleIndex(0), GlobalSampleIndex(480)),
+        Some(SegmentId(1)),
+        Some(SegmentId(2)),
+    );
+    completion.source_audio = (80..480).map(|sample| sample as f32).collect();
+    completion.source_vad_results = vec![vad(true)];
+    runtime_state(&mut runtime).in_flight(completion.clone());
+    asr_handle.complete_request_with_text(&completion, "全体");
+    runtime.step();
+
+    let outputs = outputs.lock().expect("outputs should be readable");
+    assert_eq!(
+        outputs
+            .iter()
+            .map(|output| output.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["全体...", "全体。"]
+    );
+    assert_eq!(
+        outputs
+            .last()
+            .expect("final output should be emitted")
+            .phrase,
+        (80..480).map(|sample| sample as f32).collect::<Vec<_>>(),
+        "final output must use the completion source audio instead of reusing the streaming interim source with pre-speech padding"
+    );
+}
+
+#[test]
+fn turn_runtime_same_segment_completion_after_streaming_interim_uses_completion_audio_for_final() {
+    let mut builder = RecognitionSessionTestBuilder::new().interim_display(true);
+    let asr_handle = builder.use_manual_asr();
+    let outputs = builder.use_recording_phrase_sink();
+    let (mut runtime, _config) = builder.build();
+
+    let mut streaming_interim = interim_request_for_turn(1, 1);
+    streaming_interim.close_reason = Some(SegmentCloseReason::InterimChunkReached);
+    streaming_interim.target = AsrTarget::new(
+        TurnId(1),
+        TurnRevision(0),
+        AudioRange::new(GlobalSampleIndex(0), GlobalSampleIndex(480)),
+        Some(SegmentId(1)),
+        Some(SegmentId(1)),
+    );
+    streaming_interim.source_audio = (0..480).map(|sample| sample as f32).collect();
+    streaming_interim.source_vad_results = vec![vad(false), vad(true)];
+    runtime_state(&mut runtime).in_flight(streaming_interim.clone());
+    asr_handle.complete_request_with_text(&streaming_interim, "途中");
+    runtime.step();
+
+    let mut completion = interim_request_for_turn(1, 1);
+    completion.kind = AsrTaskKind::CompletionCheck;
+    completion.close_reason = Some(SegmentCloseReason::EndSilenceReached);
+    completion.target = AsrTarget::new(
+        TurnId(1),
+        TurnRevision(0),
+        AudioRange::new(GlobalSampleIndex(0), GlobalSampleIndex(480)),
+        Some(SegmentId(1)),
+        Some(SegmentId(1)),
+    );
+    completion.source_audio = (80..480).map(|sample| sample as f32).collect();
+    completion.source_vad_results = vec![vad(true)];
+    runtime_state(&mut runtime).in_flight(completion.clone());
+    asr_handle.complete_request_with_text(&completion, "確定");
+    runtime.step();
+
+    let outputs = outputs.lock().expect("outputs should be readable");
+    assert_eq!(
+        outputs
+            .iter()
+            .map(|output| output.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["途中...", "確定。"]
+    );
+    assert_eq!(
+        outputs
+            .first()
+            .expect("interim output should be emitted")
+            .phrase,
+        (0..480).map(|sample| sample as f32).collect::<Vec<_>>(),
+        "interim output should keep the streaming ASR source audio"
+    );
+    assert_eq!(
+        outputs
+            .last()
+            .expect("final output should be emitted")
+            .phrase,
+        (80..480).map(|sample| sample as f32).collect::<Vec<_>>(),
+        "final output should save the completion source separately instead of reusing the interim source"
+    );
+}
+
+#[test]
+fn split_asr_completion_after_interim_only_draft_is_not_dropped_as_stale() {
+    let mut builder = RecognitionSessionTestBuilder::new()
+        .asr_model(AsrModel::ReazonSpeechK2V2)
+        .interim_asr_model(AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8)
+        .interim_display(true)
+        .turn_detector(TurnDetector::Simple);
+    let asr_handle = builder.use_manual_asr();
+    let outputs = builder.use_recording_sink();
+    let (mut runtime, _config) = builder.build();
+
+    let mut streaming_interim = interim_request_for_turn(1, 1);
+    streaming_interim.route =
+        RecognitionRoute::from_model(AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8);
+    streaming_interim.close_reason = Some(SegmentCloseReason::InterimChunkReached);
+    streaming_interim.target = AsrTarget::new(
+        TurnId(1),
+        TurnRevision(0),
+        AudioRange::new(GlobalSampleIndex(0), GlobalSampleIndex(480)),
+        Some(SegmentId(1)),
+        Some(SegmentId(1)),
+    );
+    runtime_state(&mut runtime).in_flight(streaming_interim.clone());
+    asr_handle.complete_request_with_text(&streaming_interim, "途中");
+    runtime.step();
+
+    let mut completion = interim_request_for_turn(2, 1);
+    completion.kind = AsrTaskKind::CompletionCheck;
+    completion.route = RecognitionRoute::from_model(AsrModel::ReazonSpeechK2V2);
+    completion.close_reason = Some(SegmentCloseReason::EndSilenceReached);
+    completion.target = AsrTarget::new(
+        TurnId(1),
+        TurnRevision(0),
+        AudioRange::new(GlobalSampleIndex(0), GlobalSampleIndex(480)),
+        Some(SegmentId(1)),
+        Some(SegmentId(1)),
+    );
+    runtime_state(&mut runtime).in_flight(completion.clone());
+    asr_handle.complete_request_with_text(&completion, "確定");
+    runtime.step();
+
+    assert_eq!(
+        *outputs.lock().expect("outputs should be readable"),
+        vec![
+            output_snapshot("途中...", false, 1, 1),
+            output_snapshot("確定。", true, 1, 1),
+        ]
+    );
+}
+
+#[test]
 fn turn_runtime_mismatched_asr_result_keeps_in_flight_request_for_later_match() {
     let mut builder = RecognitionSessionTestBuilder::new();
     let asr_handle = builder.use_manual_asr();
@@ -566,5 +925,78 @@ fn turn_runtime_failed_grammar_rerecognition_uses_turn_decision_on_existing_draf
     assert_eq!(
         *outputs.lock().expect("outputs should be readable"),
         vec![output_snapshot("文法判定。", true, 1, 1)]
+    );
+}
+
+#[test]
+fn turn_runtime_interim_with_unchanged_text_is_not_re_emitted_until_it_changes() {
+    let mut builder = RecognitionSessionTestBuilder::new().interim_display(true);
+    let asr_handle = builder.use_manual_asr();
+    let outputs = builder.use_recording_sink();
+    let (mut runtime, _config) = builder.build();
+
+    // Successive 160ms streaming chunks for the same segment update the latest segment in place,
+    // so identical ASR text leaves the turn's combined text unchanged.
+    let streaming_chunk = |request_id: u64, end_sample: u64| {
+        let mut request = interim_request_for_turn(request_id, 1);
+        request.close_reason = Some(SegmentCloseReason::InterimChunkReached);
+        request.target = AsrTarget::new(
+            TurnId(1),
+            TurnRevision(0),
+            AudioRange::new(GlobalSampleIndex(0), GlobalSampleIndex(end_sample)),
+            Some(SegmentId(1)),
+            Some(SegmentId(1)),
+        );
+        request.source_audio = vec![1.0; usize::try_from(end_sample).unwrap()];
+        request.source_vad_results = vec![vad(true)];
+        request
+    };
+
+    let first = streaming_chunk(1, 160);
+    runtime_state(&mut runtime).in_flight(first.clone());
+    asr_handle.complete_request_with_text(&first, "こん");
+    runtime.step();
+
+    let second = streaming_chunk(2, 320);
+    runtime_state(&mut runtime).in_flight(second.clone());
+    asr_handle.complete_request_with_text(&second, "こん");
+    runtime.step();
+
+    let third = streaming_chunk(3, 480);
+    runtime_state(&mut runtime).in_flight(third.clone());
+    asr_handle.complete_request_with_text(&third, "こんにちは");
+    runtime.step();
+
+    assert_eq!(
+        *outputs.lock().expect("outputs should be readable"),
+        vec![
+            output_snapshot("こん...", false, 1, 1),
+            output_snapshot("こんにちは...", false, 1, 1),
+        ],
+        "an interim must emit only when the turn text changed since the last emitted interim"
+    );
+}
+
+#[test]
+fn turn_runtime_final_is_emitted_even_when_text_equals_last_emitted_interim() {
+    let mut builder = RecognitionSessionTestBuilder::new().interim_display(true);
+    let asr_handle = builder.use_manual_asr();
+    let outputs = builder.use_recording_sink();
+    let (mut runtime, _config) = builder.build();
+
+    let interim = interim_request_for_turn(1, 1);
+    runtime_state(&mut runtime).in_flight(interim.clone());
+    asr_handle.complete_request_with_text(&interim, "確定テキスト");
+    runtime.step();
+
+    runtime.complete_turn_without_grammar(1);
+
+    assert_eq!(
+        *outputs.lock().expect("outputs should be readable"),
+        vec![
+            output_snapshot("確定テキスト...", false, 1, 1),
+            output_snapshot("確定テキスト。", true, 1, 1),
+        ],
+        "a final must always emit even when its combined text equals the last emitted interim"
     );
 }

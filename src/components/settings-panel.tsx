@@ -14,6 +14,7 @@ import type {
 import { AsrSettings } from "./settings/asr-settings";
 import { ConnectionSettings } from "./settings/connection-settings";
 import { LicenseSettings } from "./settings/license-settings";
+import { ModelAssetsSettings } from "./settings/model-assets-settings";
 import { NoiseCancellationSettings } from "./settings/noise-cancellation-settings";
 import { OtherSettings } from "./settings/other-settings";
 import { SpeechSettings } from "./settings/speech-settings";
@@ -191,15 +192,20 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           {settingsOpen ? (
             <>
               <Tabs.Panel value="connection" pt="md" pl="md" style={panelStyle}>
-                <ConnectionSettings
-                  config={config}
-                  modelStatus={modelStatus}
-                  downloadingModels={downloadingModels}
-                  modelDownloadProgress={modelDownloadProgress}
-                  runtimeLocked={running}
-                  onUpdateConfig={onUpdateConfig}
-                  onDownloadSelectedModels={onDownloadSelectedModels}
-                />
+                <Stack gap="md">
+                  <ModelAssetsSettings
+                    modelStatus={modelStatus}
+                    downloading={downloadingModels}
+                    progress={modelDownloadProgress}
+                    runtimeLocked={running}
+                    onDownload={onDownloadSelectedModels}
+                  />
+                  <ConnectionSettings
+                    config={config}
+                    runtimeLocked={running}
+                    onUpdateConfig={onUpdateConfig}
+                  />
+                </Stack>
               </Tabs.Panel>
 
               <Tabs.Panel

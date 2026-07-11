@@ -1,5 +1,9 @@
 import type { SelectOption } from "./settings-options";
-import type { AsrModel } from "./types";
+import type {
+  AsrModel,
+  LocalTranslationModel,
+  TranslationLanguage,
+} from "./types";
 
 export const languageOptions = [
   { value: "ja_JP", label: "ja_JP" },
@@ -25,6 +29,29 @@ export const languageOptions = [
   { value: "id_ID", label: "id_ID" },
   { value: "ru_RU", label: "ru_RU" },
   { value: "vi_VN", label: "vi_VN" },
+];
+
+export const translationLanguageOptions: {
+  value: TranslationLanguage;
+  label: string;
+}[] = [
+  { value: "ja", label: "ja" },
+  { value: "en", label: "en" },
+];
+
+export const localTranslationModelOptions: {
+  value: LocalTranslationModel;
+  label: string;
+}[] = [
+  {
+    value: "lfm2_q4",
+    label: "LFM2-350M-ENJP-MT-ONNX / ONNX Community Q4",
+  },
+  // CAT-Translateは配布を一時停止しているため、選択肢から外しています。
+  // {
+  //   value: "cat_translate_0_8b_q4_k_quant",
+  //   label: "cat-translate-0.8b ONNX Q4 k_quant",
+  // },
 ];
 
 export const makeId = (prefix: string) =>

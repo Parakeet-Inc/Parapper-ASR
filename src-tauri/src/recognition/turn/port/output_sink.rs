@@ -1,12 +1,64 @@
 use crate::{
     config::ParapperConfig,
     delivery::{RecognizedTextOutput, dispatch_recognized_text, spawn_mute_check_if_needed},
+    recognition::RecognitionStreamEvent,
 };
+use std::sync::mpsc::Sender;
 use tauri::AppHandle;
 
-pub(crate) trait TurnOutputSink {
+pub(crate) trait TurnOutputSink: Send {
     fn update_config(&mut self, _config: &ParapperConfig) {}
     fn emit(&mut self, output: RecognizedTextOutput);
+}
+
+pub(crate) struct WebSocketTurnOutputSink {
+    sender: Sender<RecognitionStreamEvent>,
+}
+
+impl WebSocketTurnOutputSink {
+    pub(crate) fn new(sender: Sender<RecognitionStreamEvent>) -> Self {
+        Self { sender }
+    }
+}
+
+impl TurnOutputSink for WebSocketTurnOutputSink {
+    fn emit(&mut self, output: RecognizedTextOutput) {
+        if self
+            .sender
+            .send(RecognitionStreamEvent::Output(output))
+            .is_err()
+        {
+            log::debug!("WebSocket recognition output receiver is gone");
+        }
+    }
+}
+
+pub(crate) struct CompositeTurnOutputSink {
+    sinks: Vec<Box<dyn TurnOutputSink>>,
+}
+
+impl CompositeTurnOutputSink {
+    pub(crate) fn new(sinks: Vec<Box<dyn TurnOutputSink>>) -> Self {
+        Self { sinks }
+    }
+}
+
+impl TurnOutputSink for CompositeTurnOutputSink {
+    fn update_config(&mut self, config: &ParapperConfig) {
+        for sink in &mut self.sinks {
+            sink.update_config(config);
+        }
+    }
+
+    fn emit(&mut self, output: RecognizedTextOutput) {
+        let Some((last, preceding)) = self.sinks.split_last_mut() else {
+            return;
+        };
+        for sink in preceding {
+            sink.emit(output.clone());
+        }
+        last.emit(output);
+    }
 }
 
 #[cfg(test)]
@@ -55,6 +107,42 @@ mod tests {
         recognition::control::events::RecognizedTextEvent,
     };
 
+    #[test]
+    fn websocket_only_sink_emits_the_complete_structured_output_once() {
+        let (sender, receiver) = mpsc::channel();
+        let expected = recognized_output("ws-only", "構造化出力。");
+        let mut sink = WebSocketTurnOutputSink::new(sender);
+
+        sink.emit(expected.clone());
+
+        assert_eq!(
+            receiver.try_iter().collect::<Vec<_>>(),
+            vec![RecognitionStreamEvent::Output(expected)]
+        );
+    }
+
+    #[test]
+    fn composite_sink_emits_the_same_output_once_to_each_sink() {
+        let (first_sender, first_receiver) = mpsc::channel();
+        let (second_sender, second_receiver) = mpsc::channel();
+        let expected = recognized_output("composite", "複合出力。");
+        let mut sink = CompositeTurnOutputSink::new(vec![
+            Box::new(WebSocketTurnOutputSink::new(first_sender)),
+            Box::new(WebSocketTurnOutputSink::new(second_sender)),
+        ]);
+
+        sink.emit(expected.clone());
+
+        assert_eq!(
+            first_receiver.try_iter().collect::<Vec<_>>(),
+            vec![RecognitionStreamEvent::Output(expected.clone())]
+        );
+        assert_eq!(
+            second_receiver.try_iter().collect::<Vec<_>>(),
+            vec![RecognitionStreamEvent::Output(expected)]
+        );
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn delivery_turn_output_sink_emit_dispatches_recognized_text_with_updated_config() {
@@ -100,7 +188,7 @@ mod tests {
 
     fn recognized_output(id: &str, text: &str) -> RecognizedTextOutput {
         RecognizedTextOutput {
-            phrase: vec![0.5, -0.5],
+            phrase: vec![0.5, -0.5].into(),
             text: text.to_string(),
             source_asr_model: AsrModel::ReazonSpeechK2V2,
             source_language: AsrLanguage::Japanese,

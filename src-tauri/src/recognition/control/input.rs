@@ -2,8 +2,8 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, RwLock,
-        atomic::{AtomicBool, AtomicU8, Ordering},
-        mpsc::{Receiver, RecvTimeoutError, TryRecvError},
+        atomic::{AtomicU8, Ordering},
+        mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError},
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -13,8 +13,9 @@ use anyhow::{Context, Result, anyhow};
 use tauri::{AppHandle, Emitter};
 
 use crate::{
-    audio::{AudioInputProcessor, InputChunk, RunningAudioInput},
+    audio::{AudioInputProcessor, InputChunk},
     config::ParapperConfig,
+    delivery::RecognizedTextOutput,
     error_event::{ErrorSeverity, ParapperErrorType, emit_parapper_error},
     model::vad_model_path,
     recognition::{
@@ -24,30 +25,64 @@ use crate::{
 };
 
 use super::{
-    AsrWorkerStartupResult, AsrWorkerStartupSender, RecognitionDriver, RecognitionDriverHandle,
+    AsrWorkerStartupResult, AsrWorkerStartupSender, DeliveryTurnOutputSink, RecognitionDriver,
+    RecognitionDriverHandle, RecognitionShutdownResult, TurnOutputSink,
+    input_source::{
+        InputDisconnectPolicy, InputSourceConfig, InputSourceLifetime, RunningInputSource,
+    },
 };
 
 pub struct RunningRecognitionInput {
-    stop_requested: Arc<AtomicBool>,
-    join_handle: Option<JoinHandle<()>>,
+    stop_control: Arc<RecognitionStopControl>,
+    source_lifetime: Option<InputSourceLifetime>,
+    join_handle: Option<JoinHandle<RecognitionShutdownResult>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum RecognitionStreamEvent {
+    SpeechStarted,
+    Output(RecognizedTextOutput),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum RecognitionStopMode {
+    Running = 0,
+    Graceful = 1,
+    Cancel = 2,
+}
+
+#[derive(Default)]
+struct RecognitionStopControl {
+    mode: AtomicU8,
+}
+
+impl RecognitionStopControl {
+    fn request(&self, mode: RecognitionStopMode) {
+        self.mode.fetch_max(mode as u8, Ordering::AcqRel);
+    }
+
+    fn mode(&self) -> RecognitionStopMode {
+        match self.mode.load(Ordering::Acquire) {
+            0 => RecognitionStopMode::Running,
+            1 => RecognitionStopMode::Graceful,
+            _ => RecognitionStopMode::Cancel,
+        }
+    }
 }
 
 #[derive(Debug)]
 pub enum RecognitionStartError {
     AudioInput(anyhow::Error),
     Asr(anyhow::Error),
-}
-
-impl RecognitionStartError {
-    pub fn is_asr(&self) -> bool {
-        matches!(self, Self::Asr(_))
-    }
+    Busy,
 }
 
 impl std::fmt::Display for RecognitionStartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::AudioInput(err) | Self::Asr(err) => std::fmt::Display::fmt(err, f),
+            Self::Busy => write!(f, "another recognition session is active"),
         }
     }
 }
@@ -56,6 +91,7 @@ impl std::error::Error for RecognitionStartError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::AudioInput(err) | Self::Asr(err) => err.source(),
+            Self::Busy => None,
         }
     }
 }
@@ -169,23 +205,38 @@ impl RunningRecognitionInput {
         config: &ParapperConfig,
         runtime_config: Arc<RuntimeConfigState>,
     ) -> Result<Self, RecognitionStartError> {
-        let audio_startup =
-            RunningAudioInput::start(config).map_err(RecognitionStartError::AudioInput)?;
-        let audio_input = audio_startup.input;
-        let receiver = audio_startup.receiver;
-        let source_sample_rate = audio_startup.source_sample_rate;
-        let startup = build_recognition_startup(&handle, config, source_sample_rate)
+        let source = InputSourceConfig::from_config(config)
+            .start(config)
             .map_err(RecognitionStartError::AudioInput)?;
+        let output_sink = Box::new(DeliveryTurnOutputSink::new(handle.clone(), config));
+        Self::start_with_source_and_sink(handle, config, runtime_config, source, output_sink, None)
+    }
+
+    pub(crate) fn start_with_source_and_sink(
+        handle: AppHandle,
+        config: &ParapperConfig,
+        runtime_config: Arc<RuntimeConfigState>,
+        source: RunningInputSource,
+        output_sink: Box<dyn TurnOutputSink>,
+        activity_sender: Option<Sender<RecognitionStreamEvent>>,
+    ) -> Result<Self, RecognitionStartError> {
+        let source = source.into_parts();
+        let source_lifetime = source.lifetime;
+        let receiver = source.receiver;
+        let source_sample_rate = source.source_sample_rate;
+        let disconnect_policy = source.disconnect_policy;
+        let startup =
+            build_recognition_startup(&handle, config, source_sample_rate, activity_sender)
+                .map_err(RecognitionStartError::AudioInput)?;
         let (asr_startup_sender, asr_startup_receiver) =
             std::sync::mpsc::channel::<AsrWorkerStartupResult>();
 
-        let stop_requested = Arc::new(AtomicBool::new(false));
-        let worker_stop = stop_requested.clone();
+        let stop_control = Arc::new(RecognitionStopControl::default());
+        let worker_stop = stop_control.clone();
         let recognition_config = config.clone();
         let join_handle = thread::Builder::new()
             .name("parapper-recognition-input".to_string())
             .spawn(move || {
-                let audio_input = audio_input;
                 let RecognitionStartup {
                     audio_processor,
                     vad_stage,
@@ -195,6 +246,7 @@ impl RunningRecognitionInput {
                     audio_processor,
                     vad_stage,
                     asr_startup_sender,
+                    output_sink,
                 };
                 run_recognition_input_worker(
                     &handle,
@@ -202,14 +254,15 @@ impl RunningRecognitionInput {
                     runtime_config,
                     worker_startup,
                     &worker_stop,
-                );
-                drop(audio_input);
+                    disconnect_policy,
+                )
             })
             .context("Failed to spawn recognition input worker")
             .map_err(RecognitionStartError::AudioInput)?;
 
         let mut running = Self {
-            stop_requested,
+            stop_control,
+            source_lifetime: Some(source_lifetime),
             join_handle: Some(join_handle),
         };
         match asr_startup_receiver
@@ -219,7 +272,7 @@ impl RunningRecognitionInput {
         {
             Ok(()) => Ok(running),
             Err(errors) => {
-                running.stop_inner();
+                let _ = running.stop_inner(RecognitionStopMode::Cancel);
                 Err(RecognitionStartError::Asr(anyhow!(
                     "ASR worker failed to preload required models: {}",
                     errors.join("; ")
@@ -228,23 +281,35 @@ impl RunningRecognitionInput {
         }
     }
 
-    pub fn stop(mut self) {
-        self.stop_inner();
+    pub fn stop(mut self) -> RecognitionShutdownResult {
+        self.stop_inner(RecognitionStopMode::Graceful)
     }
 
-    fn stop_inner(&mut self) {
-        self.stop_requested.store(true, Ordering::Release);
-        if let Some(join_handle) = self.join_handle.take()
-            && let Err(err) = join_handle.join()
-        {
-            log::warn!("Recognition input worker thread panicked: {err:?}");
+    pub(crate) fn cancel(mut self) -> RecognitionShutdownResult {
+        self.stop_inner(RecognitionStopMode::Cancel)
+    }
+
+    fn stop_inner(&mut self, mode: RecognitionStopMode) -> RecognitionShutdownResult {
+        self.stop_control.request(mode);
+        // Stop the producer before waiting for a graceful worker drain. This closes
+        // desktop input channels; network senders are closed by their session owner.
+        self.source_lifetime.take();
+        if let Some(join_handle) = self.join_handle.take() {
+            return match join_handle.join() {
+                Ok(result) => result,
+                Err(err) => {
+                    log::warn!("Recognition input worker thread panicked: {err:?}");
+                    RecognitionShutdownResult::Cancelled
+                }
+            };
         }
+        RecognitionShutdownResult::Cancelled
     }
 }
 
 impl Drop for RunningRecognitionInput {
     fn drop(&mut self) {
-        self.stop_inner();
+        let _ = self.stop_inner(RecognitionStopMode::Graceful);
     }
 }
 
@@ -253,32 +318,42 @@ fn run_recognition_input_worker(
     config: &ParapperConfig,
     runtime_config: Arc<RuntimeConfigState>,
     startup: RecognitionWorkerStartup,
-    stop_requested: &AtomicBool,
-) {
-    let RecognitionWorkerStartup {
-        receiver,
-        audio_processor,
-        vad_stage,
-        asr_startup_sender,
-    } = startup;
-    let mut outer_loop = RecognitionOuterLoop::new(
-        handle,
-        config,
-        runtime_config,
-        receiver,
-        audio_processor,
-        vad_stage,
-        asr_startup_sender,
-    );
+    stop_control: &RecognitionStopControl,
+    disconnect_policy: InputDisconnectPolicy,
+) -> RecognitionShutdownResult {
+    let mut outer_loop = RecognitionOuterLoop::new(handle, config, runtime_config, startup);
+    drive_recognition_input_loop(&mut outer_loop, stop_control, disconnect_policy)
+}
 
-    while !stop_requested.load(Ordering::Acquire) {
+trait RecognitionInputLoop {
+    fn step(&mut self) -> RecognitionLoopStep;
+    fn stop(&mut self) -> RecognitionShutdownResult;
+    fn cancel(&mut self);
+}
+
+fn drive_recognition_input_loop(
+    outer_loop: &mut impl RecognitionInputLoop,
+    stop_control: &RecognitionStopControl,
+    disconnect_policy: InputDisconnectPolicy,
+) -> RecognitionShutdownResult {
+    loop {
+        if stop_control.mode() == RecognitionStopMode::Cancel {
+            outer_loop.cancel();
+            return RecognitionShutdownResult::Cancelled;
+        }
         match outer_loop.step() {
             RecognitionLoopStep::Progressed | RecognitionLoopStep::Idle => {}
-            RecognitionLoopStep::InputDisconnected => break,
+            RecognitionLoopStep::InputDisconnected => {
+                if stop_control.mode() == RecognitionStopMode::Running
+                    && disconnect_policy == InputDisconnectPolicy::Cancel
+                {
+                    outer_loop.cancel();
+                    return RecognitionShutdownResult::Cancelled;
+                }
+                return outer_loop.stop();
+            }
         }
     }
-
-    outer_loop.stop();
 }
 
 struct RecognitionOuterLoop<'a> {
@@ -303,6 +378,7 @@ struct RecognitionWorkerStartup {
     audio_processor: AudioInputProcessor,
     vad_stage: RecognitionVadStage,
     asr_startup_sender: AsrWorkerStartupSender,
+    output_sink: Box<dyn TurnOutputSink>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -330,6 +406,8 @@ struct VadFrame {
 struct RecognitionVadStage {
     handle: AppHandle,
     vad: Box<dyn VadEngine>,
+    activity_sender: Option<Sender<RecognitionStreamEvent>>,
+    was_speech: bool,
 }
 
 impl PendingInputChunks {
@@ -395,12 +473,18 @@ impl PendingVadFrames {
 }
 
 impl RecognitionVadStage {
-    fn new(handle: AppHandle, config: &ParapperConfig) -> Result<Self> {
+    fn new(
+        handle: AppHandle,
+        config: &ParapperConfig,
+        activity_sender: Option<Sender<RecognitionStreamEvent>>,
+    ) -> Result<Self> {
         let vad_path = vad_model_path(&handle)?;
         let vad = OnnxRuntimeSileroVadEngine::new(&vad_path, config.segmentation.vad_threshold)?;
         Ok(Self {
             handle,
             vad: Box::new(vad),
+            activity_sender,
+            was_speech: false,
         })
     }
 
@@ -415,6 +499,13 @@ impl RecognitionVadStage {
         } else {
             VadState::Silence
         };
+        if result.is_speech
+            && !self.was_speech
+            && let Some(sender) = &self.activity_sender
+        {
+            let _ = sender.send(RecognitionStreamEvent::SpeechStarted);
+        }
+        self.was_speech = result.is_speech;
         let _ = self.handle.emit(
             "parapper://vad-state",
             VadStateEvent {
@@ -431,10 +522,11 @@ fn build_recognition_startup(
     handle: &AppHandle,
     config: &ParapperConfig,
     source_sample_rate: u32,
+    activity_sender: Option<Sender<RecognitionStreamEvent>>,
 ) -> Result<RecognitionStartup> {
     let audio_processor =
         AudioInputProcessor::initialize(handle.clone(), config, source_sample_rate)?;
-    let vad_stage = match RecognitionVadStage::new(handle.clone(), config) {
+    let vad_stage = match RecognitionVadStage::new(handle.clone(), config, activity_sender) {
         Ok(stage) => stage,
         Err(err) => {
             emit_parapper_error(
@@ -457,11 +549,15 @@ impl<'a> RecognitionOuterLoop<'a> {
         handle: &'a AppHandle,
         config: &'a ParapperConfig,
         runtime_config: Arc<RuntimeConfigState>,
-        receiver: Receiver<InputChunk>,
-        audio_processor: AudioInputProcessor,
-        vad_stage: RecognitionVadStage,
-        asr_startup_sender: AsrWorkerStartupSender,
+        startup: RecognitionWorkerStartup,
     ) -> Self {
+        let RecognitionWorkerStartup {
+            receiver,
+            audio_processor,
+            vad_stage,
+            asr_startup_sender,
+            output_sink,
+        } = startup;
         Self {
             handle,
             runtime_config,
@@ -471,15 +567,18 @@ impl<'a> RecognitionOuterLoop<'a> {
             pending_vad_frames: PendingVadFrames::default(),
             audio_processor,
             vad_stage: Some(vad_stage),
-            driver: Some(Box::new(RecognitionDriver::new_for_production(
-                handle,
-                config,
-                Some(asr_startup_sender),
-            ))),
+            driver: Some(Box::new(
+                RecognitionDriver::new_for_production_with_output_sink(
+                    handle,
+                    config,
+                    Some(asr_startup_sender),
+                    output_sink,
+                ),
+            )),
         }
     }
 
-    fn step(&mut self) -> RecognitionLoopStep {
+    fn step_inner(&mut self) -> RecognitionLoopStep {
         self.apply_runtime_config_update();
         let current_config = self.applied_config.clone();
         let input_status = self.collect_input(&current_config);
@@ -500,9 +599,16 @@ impl<'a> RecognitionOuterLoop<'a> {
         }
     }
 
-    fn stop(mut self) {
+    fn stop_inner(&mut self) -> RecognitionShutdownResult {
         if let Some(mut driver) = self.driver.take() {
-            driver.shutdown();
+            return driver.shutdown();
+        }
+        RecognitionShutdownResult::Cancelled
+    }
+
+    fn cancel_inner(&mut self) {
+        if let Some(mut driver) = self.driver.take() {
+            driver.cancel();
         }
     }
 
@@ -573,6 +679,20 @@ impl<'a> RecognitionOuterLoop<'a> {
     }
 }
 
+impl RecognitionInputLoop for RecognitionOuterLoop<'_> {
+    fn step(&mut self) -> RecognitionLoopStep {
+        self.step_inner()
+    }
+
+    fn stop(&mut self) -> RecognitionShutdownResult {
+        self.stop_inner()
+    }
+
+    fn cancel(&mut self) {
+        self.cancel_inner();
+    }
+}
+
 fn recognition_input_wait_timeout(config: &ParapperConfig) -> Duration {
     let half_vad_interval_ms = u64::from(config.segmentation.vad_interval_ms.max(1)).div_ceil(2);
     Duration::from_millis(half_vad_interval_ms.max(1))
@@ -581,23 +701,101 @@ fn recognition_input_wait_timeout(config: &ParapperConfig) -> Duration {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::VecDeque,
         sync::mpsc,
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
 
     use super::{
-        PendingInputChunks, PendingVadFrames, RecognitionLoopStep, RuntimeConfigDirty,
-        build_recognition_startup, recognition_input_wait_timeout,
+        PendingInputChunks, PendingVadFrames, RecognitionInputLoop, RecognitionLoopStep,
+        RecognitionShutdownResult, RecognitionStopControl, RecognitionStopMode, RuntimeConfigDirty,
+        build_recognition_startup, drive_recognition_input_loop, recognition_input_wait_timeout,
     };
     use crate::{
         audio::{ASR_SAMPLE_RATE, InputChunk},
         config::ParapperConfig,
+        recognition::control::input_source::InputDisconnectPolicy,
     };
 
-    fn chunk(value: f32) -> InputChunk {
-        InputChunk {
-            samples: vec![value],
+    struct ScriptedInputLoop {
+        steps: VecDeque<RecognitionLoopStep>,
+        observed_steps: usize,
+        stopped: bool,
+        cancelled: bool,
+    }
+
+    impl RecognitionInputLoop for ScriptedInputLoop {
+        fn step(&mut self) -> RecognitionLoopStep {
+            self.observed_steps += 1;
+            self.steps.pop_front().expect("scripted step")
         }
+
+        fn stop(&mut self) -> RecognitionShutdownResult {
+            self.stopped = true;
+            RecognitionShutdownResult::Completed
+        }
+
+        fn cancel(&mut self) {
+            self.cancelled = true;
+        }
+    }
+
+    #[test]
+    fn graceful_stop_processes_accepted_input_until_the_source_disconnects() {
+        let control = RecognitionStopControl::default();
+        control.request(RecognitionStopMode::Graceful);
+        let mut input_loop = ScriptedInputLoop {
+            steps: VecDeque::from([
+                RecognitionLoopStep::Progressed,
+                RecognitionLoopStep::Progressed,
+                RecognitionLoopStep::InputDisconnected,
+            ]),
+            observed_steps: 0,
+            stopped: false,
+            cancelled: false,
+        };
+
+        drive_recognition_input_loop(&mut input_loop, &control, InputDisconnectPolicy::Cancel);
+
+        assert_eq!(input_loop.observed_steps, 3);
+        assert!(input_loop.stopped);
+        assert!(!input_loop.cancelled);
+    }
+
+    #[test]
+    fn unexpected_network_disconnect_cancels_incomplete_work() {
+        let control = RecognitionStopControl::default();
+        let mut input_loop = ScriptedInputLoop {
+            steps: VecDeque::from([RecognitionLoopStep::InputDisconnected]),
+            observed_steps: 0,
+            stopped: false,
+            cancelled: false,
+        };
+
+        drive_recognition_input_loop(&mut input_loop, &control, InputDisconnectPolicy::Cancel);
+
+        assert!(input_loop.cancelled);
+        assert!(!input_loop.stopped);
+    }
+
+    #[test]
+    fn unexpected_desktop_disconnect_flushes_the_last_processed_segment() {
+        let control = RecognitionStopControl::default();
+        let mut input_loop = ScriptedInputLoop {
+            steps: VecDeque::from([RecognitionLoopStep::InputDisconnected]),
+            observed_steps: 0,
+            stopped: false,
+            cancelled: false,
+        };
+
+        drive_recognition_input_loop(&mut input_loop, &control, InputDisconnectPolicy::Graceful);
+
+        assert!(input_loop.stopped);
+        assert!(!input_loop.cancelled);
+    }
+
+    fn chunk(value: f32) -> InputChunk {
+        InputChunk::new(vec![value])
     }
 
     #[test]
@@ -654,6 +852,16 @@ mod tests {
             recognition_input_wait_timeout(&config),
             Duration::from_millis(16)
         );
+    }
+
+    #[test]
+    fn cancel_control_overrides_graceful_stop_without_entering_the_audio_queue() {
+        let control = RecognitionStopControl::default();
+
+        control.request(RecognitionStopMode::Graceful);
+        control.request(RecognitionStopMode::Cancel);
+
+        assert_eq!(control.mode(), RecognitionStopMode::Cancel);
     }
 
     #[test]
@@ -758,7 +966,7 @@ mod tests {
             ..ParapperConfig::default()
         };
 
-        let err = build_recognition_startup(&handle, &config, ASR_SAMPLE_RATE)
+        let err = build_recognition_startup(&handle, &config, ASR_SAMPLE_RATE, None)
             .err()
             .expect("missing VAD model should fail recognition startup");
 

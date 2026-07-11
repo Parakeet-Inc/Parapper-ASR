@@ -2,9 +2,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tauri::AppHandle;
 
+#[cfg(test)]
+use super::DeliveryTurnOutputSink;
 use super::{
-    AsrRequestRunner, AsrWorkerStartupSender, DeliveryTurnOutputSink, EngineAsrRequestRunner,
-    EngineTurnDecisionRunner, RecognitionSession, TurnDecisionRunner, TurnOutputSink,
+    AsrRequestRunner, AsrWorkerStartupSender, EngineAsrRequestRunner, EngineTurnDecisionRunner,
+    RecognitionSession, TurnDecisionRunner, TurnOutputSink,
     session::{
         ActivityState, AsrRequestState, LanguageIdRuntime, PendingRuntimeState, RuntimeCounters,
         RuntimeIo, TurnStore,
@@ -44,10 +46,29 @@ impl RecognitionSession {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn new_for_production(
         handle: &AppHandle,
         config: &ParapperConfig,
         asr_startup_sender: Option<AsrWorkerStartupSender>,
+    ) -> Self {
+        Self::new_for_production_with_output_sink(
+            handle,
+            config,
+            asr_startup_sender,
+            Box::new(DeliveryTurnOutputSink::new(handle.clone(), config)),
+        )
+    }
+
+    /// Builds a production session whose recognized-text output goes to the
+    /// provided sink instead of the global delivery fan-out. Used by the
+    /// external STT server so its results never reach translation, synthesis,
+    /// the desktop UI, or YNC.
+    pub(crate) fn new_for_production_with_output_sink(
+        handle: &AppHandle,
+        config: &ParapperConfig,
+        asr_startup_sender: Option<AsrWorkerStartupSender>,
+        output_sink: Box<dyn TurnOutputSink>,
     ) -> Self {
         let mut runtime = Self::with_io_and_session_id(
             config,
@@ -58,7 +79,7 @@ impl RecognitionSession {
                 asr_startup_sender,
             )),
             Box::new(EngineTurnDecisionRunner::new(handle, config)),
-            Box::new(DeliveryTurnOutputSink::new(handle.clone(), config)),
+            output_sink,
             Some(Box::new(TauriLanguageIdRuntime {
                 handle: handle.clone(),
             })),

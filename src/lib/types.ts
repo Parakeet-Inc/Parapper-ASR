@@ -1,10 +1,18 @@
 export type AsrPrecision = "int8" | "int8_float32" | "float32";
-export type AsrLanguage = "japanese" | "english" | "european_multilingual";
+export type AsrLanguage =
+  | "japanese"
+  | "english"
+  | "european_multilingual"
+  | "multilingual";
 export type TurnDetector = "simple" | "morph" | "namo";
 export type NoiseCancellationModel = "ul_unas";
 export type NeoSendTiming = "interim" | "final";
+export type DeveloperConnectionMode = "http" | "web_socket";
 export type SpeechSourceKind = "recognition" | "translation";
 export type SpeechBackend = "ync" | "local_tts";
+export type TranslationBackend = "ync" | "local";
+export type LocalTranslationModel = "lfm2_q4";
+export type TranslationLanguage = "en" | "ja";
 export type LocalTtsVoice =
   | "vits_piper_en_US_kristin_medium"
   | "vits_piper_en_US_john_medium"
@@ -15,27 +23,44 @@ export type AsrModel =
   | "reazonspeech_k2_v2"
   | "nemo_parakeet_tdt_ctc_0_6b_ja_35000_int8"
   | "nemo_parakeet_tdt_0_6b_v2_int8"
-  | "nemo_parakeet_tdt_0_6b_v3_int8";
+  | "nemo_parakeet_tdt_0_6b_v3_int8"
+  | "nemotron_speech_streaming_en_0_6b_160ms_int8"
+  | "nemotron_speech_streaming_en_0_6b_560ms_int8"
+  | "nemotron_3_5_asr_streaming_0_6b_160ms_int8"
+  | "nemotron_3_5_asr_streaming_0_6b_560ms_int8";
 
-export type RecognitionStatus = "idle" | "listening" | "stopped" | "error";
+export type RecognitionStatus =
+  | "idle"
+  | "waiting_for_client"
+  | "listening"
+  | "draining"
+  | "stopped"
+  | "error";
+export type InputSourceKind = "desktop_audio" | "web_socket";
+export type StreamingRecognitionOutputMode =
+  | "web_socket_only"
+  | "web_socket_and_desktop";
 
 export type ParapperConfig = {
   neo_http_enabled: boolean;
   neo_http_port: number;
-  neo_send_timing: NeoSendTiming;
+  input_source_kind: InputSourceKind;
   input_device_id: string | null;
   input_device_host: string | null;
   input_device_name: string | null;
   input_volume_db: number;
   asr_language: AsrLanguage;
   asr_model: AsrModel;
+  interim_asr_model: AsrModel | null;
   asr_precision: AsrPrecision;
   asr_num_threads: number;
   asr_normalize_input_audio: boolean;
   multilingual_asr_enabled: boolean;
   enabled_asr_models: AsrModel[];
   translation_enabled: boolean;
-  translation_plugin_http_port: number;
+  ync_plugin_port: number;
+  translation_local_server_port: number;
+  translation_local_server_model: LocalTranslationModel;
   translation_send_timing: NeoSendTiming;
   translation_mappings: TranslationMapping[];
   speech_mappings: SpeechMapping[];
@@ -53,9 +78,22 @@ export type ParapperConfig = {
   noise_cancellation_enabled: boolean;
   noise_cancellation_model: NoiseCancellationModel;
   vrc_osc_micmute: boolean;
+  streaming_recognition_enabled: boolean;
+  developer_connection_mode: DeveloperConnectionMode;
+  developer_http_url: string;
+  streaming_recognition_bind_address: string;
+  streaming_recognition_port: number;
+  streaming_recognition_api_key: string | null;
+  streaming_recognition_output_mode: StreamingRecognitionOutputMode;
   debug_asr_audio_playback: boolean;
   recognition_log_limit: number | null;
   debug_audio_log_limit: number | null;
+};
+
+export type TranslationHttpListenerStatus = {
+  state: "stopped" | "starting" | "running" | "stopping" | "error";
+  port: number | null;
+  error: string | null;
 };
 
 export type ConfigPreset = {
@@ -67,7 +105,10 @@ export type ConfigPreset = {
 export type TranslationMapping = {
   id: string;
   source_asr_model: AsrModel | null;
-  target_lang: string;
+  backend: TranslationBackend;
+  local_model: LocalTranslationModel;
+  source_lang: TranslationLanguage;
+  target_lang: TranslationLanguage;
 };
 
 export type SpeechMapping = {
@@ -187,6 +228,7 @@ export type ModelStatus = {
   language_id: ModelAssetStatus | null;
   turn_detectors: ModelAssetStatus[];
   tts: ModelAssetStatus[];
+  local_translation: ModelAssetStatus | null;
   noise_cancellation: ModelAssetStatus | null;
 };
 
@@ -207,6 +249,7 @@ export type ParapperErrorType =
   | "RESAMPLER"
   | "VAD"
   | "ASR"
+  | "RECOGNITION_BUSY"
   | "MODEL_DOWNLOAD"
   | "NEO_HTTP"
   | "OSC_QUERY"

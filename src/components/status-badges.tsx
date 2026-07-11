@@ -11,6 +11,10 @@ const statusColor = (status: RecognitionStatus) => {
   switch (status) {
     case "listening":
       return notificationColor.ok;
+    case "waiting_for_client":
+      return notificationColor.info;
+    case "draining":
+      return notificationColor.warn;
     case "error":
       return notificationColor.error;
     case "stopped":

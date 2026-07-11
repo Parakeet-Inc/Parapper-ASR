@@ -34,4 +34,4 @@ RunningRecognitionInput
 - `transcription/` は ASR を使った文字起こし workflow を持つ。ASR engine はこの stage の内側。
 - `turn/` は transcript を Turn に反映し、open/continue/final/timeout/output を決める。
 
-詳細は [documents/architecture/02-recognition-modules.md](../../../documents/architecture/02-recognition-modules.md) と [documents/architecture/03-recognition-internals.md](../../../documents/architecture/03-recognition-internals.md) を参照。
+詳細は [documents/developer/architecture/02-recognition-modules.md](../../../documents/developer/architecture/02-recognition-modules.md) と [documents/developer/architecture/03-recognition-internals.md](../../../documents/developer/architecture/03-recognition-internals.md) を参照。

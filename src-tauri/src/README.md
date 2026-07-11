@@ -1,7 +1,7 @@
 # `src/` - Rust バックエンド地図
 
 このディレクトリは Tauri 側バックエンドの実装です。
-フロントエンドを含むアプリ全体像と UI 対応は [`documents/project-overview.md`](../../documents/project-overview.md) にまとめます。
+フロントエンドを含むアプリ全体像と UI 対応は [`documents/developer/project-overview.md`](../../documents/developer/project-overview.md) にまとめます。
 
 詳細ページ:
 
@@ -138,8 +138,8 @@ synthesis/local/playback.rs
 
 | 外部接続先 | バックエンド path | 備考 |
 | --- | --- | --- |
-| YNC text input | `delivery/sinks/ync_text.rs` -> `connect::YncTextInputTransport` | `GET /api/input?text=...`、送信後は待たない |
-| YNC translate | `translation/clients/ync_translate.rs` -> `connect::YncPluginClient` | plugin HTTP `POST /` |
+| YNC text input | `delivery/sinks/ync_text.rs` -> `connect::YncTextInputTransport` | `POST /api/input`、JSON bodyは`Text` / `fixedText` / `textID`、送信後は待たない |
+| YNC translate | `translation/provider.rs` -> `connect::YncPluginClient` | plugin HTTP `POST /` |
 | YNC speech | `synthesis/clients/ync_speech.rs` -> `connect::YncPluginClient` | plugin HTTP `POST /`、長めの timeout |
 | YNC voice list / stop | `commands.rs` -> `connect::YncPluginClient` | ユーザー操作 command |
 | VRChat mute | `delivery/sinks/vrchat_mute.rs` -> `connect::osc` | YNC text delivery の前に確認 |
@@ -167,7 +167,7 @@ runtime bug を直すときは、望ましい挙動から mock または unit te
 ## ドキュメント方針
 
 - このファイルは Rust backend のモジュール地図です。
-- フロントエンドとバックエンドの対応、アプリ全体の流れは [`documents/project-overview.md`](../../documents/project-overview.md) に置きます。
+- フロントエンドとバックエンドの対応、アプリ全体の流れは [`documents/developer/project-overview.md`](../../documents/developer/project-overview.md) に置きます。
 - 詳細 README は大きい domain である `recognition/` と `synthesis/` にだけ残します。
-- 長期の計画メモや完了済みレビュー文書は残しません。一般化できる作業ルールは root の [`AGENTS.md`](../../AGENTS.md)、人間向けの開発手順は [`documents/development-help.md`](../../documents/development-help.md) に移します。
+- 長期の計画メモや完了済みレビュー文書は残しません。一般化できる作業ルールは root の [`AGENTS.md`](../../AGENTS.md)、人間向けの開発手順は [`documents/developer/development-help.md`](../../documents/developer/development-help.md) に移します。
 - top-level backend module、Tauri event、command を追加するときは、この README も同じ変更で更新します。

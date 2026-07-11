@@ -43,6 +43,165 @@ fn route_selection_for_namo_root_segment_connected_to_open_turn_uses_open_turn_r
     );
 }
 
+#[test]
+fn namo_streaming_interim_open_turn_does_not_capture_next_root_before_td_continue() {
+    let mut builder = RecognitionSessionTestBuilder::new()
+        .asr_model(AsrModel::ReazonSpeechK2V2)
+        .interim_asr_model(AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8)
+        .turn_detector(TurnDetector::Namo)
+        .interim_display(true);
+    let asr_handle = builder.use_manual_asr();
+    let _outputs = builder.use_recording_sink();
+    let (mut runtime, _config) = builder.build();
+
+    runtime_state(&mut runtime).pending_segment(
+        1,
+        None,
+        SegmentCloseReason::InterimChunkReached,
+        0..8_960,
+    );
+    runtime.step();
+    let interim = runtime
+        .requests
+        .in_flight_request
+        .clone()
+        .expect("streaming interim should dispatch before the turn is checked");
+    assert_eq!(interim.kind, AsrTaskKind::InterimDisplay);
+    assert_eq!(interim.target.turn_id, TurnId(1));
+    asr_handle.complete_request_with_text(&interim, "first draft");
+    runtime.step();
+
+    assert_eq!(
+        runtime.turn_store.open_turn_id,
+        Some(1),
+        "interim display may keep the draft visible as an open turn"
+    );
+
+    runtime_state(&mut runtime).pending_segment(
+        2,
+        None,
+        SegmentCloseReason::EndSilenceReached,
+        10_000..12_000,
+    );
+    runtime.step();
+
+    let completion = runtime
+        .requests
+        .in_flight_request
+        .as_ref()
+        .expect("new root segment completion should dispatch");
+    assert_eq!(completion.kind, AsrTaskKind::CompletionCheck);
+    assert_eq!(
+        completion.target.turn_id,
+        TurnId(2),
+        "a mere interim display must not make the next root segment attach to the previous turn before TD Continue"
+    );
+}
+
+#[test]
+fn split_asr_interim_display_uses_interim_model() {
+    let mut builder = RecognitionSessionTestBuilder::new()
+        .asr_model(AsrModel::ReazonSpeechK2V2)
+        .interim_asr_model(AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8)
+        .turn_detector(TurnDetector::Simple);
+    let asr_handle = builder.use_manual_asr();
+    let _outputs = builder.use_recording_sink();
+    let (mut runtime, _config) = builder.build();
+    runtime_state(&mut runtime).pending_segment(
+        1,
+        None,
+        SegmentCloseReason::InterimResultSilenceReached,
+        0..16_000,
+    );
+
+    runtime.step();
+
+    let submitted = asr_handle.submitted_requests();
+    assert_eq!(submitted.len(), 1);
+    assert_eq!(submitted[0].kind, AsrTaskKind::InterimDisplay);
+    assert_eq!(
+        submitted[0].route,
+        RecognitionRoute::from_model(AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8),
+        "interim display ASR must use the interim-only ASR model instead of the primary model"
+    );
+}
+
+#[test]
+fn split_asr_completion_uses_primary_model_even_after_interim_draft_route() {
+    let mut builder = RecognitionSessionTestBuilder::new()
+        .asr_model(AsrModel::ReazonSpeechK2V2)
+        .interim_asr_model(AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8)
+        .turn_detector(TurnDetector::Namo);
+    let asr_handle = builder.use_manual_asr();
+    let _outputs = builder.use_recording_sink();
+    let (mut runtime, _config) = builder.build();
+    let mut turn = Turn::new("turn-1-1-0".to_string(), 0);
+    turn.draft_mut().append_recognized_segment(
+        1,
+        None,
+        &[1.0],
+        &[vad(true)],
+        RecognitionRoute::from_model(AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8),
+        "interim".to_string(),
+        0,
+    );
+    runtime_state(&mut runtime)
+        .turn(1, turn)
+        .open_turn(1)
+        .pending_segment(2, Some(1), SegmentCloseReason::EndSilenceReached, 10..20);
+
+    runtime.step();
+
+    let submitted = asr_handle.submitted_requests();
+    assert_eq!(submitted.len(), 1);
+    assert_eq!(submitted[0].kind, AsrTaskKind::CompletionCheck);
+    assert_eq!(submitted[0].target.turn_id, TurnId(1));
+    assert_eq!(
+        submitted[0].route,
+        RecognitionRoute::from_model(AsrModel::ReazonSpeechK2V2),
+        "completion ASR must switch from the interim draft route to the primary ASR model"
+    );
+}
+
+#[test]
+fn split_asr_rerecognition_uses_primary_model_even_after_interim_draft_route() {
+    let mut builder = RecognitionSessionTestBuilder::new()
+        .asr_model(AsrModel::ReazonSpeechK2V2)
+        .interim_asr_model(AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8)
+        .turn_detector(TurnDetector::Namo);
+    let _asr_handle = builder.use_manual_asr();
+    let _outputs = builder.use_recording_sink();
+    let (mut runtime, _config) = builder.build();
+    let mut turn = Turn::new("turn-1-1-0".to_string(), 0);
+    turn.draft_mut().append_recognized_segment(
+        1,
+        None,
+        &[1.0; 16],
+        &[vad(true)],
+        RecognitionRoute::from_model(AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8),
+        "interim".to_string(),
+        0,
+    );
+    runtime_state(&mut runtime).turn(1, turn).open_turn(1);
+
+    assert!(
+        runtime
+            .dispatch_rerecognition_for_turn_if_idle(1, RerecognitionPurpose::SimpleTurnCheckFinal)
+    );
+
+    let request = runtime
+        .requests
+        .in_flight_request
+        .as_ref()
+        .expect("rerecognition request should be in flight");
+    assert_eq!(request.kind, AsrTaskKind::Rerecognition);
+    assert_eq!(
+        request.route,
+        RecognitionRoute::from_model(AsrModel::ReazonSpeechK2V2),
+        "final rerecognition must prefer the primary ASR model over the interim draft route"
+    );
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn turn_runtime_multilingual_completion_uses_sli_route_for_first_turn() {

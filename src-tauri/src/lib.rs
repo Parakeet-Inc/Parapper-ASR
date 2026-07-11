@@ -44,11 +44,26 @@ macro_rules! parapper_config_field {
     ($config:ident, input_volume_db, $value:expr) => {
         $config.input.volume_db = $value;
     };
+    ($config:ident, input_source_kind, $value:expr) => {
+        $config.input.source_kind = $value;
+    };
+    ($config:ident, streaming_recognition_enabled, $value:expr) => {
+        $config.streaming_recognition.enabled = $value;
+    };
+    ($config:ident, developer_connection_mode, $value:expr) => {
+        $config.streaming_recognition.mode = $value;
+    };
+    ($config:ident, developer_http_url, $value:expr) => {
+        $config.streaming_recognition.http_url = $value;
+    };
     ($config:ident, asr_language, $value:expr) => {
         $config.asr.language = $value;
     };
     ($config:ident, asr_model, $value:expr) => {
         $config.asr.model = $value;
+    };
+    ($config:ident, interim_asr_model, $value:expr) => {
+        $config.asr.interim_model = $value;
     };
     ($config:ident, asr_precision, $value:expr) => {
         $config.asr.precision = $value;
@@ -68,8 +83,14 @@ macro_rules! parapper_config_field {
     ($config:ident, translation_enabled, $value:expr) => {
         $config.translation.enabled = $value;
     };
-    ($config:ident, translation_plugin_http_port, $value:expr) => {
-        $config.translation.plugin_http_port = $value;
+    ($config:ident, ync_plugin_port, $value:expr) => {
+        $config.translation.ync_plugin_port = $value;
+    };
+    ($config:ident, translation_local_server_port, $value:expr) => {
+        $config.translation.local_server_port = $value;
+    };
+    ($config:ident, translation_local_server_model, $value:expr) => {
+        $config.translation.local_server_model = $value;
     };
     ($config:ident, translation_send_timing, $value:expr) => {
         $config.translation.send_timing = $value;
@@ -137,19 +158,22 @@ mod audio;
 #[cfg(not(test))]
 mod commands;
 mod config;
-mod config_preset;
 mod connect;
 mod delivery;
 mod error_event;
 mod model;
 mod playback;
 mod recognition;
+#[cfg(feature = "smoke-server")]
+pub mod smoke_server;
 mod state;
+mod streaming_recognition;
 mod synthesis;
 mod translation;
 
 #[cfg(test)]
 mod pipeline_tests;
+mod processing;
 
 #[cfg(not(test))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -206,6 +230,8 @@ pub fn run() {
             commands::delete_config_preset,
             commands::get_audio_devices,
             commands::get_output_audio_devices,
+            commands::request_loopback_audio_permission,
+            commands::open_system_audio_permission_settings,
             commands::find_neo_http_port,
             commands::find_ync_plugin_http_port,
             commands::check_neo_http_available,
@@ -215,7 +241,12 @@ pub fn run() {
             commands::neo_speech_test,
             commands::get_model_status,
             commands::has_any_model_installed,
+            commands::get_translation_http_listener_status,
+            commands::start_translation_http_listener,
+            commands::stop_translation_http_listener,
             commands::download_models,
+            commands::get_local_translation_model_installed,
+            commands::download_local_translation_model,
             commands::save_recognition_csv,
             commands::save_asr_input_wav,
             commands::get_recognition_status,

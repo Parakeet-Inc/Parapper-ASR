@@ -6,7 +6,9 @@ use crate::config::{AsrLanguage, AsrModel, SpeechSourceKind};
 #[serde(rename_all = "snake_case")]
 pub enum RecognitionStatus {
     Idle,
+    WaitingForClient,
     Listening,
+    Draining,
     Stopped,
     Error,
 }

@@ -5,7 +5,7 @@ use crate::recognition::{
     transcription::{
         asr::task::{
             AsrInFlight, AsrRequest, AsrRequestId, AsrResult, AsrTaskKind, AudioRange,
-            GlobalSampleIndex, TurnId, VadFrameIndex,
+            GlobalSampleIndex, VadFrameIndex,
         },
         planner::{
             PendingAsrSegment, drop_front_interim_segments_covered_by_completion,
@@ -47,7 +47,7 @@ impl RecognitionSession {
         let end_sample = GlobalSampleIndex(self.counters.global_sample_cursor);
         let start_sample =
             GlobalSampleIndex(self.counters.global_sample_cursor.saturating_sub(audio_len));
-        self.pending.asr_segments.push_back(PendingAsrSegment {
+        let segment = PendingAsrSegment {
             segment_id,
             previous_segment_id,
             audio: full_audio,
@@ -57,7 +57,89 @@ impl RecognitionSession {
             reason,
             range: AudioRange::new(start_sample, end_sample),
             created_at_frame: VadFrameIndex(self.counters.next_vad_frame_index),
+        };
+        if reason == SegmentCloseReason::InterimResultSilenceReached {
+            let streaming_interim_enabled = self.streaming_interim_asr_enabled();
+            if let Some(segment) = self
+                .pending
+                .interim_asr
+                .interim_request(streaming_interim_enabled, segment)
+            {
+                self.pending.asr_segments.push_back(segment);
+            }
+        } else {
+            self.pending.asr_segments.push_back(segment);
+        }
+    }
+
+    pub(in crate::recognition) fn record_interim_segment_started(
+        &mut self,
+        segment_id: u64,
+        previous_segment_id: Option<u64>,
+        audio_so_far: Vec<f32>,
+        vad_results: Vec<VadResult>,
+    ) {
+        if !self.streaming_interim_asr_enabled() {
+            self.pending.interim_asr.clear_streaming();
+            return;
+        }
+        let ready = self.pending.interim_asr.start_streaming_segment(
+            segment_id,
+            previous_segment_id,
+            audio_so_far,
+            vad_results,
+            GlobalSampleIndex(self.counters.global_sample_cursor),
+            VadFrameIndex(self.counters.next_vad_frame_index),
+        );
+        self.pending.asr_segments.extend(ready);
+    }
+
+    pub(in crate::recognition) fn record_interim_segment_extended(
+        &mut self,
+        segment_id: u64,
+        previous_segment_id: Option<u64>,
+        new_audio: Vec<f32>,
+        vad_result: VadResult,
+    ) {
+        if !self.streaming_interim_asr_enabled() {
+            self.pending.interim_asr.clear_streaming();
+            return;
+        }
+        let ready = self.pending.interim_asr.extend_streaming_segment(
+            segment_id,
+            previous_segment_id,
+            new_audio,
+            vad_result,
+            GlobalSampleIndex(self.counters.global_sample_cursor),
+            VadFrameIndex(self.counters.next_vad_frame_index),
+        );
+        self.pending.asr_segments.extend(ready);
+    }
+
+    pub(in crate::recognition) fn reset_interim_streaming_for_completion(
+        &mut self,
+        segment_id: u64,
+    ) {
+        let display_segment_id = self
+            .pending
+            .interim_asr
+            .clear_streaming_if_segment(segment_id)
+            .unwrap_or(segment_id);
+        self.pending.asr_segments.retain(|segment| {
+            segment.reason != SegmentCloseReason::InterimChunkReached
+                || (segment.segment_id != display_segment_id && segment.segment_id != segment_id)
         });
+        self.io.asr_runner.reset_streaming_sessions();
+    }
+
+    fn streaming_interim_asr_enabled(&self) -> bool {
+        self.config.turn.interim_result_enabled
+            && self
+                .config
+                .asr
+                .interim_model
+                .unwrap_or(self.config.asr.model)
+                .is_nemotron()
     }
 
     pub(in crate::recognition) fn take_next_request_id(&mut self) -> u64 {
@@ -100,7 +182,17 @@ impl RecognitionSession {
                 );
                 continue;
             }
-            let target_turn_id = plan.target_turn_id(&self.config, self.turn_store.open_turn_id);
+            let target_turn_id = plan.target_turn_id(
+                &self.config,
+                self.turn_store.open_turn_id,
+                self.turn_store.open_turn_accepts_root_segment,
+            );
+            if self.turn_store.finalized_turns.contains(&target_turn_id) {
+                log::warn!(
+                    "Dropping pending ASR segment plan for finalized turn: turn_id={target_turn_id} range={range:?}",
+                );
+                continue;
+            }
             let source_audio = plan.source_audio();
             let route_selection = self.route_selection_for_asr_request(
                 target_turn_id,
@@ -240,15 +332,6 @@ impl RecognitionSession {
             request,
             AsrResultReductionInput {
                 stale_input: self.stale_input_for_request(request),
-                interim_is_covered_by_completion: request.kind == AsrTaskKind::InterimDisplay
-                    && self.interim_result_is_already_covered_by_completion(
-                        request.target.turn_id.0,
-                        request
-                            .target
-                            .last_segment_id
-                            .map(|segment_id| segment_id.0),
-                        request.target.range,
-                    ),
                 completion_has_non_empty_draft: request.kind == AsrTaskKind::CompletionCheck
                     && self.turn_has_non_empty_draft(request.target.turn_id.0),
                 completion_failure_action: self.completion_failure_action_for_request(),
@@ -292,18 +375,19 @@ impl RecognitionSession {
             AsrResultAction::ApplyInterimTranscript {
                 transcript,
                 elapsed_millis,
-                emit_interim,
             } => {
                 let turn_id = self.apply_segment_transcript(request, transcript, elapsed_millis);
-                if emit_interim {
-                    self.emit_turn_output(turn_id, false);
-                }
+                self.emit_turn_output(turn_id, false);
+                let previous_open_turn_id = self.turn_store.open_turn_id;
                 if self
                     .turn_store
                     .open_turn_id
                     .is_none_or(|open_turn_id| open_turn_id <= turn_id)
                 {
                     self.turn_store.open_turn_id = Some(turn_id);
+                    if previous_open_turn_id != Some(turn_id) {
+                        self.turn_store.open_turn_accepts_root_segment = false;
+                    }
                 }
             }
             AsrResultAction::ApplyCompletionTranscript {
@@ -342,28 +426,6 @@ impl RecognitionSession {
         }
     }
 
-    fn interim_result_is_already_covered_by_completion(
-        &self,
-        turn_id: u64,
-        last_segment_id: Option<u64>,
-        range: AudioRange,
-    ) -> bool {
-        if last_segment_id.is_some_and(|segment_id| {
-            self.pending.turn_check.is_some_and(|turn_check| {
-                turn_check.previous_segment_id == segment_id
-                    && turn_check.activity_epoch == self.activity.segment_activity_epoch
-            })
-        }) {
-            return true;
-        }
-
-        self.pending.asr_segments.iter().any(|segment| {
-            segment.kind() == AsrTaskKind::CompletionCheck
-                && segment.turn_id() == TurnId(turn_id)
-                && segment.range.contains(range)
-        })
-    }
-
     fn stale_input_for_request(&self, request: &AsrRequest) -> AsrRequestStaleInput {
         AsrRequestStaleInput {
             current_revision: *self
@@ -372,13 +434,25 @@ impl RecognitionSession {
                 .get(&request.target.turn_id.0)
                 .unwrap_or(&0),
             confirmed_until_sample: self.turn_store.confirmed_until_sample,
+            target_turn_is_finalized: self
+                .turn_store
+                .finalized_turns
+                .contains(&request.target.turn_id.0),
             turn_route: self
                 .turn_store
                 .turns
                 .get(&request.target.turn_id.0)
-                .and_then(|turn| turn.draft().route),
+                .and_then(|turn| turn.draft().route)
+                .filter(|route| {
+                    request.kind == AsrTaskKind::InterimDisplay || !route.model.is_interim_only()
+                }),
             last_recognition_route: self.turn_store.last_recognition_route,
             default_route: RecognitionRoute::from_model(self.config.asr.model),
+            split_route:
+                crate::recognition::transcription::route::selection::configured_split_route(
+                    &self.config,
+                    request.kind,
+                ),
         }
     }
 
@@ -456,7 +530,7 @@ mod tests {
     use crate::{
         config::{AsrLanguage, AsrModel, ParapperConfig, TurnDetector},
         recognition::{
-            transcription::asr::task::{AsrTarget, SegmentId, TurnRevision},
+            transcription::asr::task::{AsrTarget, SegmentId, TurnId, TurnRevision},
             turn::Turn,
         },
     };

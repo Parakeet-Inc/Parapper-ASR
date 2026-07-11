@@ -16,8 +16,8 @@ pub(crate) use crate::translation::{
 };
 #[cfg(test)]
 pub(crate) use common::{
-    SpeechTextSource, speech_mapping_matches, translation_targets_for_mappings,
-    translation_timing_allows,
+    SpeechTextSource, TranslationProviderId, speech_mapping_matches,
+    translation_targets_for_mappings, translation_timing_allows,
 };
 pub(crate) use common::{continuing_turn_text, finalize_turn_text, join_turn_segments};
 pub(crate) use dispatch::dispatch_recognized_text;

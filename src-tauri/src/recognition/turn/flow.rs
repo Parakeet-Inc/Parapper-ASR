@@ -9,7 +9,7 @@ use crate::recognition::{
                 GlobalSampleIndex, SegmentId, TurnId, TurnRevision, VadFrameIndex,
             },
         },
-        route::RecognitionRoute,
+        route::{RecognitionRoute, selection::configured_split_route},
     },
     turn::{
         policy::{completion, namo, silence, timeout},
@@ -46,8 +46,8 @@ impl RecognitionSession {
             return false;
         }
         let Some((
-            route,
-            detected_language,
+            draft_route,
+            mut detected_language,
             mut audio,
             mut vad_results,
             first_segment_id,
@@ -66,6 +66,17 @@ impl RecognitionSession {
         else {
             return false;
         };
+        let route = configured_split_route(&self.config, AsrTaskKind::Rerecognition)
+            .unwrap_or_else(|| {
+                if draft_route.model.is_interim_only() {
+                    RecognitionRoute::from_model(self.config.asr.model)
+                } else {
+                    draft_route
+                }
+            });
+        if route != draft_route {
+            detected_language = None;
+        }
         if audio.is_empty() {
             return false;
         }
@@ -172,6 +183,7 @@ impl RecognitionSession {
 
     pub(in crate::recognition) fn keep_turn_open(&mut self, turn_id: u64, emit_interim: bool) {
         self.turn_store.open_turn_id = Some(turn_id);
+        self.turn_store.open_turn_accepts_root_segment = true;
         self.reset_open_turn_timeout_origin();
         if emit_interim && self.config.turn.interim_result_enabled {
             self.emit_turn_output(turn_id, false);
@@ -190,6 +202,7 @@ impl RecognitionSession {
 
     pub(in crate::recognition) fn clear_open_turn(&mut self) {
         self.turn_store.open_turn_id = None;
+        self.turn_store.open_turn_accepts_root_segment = false;
         self.activity.open_turn_since_tick = None;
     }
 
@@ -253,28 +266,46 @@ impl RecognitionSession {
     }
 
     fn can_promote_pending_interim_to_completion(&self, previous_segment_id: u64) -> bool {
-        self.pending.asr_segments.front().is_some_and(|segment| {
-            segment.reason == SegmentCloseReason::InterimResultSilenceReached
-                && segment.last_segment_id().0 == previous_segment_id
-        })
+        self.promotable_pending_interim_index(previous_segment_id)
+            .is_some()
     }
 
     fn promote_pending_interim_to_completion_for_turn_check(
         &mut self,
         previous_segment_id: u64,
     ) -> bool {
+        let Some(index) = self.promotable_pending_interim_index(previous_segment_id) else {
+            return false;
+        };
+        for _ in 0..index {
+            self.pending.asr_segments.pop_front();
+        }
+
         let Some(segment) = self.pending.asr_segments.front_mut() else {
             return false;
         };
-        if segment.reason != SegmentCloseReason::InterimResultSilenceReached
-            || segment.last_segment_id().0 != previous_segment_id
-        {
-            return false;
-        }
-
         segment.reason = SegmentCloseReason::EndSilenceReached;
         self.dispatch_next_asr_request_if_idle();
         self.requests.in_flight_request.is_some()
+    }
+
+    fn promotable_pending_interim_index(&self, previous_segment_id: u64) -> Option<usize> {
+        let candidate_index = self.pending.asr_segments.iter().position(|segment| {
+            segment.reason == SegmentCloseReason::InterimResultSilenceReached
+                && segment.last_segment_id().0 == previous_segment_id
+        })?;
+        let candidate = self.pending.asr_segments.get(candidate_index)?;
+        let preceding_segments_are_covered = self
+            .pending
+            .asr_segments
+            .iter()
+            .take(candidate_index)
+            .all(|segment| {
+                segment.kind() == AsrTaskKind::InterimDisplay
+                    && segment.turn_id() == candidate.turn_id()
+                    && candidate.range.contains(segment.range)
+            });
+        preceding_segments_are_covered.then_some(candidate_index)
     }
 
     pub(in crate::recognition) fn emit_stale_turn_finals(&mut self, before_turn_id: u64) {
@@ -323,9 +354,12 @@ impl RecognitionSession {
         let route = draft
             .route
             .unwrap_or_else(|| RecognitionRoute::from_model(self.config.asr.model));
-        let output_sequence = take_next_output_sequence(&mut self.counters.next_output_sequence);
-        let output = if is_final {
+        if is_final {
+            let output_sequence =
+                take_next_output_sequence(&mut self.counters.next_output_sequence);
             self.finalize_turn_audio_range(turn_id);
+            self.turn_store.finalized_turns.insert(turn_id);
+            self.turn_store.streaming_interim_ranges.remove(&turn_id);
             let Some(turn) = self.turn_store.turns.remove(&turn_id) else {
                 return;
             };
@@ -338,22 +372,34 @@ impl RecognitionSession {
                 return;
             };
             *self.turn_store.revisions.entry(turn_id).or_insert(0) += 1;
-            confirmed.into_output()
-        } else {
-            let Some(output) = draft.interim_output(
-                self.counters.turn_session_id,
-                turn_id,
-                output_sequence,
-                route,
-            ) else {
-                return;
-            };
-            output
+            self.io.output_sink.emit(confirmed.into_output());
+            return;
+        }
+
+        // Only emit an interim when the turn text changed since the last emitted interim;
+        // skip without consuming an output sequence when it is unchanged.
+        if draft.last_emitted_interim_text.as_deref() == Some(draft.combined_text.as_str()) {
+            return;
+        }
+        let combined_text = draft.combined_text.clone();
+        let output_sequence = take_next_output_sequence(&mut self.counters.next_output_sequence);
+        let Some(output) = draft.interim_output(
+            self.counters.turn_session_id,
+            turn_id,
+            output_sequence,
+            route,
+        ) else {
+            return;
         };
+        if let Some(turn) = self.turn_store.turns.get_mut(&turn_id) {
+            turn.draft_mut().last_emitted_interim_text = Some(combined_text);
+        }
         self.io.output_sink.emit(output);
     }
 
     fn cleanup_final_turn_state(&mut self, turn_id: u64) {
+        self.turn_store.finalized_turns.insert(turn_id);
+        self.turn_store.streaming_interim_ranges.remove(&turn_id);
         self.finalize_turn_audio_range(turn_id);
         self.turn_store.turns.remove(&turn_id);
     }

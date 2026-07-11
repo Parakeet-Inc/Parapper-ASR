@@ -19,9 +19,9 @@ import { useAsrModelOptions } from "../../hooks/use-asr-model-options";
 import { useVoiceList } from "../../hooks/use-voice-list";
 import { buildAudioDeviceOptions } from "../../lib/audio-devices";
 import {
-  languageOptions,
   makeId,
   modelOptionsWithAny,
+  translationLanguageOptions,
 } from "../../lib/mapping-options";
 import { isMacOs } from "../../lib/platform";
 import type {
@@ -57,7 +57,7 @@ export const SpeechSettings: React.FC<SpeechSettingsProps> = ({
 }) => {
   const { t } = useTranslation();
   const { voiceList, refreshingVoiceList, refreshVoiceList } = useVoiceList(
-    config.translation_plugin_http_port,
+    config.ync_plugin_port,
   );
   const shouldShowNeoReadAloudWarning =
     neoReadAloudDelaySuspected &&
@@ -218,7 +218,7 @@ const SpeechMappingRows: React.FC<{
     asrModelSelectOptions,
   );
   const defaultTranslationTarget =
-    config.translation_mappings[0]?.target_lang ?? "en_US";
+    config.translation_mappings[0]?.target_lang ?? "en";
   const yncPluginAvailable = !isMacOs();
   const backendOptions = [
     ...(yncPluginAvailable
@@ -340,9 +340,8 @@ const SpeechMappingRows: React.FC<{
             ) : (
               <Select
                 label={t("speechSettings.mapping.targetLang")}
-                data={languageOptions}
+                data={translationLanguageOptions}
                 value={mapping.target_lang ?? defaultTranslationTarget}
-                searchable
                 allowDeselect={false}
                 disabled={modelLocked}
                 onChange={(value) =>

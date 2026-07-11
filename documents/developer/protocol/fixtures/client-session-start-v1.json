@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "type": "session.start",
+  "session_id": "fixture-session",
+  "audio": {
+    "encoding": "pcm_s16le",
+    "sample_rate": 16000,
+    "channels": 1
+  }
+}

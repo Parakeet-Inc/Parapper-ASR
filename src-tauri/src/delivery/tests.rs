@@ -5,14 +5,15 @@ use std::{
 
 use super::{
     QueuedSpeechRequest, RecognitionSourceMeta, RecognizedTextMeta, RecognizedTextOutput,
-    SpeechTextSource, build_speech_requests, build_translation_request, continuing_turn_text,
-    finalize_turn_text, join_turn_segments, should_send_to_neo, spawn_speech_requests,
-    speech_mapping_matches, translate_and_spawn_speech_for_test, translation_targets_for_mappings,
-    translation_timing_allows,
+    SpeechTextSource, TranslationProviderId, build_speech_requests, build_translation_request,
+    continuing_turn_text, finalize_turn_text, join_turn_segments, should_send_to_neo,
+    spawn_speech_requests, speech_mapping_matches, translate_and_spawn_speech_for_test,
+    translation_targets_for_mappings, translation_timing_allows,
 };
 use crate::config::{
-    AsrLanguage, AsrModel, LocalTtsVoice, NeoSendTiming, ParapperConfig, SpeechBackend,
-    SpeechMapping, SpeechSourceKind, TranslationMapping, TurnDetector,
+    AsrLanguage, AsrModel, LocalTranslationModel, LocalTtsVoice, NeoSendTiming, ParapperConfig,
+    SpeechBackend, SpeechMapping, SpeechSourceKind, TranslationBackend, TranslationLanguage,
+    TranslationMapping, TurnDetector,
 };
 use crate::connect::test_support::{
     MockHttpServer, TimedMockHttpServer, json_response, request_id_from_plugin_request,
@@ -35,7 +36,7 @@ fn turn_meta(id: &str, turn_id: u64, is_final: bool) -> RecognizedTextMeta {
 
 fn recognized_output(id: &str, turn_id: u64, text: &str, is_final: bool) -> RecognizedTextOutput {
     RecognizedTextOutput {
-        phrase: Vec::new(),
+        phrase: Vec::new().into(),
         text: text.to_string(),
         source_asr_model: AsrModel::ReazonSpeechK2V2,
         source_language: AsrLanguage::Japanese,
@@ -49,7 +50,10 @@ fn translation_mapping(id: &str, target_lang: &str) -> TranslationMapping {
     TranslationMapping {
         id: id.to_string(),
         source_asr_model: None,
-        target_lang: target_lang.to_string(),
+        backend: TranslationBackend::Ync,
+        local_model: LocalTranslationModel::default(),
+        source_lang: TranslationLanguage::Ja,
+        target_lang: TranslationLanguage::from_code(target_lang).expect("en/ja translation target"),
     }
 }
 
@@ -201,22 +205,19 @@ fn turn_display_text_decision_table() {
 }
 
 #[test]
-fn neo_send_timing_decision_table() {
+fn neo_enabled_sends_both_interim_and_final_with_fixed_text_flag() {
     let cases = [
-        (NeoSendTiming::Interim, true, false, true),
-        (NeoSendTiming::Interim, true, true, true),
-        (NeoSendTiming::Final, true, false, false),
-        (NeoSendTiming::Final, true, true, true),
-        (NeoSendTiming::Interim, false, false, false),
-        (NeoSendTiming::Interim, false, true, false),
-        (NeoSendTiming::Final, false, false, false),
-        (NeoSendTiming::Final, false, true, false),
+        (true, false, true),
+        (true, true, true),
+        (false, false, false),
+        (false, true, false),
     ];
 
-    for (timing, http_enabled, is_final, expected_when_supported) in cases {
+    for (http_enabled, is_final, expected_when_supported) in cases {
         let config = parapper_config! {
             neo_http_enabled: http_enabled,
-            neo_send_timing: timing,
+            // Legacy persisted values must no longer suppress interim events.
+            neo_send_timing: NeoSendTiming::Final,
             ..ParapperConfig::default()
         };
         let expected = expected_when_supported && ParapperConfig::neo_http_supported();
@@ -224,7 +225,7 @@ fn neo_send_timing_decision_table() {
         assert_eq!(
             should_send_to_neo(&config, is_final),
             expected,
-            "timing={timing:?}, http_enabled={http_enabled}, is_final={is_final}"
+            "http_enabled={http_enabled}, is_final={is_final}"
         );
     }
 }
@@ -258,7 +259,7 @@ fn final_only_translation_skips_non_final_turn_results() {
     let config = parapper_config! {
         translation_enabled: true,
         translation_send_timing: NeoSendTiming::Final,
-        translation_mappings: vec![translation_mapping("translate-en", "en_US")],
+        translation_mappings: vec![translation_mapping("translate-en", "en")],
         ..ParapperConfig::default()
     };
     let output = recognized_output("turn-1", 1, "今日は...", false);
@@ -275,12 +276,12 @@ fn final_only_translation_skips_namo_intermediate_turn_segments() {
         translation_send_timing: NeoSendTiming::Final,
         translation_mappings: vec![TranslationMapping {
             source_asr_model: Some(AsrModel::ReazonSpeechK2V2),
-            ..translation_mapping("translate-en", "en_US")
+            ..translation_mapping("translate-en", "en")
         }],
         ..ParapperConfig::default()
     };
     let output = RecognizedTextOutput {
-        phrase: vec![0.0, 1.0],
+        phrase: vec![0.0, 1.0].into(),
         detected_language: Some("ja".to_string()),
         elapsed_millis: 42,
         ..recognized_output("turn-namo-1", 1, "ここまでを翻訳します...", false)
@@ -298,12 +299,12 @@ fn final_only_translation_sends_namo_completed_turn_results() {
         translation_send_timing: NeoSendTiming::Final,
         translation_mappings: vec![TranslationMapping {
             source_asr_model: Some(AsrModel::ReazonSpeechK2V2),
-            ..translation_mapping("translate-en", "en_US")
+            ..translation_mapping("translate-en", "en")
         }],
         ..ParapperConfig::default()
     };
     let output = RecognizedTextOutput {
-        phrase: vec![0.0, 1.0],
+        phrase: vec![0.0, 1.0].into(),
         detected_language: Some("ja".to_string()),
         elapsed_millis: 42,
         ..recognized_output("turn-namo-1", 1, "これは中途確定です。", true)
@@ -325,7 +326,7 @@ fn namo_completed_turn_is_eligible_for_final_translation_and_speech() {
         translation_send_timing: NeoSendTiming::Final,
         translation_mappings: vec![TranslationMapping {
             source_asr_model: Some(AsrModel::ReazonSpeechK2V2),
-            ..translation_mapping("translate-en", "en_US")
+            ..translation_mapping("translate-en", "en")
         }],
         speech_mappings: vec![SpeechMapping {
             volume: 0.0,
@@ -334,7 +335,7 @@ fn namo_completed_turn_is_eligible_for_final_translation_and_speech() {
         ..ParapperConfig::default()
     };
     let output = RecognizedTextOutput {
-        phrase: vec![0.0, 1.0],
+        phrase: vec![0.0, 1.0].into(),
         detected_language: Some("ja".to_string()),
         elapsed_millis: 42,
         ..recognized_output("turn-namo-final", 1, "TDで確定した文です。", true)
@@ -382,19 +383,19 @@ fn final_only_translation_builds_only_one_request_for_namo_interim_and_final_pai
         translation_send_timing: NeoSendTiming::Final,
         translation_mappings: vec![TranslationMapping {
             source_asr_model: Some(AsrModel::ReazonSpeechK2V2),
-            ..translation_mapping("translate-en", "en_US")
+            ..translation_mapping("translate-en", "en")
         }],
         ..ParapperConfig::default()
     };
     let outputs = [
         RecognizedTextOutput {
-            phrase: vec![0.0, 1.0],
+            phrase: vec![0.0, 1.0].into(),
             detected_language: Some("ja".to_string()),
             elapsed_millis: 42,
             ..recognized_output("turn-namo-1", 1, "これは途中です...", false)
         },
         RecognizedTextOutput {
-            phrase: vec![0.0, 1.0],
+            phrase: vec![0.0, 1.0].into(),
             detected_language: Some("ja".to_string()),
             elapsed_millis: 84,
             ..recognized_output("turn-namo-1", 1, "これは確定です。", true)
@@ -417,7 +418,7 @@ fn interim_translation_sends_non_final_turn_results_without_continuation_marker(
     let config = parapper_config! {
         translation_enabled: true,
         translation_send_timing: NeoSendTiming::Interim,
-        translation_mappings: vec![translation_mapping("translate-en", "en_US")],
+        translation_mappings: vec![translation_mapping("translate-en", "en")],
         ..ParapperConfig::default()
     };
     let output = recognized_output("turn-1", 1, "今日は...", false);
@@ -436,7 +437,7 @@ fn translation_requests_work_across_turn_detector_modes() {
             turn_detector: turn_detector,
             translation_enabled: true,
             translation_send_timing: NeoSendTiming::Interim,
-            translation_mappings: vec![translation_mapping("translate-en", "en_US")],
+            translation_mappings: vec![translation_mapping("translate-en", "en")],
             ..ParapperConfig::default()
         };
 
@@ -475,7 +476,7 @@ fn translation_request_survives_when_neo_text_input_is_disabled() {
         neo_http_enabled: false,
         translation_enabled: true,
         translation_send_timing: NeoSendTiming::Final,
-        translation_mappings: vec![translation_mapping("translate-en", "en_US")],
+        translation_mappings: vec![translation_mapping("translate-en", "en")],
         ..ParapperConfig::default()
     }
     .normalized();
@@ -497,15 +498,64 @@ fn translation_request_survives_when_neo_text_input_is_disabled() {
 fn translation_mappings_keep_top_priority() {
     let targets = translation_targets_for_mappings(
         &[
-            translation_mapping("translate-en-primary", "en_US"),
-            translation_mapping("translate-en-secondary", "en_US"),
-            translation_mapping("translate-fr", "fr_FR"),
+            TranslationMapping {
+                backend: TranslationBackend::Local,
+                local_model: LocalTranslationModel::Lfm2Q4,
+                ..translation_mapping("translate-en-primary", "en")
+            },
+            TranslationMapping {
+                backend: TranslationBackend::Ync,
+                ..translation_mapping("translate-en-secondary", "en")
+            },
+            TranslationMapping {
+                source_lang: TranslationLanguage::En,
+                target_lang: TranslationLanguage::Ja,
+                ..translation_mapping("translate-en-ja", "ja")
+            },
         ],
         AsrModel::ReazonSpeechK2V2,
         AsrLanguage::Japanese,
+        None,
     );
 
-    assert_eq!(targets, vec!["en_US".to_string(), "fr_FR".to_string()]);
+    assert_eq!(targets.len(), 1);
+    assert_eq!(
+        targets[0].provider_id,
+        TranslationProviderId::Local(LocalTranslationModel::Lfm2Q4)
+    );
+    assert_eq!(targets[0].source_lang, TranslationLanguage::Ja);
+    assert_eq!(targets[0].target_lang, TranslationLanguage::En);
+}
+
+#[test]
+fn translation_mapping_source_language_selects_expected_backend_target() {
+    let targets = translation_targets_for_mappings(
+        &[
+            TranslationMapping {
+                backend: TranslationBackend::Ync,
+                source_lang: TranslationLanguage::Ja,
+                target_lang: TranslationLanguage::En,
+                ..translation_mapping("translate-ja-en", "en")
+            },
+            TranslationMapping {
+                backend: TranslationBackend::Local,
+                source_lang: TranslationLanguage::En,
+                target_lang: TranslationLanguage::Ja,
+                ..translation_mapping("translate-en-ja", "ja")
+            },
+        ],
+        AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8,
+        AsrLanguage::Multilingual,
+        Some("en"),
+    );
+
+    assert_eq!(targets.len(), 1);
+    assert_eq!(
+        targets[0].provider_id,
+        TranslationProviderId::Local(LocalTranslationModel::Lfm2Q4)
+    );
+    assert_eq!(targets[0].source_lang, TranslationLanguage::En);
+    assert_eq!(targets[0].target_lang, TranslationLanguage::Ja);
 }
 
 #[test]
@@ -522,9 +572,7 @@ fn speech_mapping_matches_recognition_source() {
     ));
     assert!(!speech_mapping_matches(
         &mapping,
-        SpeechTextSource::Translation {
-            target_lang: "en_US",
-        },
+        SpeechTextSource::Translation { target_lang: "en" },
         AsrModel::ReazonSpeechK2V2,
     ));
 }
@@ -738,19 +786,17 @@ fn build_speech_requests_sends_once_for_namo_interim_and_final_pair_by_source_ki
         SpeechOnceCase {
             name: "translation",
             mapping: SpeechMapping {
-                target_lang: Some("en_US".to_string()),
+                target_lang: Some("en".to_string()),
                 talker: "Microsoft Zira Desktop/SAPI5".to_string(),
                 ..speech_mapping("speech-en", SpeechSourceKind::Translation)
             },
-            source_event_id: "turn-namo-1|en_US",
-            source: SpeechTextSource::Translation {
-                target_lang: "en_US",
-            },
+            source_event_id: "turn-namo-1|en",
+            source: SpeechTextSource::Translation { target_lang: "en" },
             interim_text: "This is interim.",
             final_text: "This is final.",
-            expected_id: "speech-turn-namo-1|en_US-speech-en",
+            expected_id: "speech-turn-namo-1|en-speech-en",
             expected_kind: SpeechSourceKind::Translation,
-            expected_target_lang: Some("en_US"),
+            expected_target_lang: Some("en"),
             expected_talker: "Microsoft Zira Desktop/SAPI5",
         },
     ];
@@ -828,14 +874,12 @@ fn build_speech_requests_skips_namo_intermediate_segments_by_source_kind() {
         NamoIntermediateSkipCase {
             name: "translation",
             mapping: SpeechMapping {
-                target_lang: Some("en_US".to_string()),
+                target_lang: Some("en".to_string()),
                 talker: "Microsoft Zira Desktop/SAPI5".to_string(),
                 ..speech_mapping("speech-en", SpeechSourceKind::Translation)
             },
-            source_event_id: "turn-namo-1|en_US",
-            source: SpeechTextSource::Translation {
-                target_lang: "en_US",
-            },
+            source_event_id: "turn-namo-1|en",
+            source: SpeechTextSource::Translation { target_lang: "en" },
             text: "I will read this segment.",
         },
     ];
@@ -885,7 +929,7 @@ fn recognition_speech_is_sent_once_for_interim_and_final_pair() {
     );
     let config = parapper_config! {
         turn_detector: TurnDetector::Namo,
-        translation_plugin_http_port: server.port(),
+        ync_plugin_port: server.port(),
         speech_mappings: vec![speech_mapping("speech-ja", SpeechSourceKind::Recognition)],
         ..ParapperConfig::default()
     };
@@ -930,23 +974,19 @@ fn recognition_speech_is_sent_once_for_interim_and_final_pair() {
 #[test]
 fn speech_mapping_matches_translation_target() {
     let mapping = SpeechMapping {
-        target_lang: Some("en_US".to_string()),
+        target_lang: Some("en".to_string()),
         talker: "ずんだもん/VOICEVOX".to_string(),
         ..speech_mapping("speech-en", SpeechSourceKind::Translation)
     };
 
     assert!(speech_mapping_matches(
         &mapping,
-        SpeechTextSource::Translation {
-            target_lang: "en_US",
-        },
+        SpeechTextSource::Translation { target_lang: "en" },
         AsrModel::ReazonSpeechK2V2,
     ));
     assert!(!speech_mapping_matches(
         &mapping,
-        SpeechTextSource::Translation {
-            target_lang: "fr_FR",
-        },
+        SpeechTextSource::Translation { target_lang: "ja" },
         AsrModel::ReazonSpeechK2V2,
     ));
 }
@@ -955,7 +995,7 @@ fn speech_mapping_matches_translation_target() {
 fn build_speech_requests_uses_translated_text_for_translation_mapping() {
     let config = parapper_config! {
         speech_mappings: vec![SpeechMapping {
-            target_lang: Some("en_US".to_string()),
+            target_lang: Some("en".to_string()),
             talker: "Microsoft Zira Desktop/SAPI5".to_string(),
             ..speech_mapping("speech-en", SpeechSourceKind::Translation)
         }],
@@ -964,10 +1004,8 @@ fn build_speech_requests_uses_translated_text_for_translation_mapping() {
 
     let requests = build_speech_requests(
         &config,
-        "turn-1|en_US",
-        SpeechTextSource::Translation {
-            target_lang: "en_US",
-        },
+        "turn-1|en",
+        SpeechTextSource::Translation { target_lang: "en" },
         AsrModel::ReazonSpeechK2V2,
         true,
         "Hello.",
@@ -976,11 +1014,11 @@ fn build_speech_requests_uses_translated_text_for_translation_mapping() {
     assert_eq!(
         speech_request_snapshots(&requests),
         vec![SpeechRequestSnapshot {
-            id: "speech-turn-1|en_US-speech-en".to_string(),
-            source_event_id: "turn-1|en_US".to_string(),
-            source_meta: source_meta("turn-1|en_US", 1, 1),
+            id: "speech-turn-1|en-speech-en".to_string(),
+            source_event_id: "turn-1|en".to_string(),
+            source_meta: source_meta("turn-1|en", 1, 1),
             source_kind: SpeechSourceKind::Translation,
-            target_lang: Some("en_US".to_string()),
+            target_lang: Some("en".to_string()),
             text: "Hello.".to_string(),
             backend: SpeechBackend::Ync,
             talker: "Microsoft Zira Desktop/SAPI5".to_string(),
@@ -1250,10 +1288,10 @@ fn consecutive_translation_results_send_speech_to_mock_in_queue_order() {
     assert_eq!(
         speech_ids,
         vec![
-            "speech-turn-translation-1|en_US-speech-en",
-            "speech-turn-translation-2|en_US-speech-en",
-            "speech-turn-translation-3|en_US-speech-en",
-            "speech-turn-translation-4|en_US-speech-en",
+            "speech-turn-translation-1|en-speech-en",
+            "speech-turn-translation-2|en-speech-en",
+            "speech-turn-translation-3|en-speech-en",
+            "speech-turn-translation-4|en-speech-en",
         ]
     );
     server.join();
@@ -1268,7 +1306,7 @@ fn final_only_translation_and_translation_speech_are_sent_once_for_interim_and_f
             let request_id = request_id_from_plugin_request(request);
             if request.contains(r#""operation":"translate""#) {
                 let body = format!(
-                    r#"{{"operation":"translate","status":"success","id":"{request_id}","lang":"en_US","text":"translated {request_id}"}}"#
+                    r#"{{"operation":"translate","status":"success","id":"{request_id}","lang":"en","text":"translated {request_id}"}}"#
                 );
                 return json_response(&body);
             }
@@ -1295,7 +1333,7 @@ fn final_only_translation_and_translation_speech_are_sent_once_for_interim_and_f
             assert_eq!(
                 translations,
                 vec![(
-                    "en_US".to_string(),
+                    "en".to_string(),
                     "translated turn-translation-once".to_string()
                 )]
             );
@@ -1318,7 +1356,7 @@ fn final_only_translation_and_translation_speech_are_sent_once_for_interim_and_f
     assert_eq!(translated_ids, vec!["turn-translation-once"]);
     assert_eq!(
         speech_ids,
-        vec!["speech-turn-translation-once|en_US-speech-en"]
+        vec!["speech-turn-translation-once|en-speech-en"]
     );
     assert!(
         server
@@ -1338,7 +1376,7 @@ fn non_final_translation_result_does_not_send_speech_to_mock() {
             let request_id = request_id_from_plugin_request(request);
             if request.contains(r#""operation":"translate""#) {
                 let body = format!(
-                    r#"{{"operation":"translate","status":"success","id":"{request_id}","lang":"en_US","text":"translated {request_id}"}}"#
+                    r#"{{"operation":"translate","status":"success","id":"{request_id}","lang":"en","text":"translated {request_id}"}}"#
                 );
                 return json_response(&body);
             }
@@ -1358,7 +1396,7 @@ fn non_final_translation_result_does_not_send_speech_to_mock() {
     };
     let recognized_text_id = "turn-translation-interim";
     let output = RecognizedTextOutput {
-        phrase: vec![0.0, 1.0],
+        phrase: vec![0.0, 1.0].into(),
         detected_language: Some("ja".to_string()),
         ..recognized_output(recognized_text_id, 1, "翻訳途中です...", false)
     };
@@ -1370,10 +1408,7 @@ fn non_final_translation_result_does_not_send_speech_to_mock() {
 
     assert_eq!(
         translations,
-        vec![(
-            "en_US".to_string(),
-            format!("translated {recognized_text_id}")
-        )]
+        vec![("en".to_string(), format!("translated {recognized_text_id}"))]
     );
     let received = server.recv_request();
     assert!(received.raw.contains(r#""operation":"translate""#));
@@ -1391,7 +1426,7 @@ fn start_translation_speech_mock(speech_response_delay: Duration) -> TimedMockHt
         let request_id = request_id_from_plugin_request(request);
         if request.contains(r#""operation":"translate""#) {
             let body = format!(
-                r#"{{"operation":"translate","status":"success","id":"{request_id}","lang":"en_US","text":"translated {request_id}"}}"#
+                r#"{{"operation":"translate","status":"success","id":"{request_id}","lang":"en","text":"translated {request_id}"}}"#
             );
             return json_response(&body);
         }
@@ -1410,14 +1445,14 @@ fn start_translation_speech_mock(speech_response_delay: Duration) -> TimedMockHt
 fn translation_speech_config(port: u16) -> ParapperConfig {
     parapper_config! {
         translation_enabled: true,
-        translation_plugin_http_port: port,
+        ync_plugin_port: port,
         translation_send_timing: NeoSendTiming::Final,
         translation_mappings: vec![TranslationMapping {
             source_asr_model: Some(AsrModel::ReazonSpeechK2V2),
-            ..translation_mapping("translate-en", "en_US")
+            ..translation_mapping("translate-en", "en")
         }],
         speech_mappings: vec![SpeechMapping {
-            target_lang: Some("en_US".to_string()),
+            target_lang: Some("en".to_string()),
             talker: "Microsoft Zira Desktop/SAPI5".to_string(),
             ..speech_mapping("speech-en", SpeechSourceKind::Translation)
         }],
@@ -1436,10 +1471,7 @@ fn send_mock_translation_turns(config: &ParapperConfig) {
             translate_and_spawn_speech_for_test(&request).expect("mock translation should succeed");
         assert_eq!(
             translations,
-            vec![(
-                "en_US".to_string(),
-                format!("translated {recognized_text_id}")
-            )]
+            vec![("en".to_string(), format!("translated {recognized_text_id}"))]
         );
     }
 }

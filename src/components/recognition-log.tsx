@@ -58,7 +58,7 @@ export const RecognitionLog: React.FC<RecognitionLogProps> = ({
     const logElement = logRef.current;
     if (!logElement) return;
     logElement.scrollTop = logElement.scrollHeight;
-  }, [recognizedTexts.length]);
+  }, [recognizedTexts]);
 
   const exportRecognizedTextsAsCsv = async () => {
     const csvExport = buildRecognitionCsvExport(recognizedTexts, {

@@ -7,14 +7,14 @@ use std::{
 use tauri::{AppHandle, Emitter};
 
 use crate::{
-    config::{ParapperConfig, SpeechBackend},
+    config::ParapperConfig,
     delivery::RecognizedTextOutput,
+    processing::ProcessingContext,
     recognition::control::events::{SpeechRequestEvent, SpeechRequestStatus},
 };
 
 use super::{
-    clients::send_ync_speech_request,
-    local::enqueue_local_tts_request,
+    provider::{SpeechOutcome, SpeechOutputProviderId, SpeechOutputProviderRegistry, SpeechTask},
     queue::{TtsQueueState, push_tts_requests},
     request::{QueuedSpeechRequest, speech_requests_for_recognized_text},
 };
@@ -99,43 +99,60 @@ pub(crate) fn spawn_speech_requests(
     if requests.is_empty() {
         return;
     }
-    if !ParapperConfig::neo_http_supported() {
-        log::warn!("Skipping speech: translation/speech plugin HTTP is unsupported");
-        return;
-    }
     TtsManager::global().submit_many(handle, requests);
 }
 
 fn process_speech_request(handle: Option<&AppHandle>, request: QueuedSpeechRequest) {
-    if request.backend == SpeechBackend::LocalTts {
-        enqueue_local_tts_request(handle, request);
-        return;
-    }
+    let provider_id = SpeechOutputProviderId::from(request.backend);
+    let task = SpeechTask {
+        id: request.id.clone(),
+        context: ProcessingContext::from_source(
+            &request.source_meta,
+            request.source_kind,
+            request.target_lang.clone(),
+        ),
+        text: request.text.clone(),
+        language: request
+            .local_tts_language
+            .clone()
+            .or_else(|| request.target_lang.clone()),
+        volume: request.volume,
+    };
     log::info!(
-        "Speech request enqueue id={} talker={} text_chars={}",
+        "Speech request dispatch id={} provider={provider_id:?} text_chars={}",
         request.id,
-        request.talker,
         request.text.chars().count()
     );
     let started_at = Instant::now();
-    match send_ync_speech_request(&request, started_at) {
-        Ok(elapsed_millis) => emit_speech_request_event(
+    let event_request = request.clone();
+    match SpeechOutputProviderRegistry::standard().submit(provider_id, handle, &task, request) {
+        Ok(SpeechOutcome::Accepted { elapsed_millis }) => emit_speech_request_event(
             handle,
-            &request,
+            &event_request,
             elapsed_millis,
             SpeechRequestStatus::Accepted,
             None,
         ),
+        Ok(SpeechOutcome::Deferred) => {}
         Err(err) => {
             let elapsed_millis = started_at.elapsed().as_millis();
-            log::warn!("Speech request failed for {}: {err}", request.id);
+            log::warn!("Speech request failed for {}: {err}", event_request.id);
             emit_speech_request_event(
                 handle,
-                &request,
+                &event_request,
                 elapsed_millis,
                 SpeechRequestStatus::Failure,
                 Some(err.to_string()),
             );
+        }
+    }
+}
+
+impl From<crate::config::SpeechBackend> for SpeechOutputProviderId {
+    fn from(value: crate::config::SpeechBackend) -> Self {
+        match value {
+            crate::config::SpeechBackend::Ync => Self::Ync,
+            crate::config::SpeechBackend::LocalTts => Self::Local,
         }
     }
 }

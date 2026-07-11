@@ -15,6 +15,8 @@ pub(crate) const MIN_LANGUAGE_ID_SAMPLES: usize = ASR_SAMPLE_RATE as usize;
 const NORMALIZED_ASR_INPUT_PEAK: f32 = 0.95;
 const ASR_EDGE_SILENCE_MS: usize = 320;
 const ASR_EDGE_FADE_MS: usize = 10;
+pub(crate) const NEMOTRON_CHUNK_MS: usize = 160;
+const NEMOTRON_EDGE_FADE_MS: usize = 80;
 
 #[derive(Clone, Copy)]
 pub(crate) enum AsrRequestEdgePadding {
@@ -110,6 +112,107 @@ pub(crate) fn prepare_asr_input_audio<'a>(
         audio: Cow::Owned(padded),
         leading_padding_samples: missing_leading,
     }
+}
+
+pub(crate) fn prepare_nemotron_input_audio<'a>(
+    audio: &'a [f32],
+    vad_results: &[VadResult],
+) -> PreparedAsrInput<'a> {
+    prepare_nemotron_input_audio_with_tail(audio, vad_results, NemotronTailPadding::AdjustmentOnly)
+}
+
+pub(crate) fn prepare_nemotron_streaming_bootstrap_audio<'a>(
+    audio: &'a [f32],
+    vad_results: &[VadResult],
+) -> PreparedAsrInput<'a> {
+    prepare_nemotron_input_audio_with_tail(audio, vad_results, NemotronTailPadding::None)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NemotronTailPadding {
+    None,
+    AdjustmentOnly,
+}
+
+fn prepare_nemotron_input_audio_with_tail<'a>(
+    audio: &'a [f32],
+    vad_results: &[VadResult],
+    tail: NemotronTailPadding,
+) -> PreparedAsrInput<'a> {
+    if audio.is_empty() {
+        return PreparedAsrInput {
+            audio: Cow::Borrowed(audio),
+            leading_padding_samples: 0,
+        };
+    }
+
+    let chunk_samples = samples_for_millis(NEMOTRON_CHUNK_MS);
+    let fade_samples = samples_for_millis(NEMOTRON_EDGE_FADE_MS).min(audio.len());
+    let (speech_start, speech_end) =
+        speech_sample_range(audio.len(), vad_results).unwrap_or((0, audio.len()));
+    let speech_len = speech_end.saturating_sub(speech_start);
+    let required_prefix =
+        fade_samples + alignment_padding_samples(fade_samples + speech_len, chunk_samples);
+    let leading_available = speech_start.min(audio.len());
+    let (copy_start, leading_padding_samples) = if leading_available >= required_prefix {
+        (speech_start - required_prefix, 0)
+    } else {
+        (0, required_prefix - leading_available)
+    };
+
+    let required_tail = match tail {
+        NemotronTailPadding::None => 0,
+        NemotronTailPadding::AdjustmentOnly => samples_for_millis(NEMOTRON_EDGE_FADE_MS),
+    };
+    let trailing_available = audio.len().saturating_sub(speech_end);
+    let tail_padding_samples = required_tail.saturating_sub(trailing_available);
+
+    let copied_len = audio.len().saturating_sub(copy_start);
+    let mut output = Vec::with_capacity(
+        leading_padding_samples + copied_len + tail_padding_samples + chunk_samples,
+    );
+    output.resize(leading_padding_samples, 0.0);
+    let copied_start = output.len();
+    output.extend_from_slice(&audio[copy_start..]);
+    let copied_end = output.len();
+    if copied_start < copied_end {
+        apply_fade_in(&mut output[copied_start..copied_end], fade_samples);
+        if tail != NemotronTailPadding::None && tail_padding_samples > 0 {
+            apply_fade_out(&mut output[copied_start..copied_end], fade_samples);
+        }
+    }
+    output.resize(output.len() + tail_padding_samples, 0.0);
+
+    let end_alignment = alignment_padding_samples(output.len(), chunk_samples);
+    output.resize(output.len() + end_alignment, 0.0);
+
+    PreparedAsrInput {
+        audio: Cow::Owned(output),
+        leading_padding_samples,
+    }
+}
+
+fn alignment_padding_samples(len: usize, chunk_samples: usize) -> usize {
+    let remainder = len % chunk_samples;
+    if remainder == 0 {
+        0
+    } else {
+        chunk_samples - remainder
+    }
+}
+
+fn speech_sample_range(audio_len: usize, vad_results: &[VadResult]) -> Option<(usize, usize)> {
+    if audio_len == 0 || vad_results.is_empty() {
+        return None;
+    }
+    let chunk_samples = estimated_vad_chunk_samples(audio_len, vad_results.len())?;
+    let first_speech = vad_results.iter().position(|vad| vad.is_speech)?;
+    let last_speech = vad_results.iter().rposition(|vad| vad.is_speech)?;
+    let start = first_speech.saturating_mul(chunk_samples).min(audio_len);
+    let end = (last_speech + 1)
+        .saturating_mul(chunk_samples)
+        .min(audio_len);
+    Some((start, end.max(start)))
 }
 
 #[expect(
@@ -316,9 +419,10 @@ mod tests {
     use std::borrow::Cow;
 
     use super::{
-        apply_fade_in, apply_fade_out, chunk_ranges,
+        NEMOTRON_CHUNK_MS, NEMOTRON_EDGE_FADE_MS, apply_fade_in, apply_fade_out, chunk_ranges,
         maybe_shift_transcript_timestamps_for_leading_padding, normalize_asr_input_audio,
-        prepare_asr_input_audio,
+        prepare_asr_input_audio, prepare_nemotron_input_audio,
+        prepare_nemotron_streaming_bootstrap_audio, samples_for_millis,
     };
     use crate::{
         config::ParapperConfig,
@@ -474,6 +578,82 @@ mod tests {
                 .iter()
                 .map(|sample| sample.to_bits())
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn prepare_nemotron_input_audio_aligns_to_160ms_and_adds_tail_adjustment() {
+        let audio = vec![1.0; 1_600];
+        let prepared = prepare_nemotron_input_audio(&audio, &vads(&[true]));
+
+        assert_eq!(
+            prepared.audio.len() % samples_for_millis(NEMOTRON_CHUNK_MS),
+            0,
+            "Nemotron ASR input must be aligned to the 160ms chunk grid"
+        );
+        assert!(
+            prepared.leading_padding_samples >= samples_for_millis(NEMOTRON_EDGE_FADE_MS),
+            "speech without pre-roll should receive at least the 80ms leading fade/padding window"
+        );
+        assert!(
+            prepared.audio.len()
+                >= prepared.leading_padding_samples
+                    + audio.len()
+                    + samples_for_millis(NEMOTRON_EDGE_FADE_MS),
+            "Nemotron input must include the 80ms tail adjustment window"
+        );
+    }
+
+    #[test]
+    fn prepare_nemotron_input_audio_reuses_pre_speech_audio_before_inserting_silence() {
+        let audio = vec![1.0; 5_120];
+        let prepared =
+            prepare_nemotron_input_audio(&audio, &vads(&[false, false, true, true, true]));
+
+        assert_eq!(
+            prepared.leading_padding_samples, 0,
+            "available non-speech pre-roll should be preferred over inserting synthetic silence"
+        );
+        assert_eq!(
+            prepared.audio.len() % samples_for_millis(NEMOTRON_CHUNK_MS),
+            0
+        );
+    }
+
+    #[test]
+    fn prepare_nemotron_streaming_bootstrap_audio_does_not_append_tail_adjustment() {
+        let audio = vec![1.0; samples_for_millis(NEMOTRON_CHUNK_MS)];
+        let prepared = prepare_nemotron_streaming_bootstrap_audio(&audio, &vads(&[true]));
+
+        assert_eq!(
+            prepared.audio.len(),
+            samples_for_millis(NEMOTRON_CHUNK_MS) * 2,
+            "streaming bootstrap should contain the leading fade/alignment window and the real audio, without a synthetic tail window"
+        );
+        assert_f32_close(
+            *prepared
+                .audio
+                .last()
+                .expect("streaming bootstrap audio should not be empty"),
+            1.0,
+            f32::EPSILON,
+        );
+    }
+
+    #[test]
+    fn prepare_nemotron_input_audio_aligns_start_padding_to_vad_speech_not_tail_silence() {
+        let audio = vec![1.0; 5_120];
+        let prepared =
+            prepare_nemotron_input_audio(&audio, &vads(&[false, true, true, false, false]));
+        let vad_chunk_samples = audio.len() / 5;
+        let speech_start = vad_chunk_samples;
+        let speech_len = vad_chunk_samples * 2;
+
+        assert_eq!(
+            (prepared.leading_padding_samples + speech_start + speech_len)
+                % samples_for_millis(NEMOTRON_CHUNK_MS),
+            0,
+            "start-side fade and adjustment must align with the VAD speech interval, not trailing silence"
         );
     }
 

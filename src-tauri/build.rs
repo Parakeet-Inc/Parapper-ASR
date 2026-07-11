@@ -10,8 +10,8 @@ fn main() {
 fn copy_sherpa_onnx_runtime_dlls() {
     use std::{env, fs, path::PathBuf};
 
-    const SHERPA_ONNX_VERSION: &str = "1.12.39";
-    const SHERPA_PREBUILT_DIR: &str = "sherpa-onnx-v1.12.39-win-x64-shared-MT-Release-lib";
+    const SHERPA_ONNX_VERSION: &str = "1.13.3";
+    const SHERPA_PREBUILT_DIR: &str = "sherpa-onnx-v1.13.3-win-x64-shared-MT-Release-lib";
 
     let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") else {
         return;
@@ -90,7 +90,7 @@ fn copy_sherpa_onnx_runtime_dlls() {}
 fn copy_macos_sherpa_runtime_libraries() {
     use std::{env, fs, path::PathBuf};
 
-    const SHERPA_PREBUILT_DIR: &str = "sherpa-onnx-v1.12.39-osx-arm64-shared-lib";
+    const SHERPA_PREBUILT_DIR: &str = "sherpa-onnx-v1.13.3-osx-arm64-shared-lib";
     const LIBRARIES: &[&str] = &[
         "libsherpa-onnx-c-api.dylib",
         "libsherpa-onnx-cxx-api.dylib",

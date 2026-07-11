@@ -1,201 +1,22 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    net::{IpAddr, SocketAddr},
+    path::Path,
+};
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Deserializer, Serialize, de::Error as DeError};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum NeoSendTiming {
-    Interim,
-    Final,
-}
-
-impl Default for NeoSendTiming {
-    fn default() -> Self {
-        Self::Interim
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AsrPrecision {
-    Int8,
-    Int8Float32,
-    Float32,
-}
-
-impl Default for AsrPrecision {
-    fn default() -> Self {
-        Self::Int8Float32
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum AsrModel {
-    #[serde(rename = "reazonspeech_k2_v2")]
-    ReazonSpeechK2V2,
-    #[serde(rename = "nemo_parakeet_tdt_ctc_0_6b_ja_35000_int8")]
-    NemoParakeetTdtCtc0_6BJa35000Int8,
-    #[serde(rename = "nemo_parakeet_tdt_0_6b_v2_int8")]
-    NemoParakeetTdt0_6BV2Int8,
-    #[serde(rename = "nemo_parakeet_tdt_0_6b_v3_int8")]
-    NemoParakeetTdt0_6BV3Int8,
-}
-
-impl AsrModel {
-    pub fn language(self) -> AsrLanguage {
-        match self {
-            Self::ReazonSpeechK2V2 | Self::NemoParakeetTdtCtc0_6BJa35000Int8 => {
-                AsrLanguage::Japanese
-            }
-            Self::NemoParakeetTdt0_6BV2Int8 => AsrLanguage::English,
-            Self::NemoParakeetTdt0_6BV3Int8 => AsrLanguage::EuropeanMultilingual,
-        }
-    }
-
-    pub fn supported_language_codes(self) -> &'static [&'static str] {
-        match self {
-            Self::ReazonSpeechK2V2 | Self::NemoParakeetTdtCtc0_6BJa35000Int8 => &["ja"],
-            Self::NemoParakeetTdt0_6BV2Int8 => &["en"],
-            Self::NemoParakeetTdt0_6BV3Int8 => PARAKEET_TDT_0_6B_V3_LANGUAGE_CODES,
-        }
-    }
-
-    pub fn default_for_language(language: AsrLanguage) -> Self {
-        match language {
-            AsrLanguage::Japanese => Self::ReazonSpeechK2V2,
-            AsrLanguage::English => Self::NemoParakeetTdt0_6BV2Int8,
-            AsrLanguage::EuropeanMultilingual => Self::NemoParakeetTdt0_6BV3Int8,
-        }
-    }
-
-    pub fn supports_precision(self, precision: AsrPrecision) -> bool {
-        match self {
-            Self::ReazonSpeechK2V2 => true,
-            Self::NemoParakeetTdtCtc0_6BJa35000Int8
-            | Self::NemoParakeetTdt0_6BV2Int8
-            | Self::NemoParakeetTdt0_6BV3Int8 => precision == AsrPrecision::Int8,
-        }
-    }
-
-    pub fn default_precision(self) -> AsrPrecision {
-        match self {
-            Self::ReazonSpeechK2V2 => AsrPrecision::Int8Float32,
-            Self::NemoParakeetTdtCtc0_6BJa35000Int8
-            | Self::NemoParakeetTdt0_6BV2Int8
-            | Self::NemoParakeetTdt0_6BV3Int8 => AsrPrecision::Int8,
-        }
-    }
-}
-
-impl Default for AsrModel {
-    fn default() -> Self {
-        Self::ReazonSpeechK2V2
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AsrLanguage {
-    Japanese,
-    English,
-    EuropeanMultilingual,
-}
-
-impl Default for AsrLanguage {
-    fn default() -> Self {
-        Self::Japanese
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TurnDetector {
-    Simple,
-    Morph,
-    Namo,
-}
-
-impl Default for TurnDetector {
-    fn default() -> Self {
-        Self::Simple
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum NoiseCancellationModel {
-    #[serde(rename = "ul_unas")]
-    UlUnas,
-}
-
-impl Default for NoiseCancellationModel {
-    fn default() -> Self {
-        Self::UlUnas
-    }
-}
+use super::{
+    AsrLanguage, AsrModel, AsrPrecision, LocalTranslationModel, LocalTtsVoice, NeoSendTiming,
+    NoiseCancellationModel, SpeechBackend, SpeechMapping, TranslationMapping, TurnDetector,
+};
 
 #[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TurnDetectorClass {
-    Simple,
-    Model(TurnDetectorModel),
-}
-
-#[cfg(test)]
-impl TurnDetectorClass {
-    pub fn model(self) -> Option<TurnDetectorModel> {
-        match self {
-            Self::Model(model) => Some(model),
-            Self::Simple => None,
-        }
-    }
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TurnDetectorModel {
-    Namo,
-}
-
-impl TurnDetector {
-    #[cfg(test)]
-    pub fn class(self) -> TurnDetectorClass {
-        match self {
-            Self::Simple | Self::Morph => TurnDetectorClass::Simple,
-            Self::Namo => TurnDetectorClass::Model(TurnDetectorModel::Namo),
-        }
-    }
-
-    pub fn uses_namo_model(self) -> bool {
-        match self {
-            Self::Namo => true,
-            Self::Simple | Self::Morph => false,
-        }
-    }
-
-    pub fn uses_morph_boundary(self) -> bool {
-        matches!(self, Self::Namo | Self::Morph)
-    }
-
-    pub fn confirms_normal_end_with_namo(self) -> bool {
-        matches!(self, Self::Namo)
-    }
-
-    pub fn uses_deferred_turn_completion(self) -> bool {
-        !matches!(self, Self::Simple)
-    }
-
-    pub fn can_connect_interim_after_completion(self) -> bool {
-        match self {
-            // Simple は ASR 後に TD / grammar split で安全に戻せないので、
-            // completion と interim を別々の ASR request として扱う。
-            Self::Simple => false,
-            // Namo / Morph は VAD 完了を確定境界にせず、
-            // 後続 interim まで含めて TD / grammar boundary に判断させる。
-            Self::Morph | Self::Namo => true,
-        }
-    }
-}
+use super::{
+    AsrModelCapability, AsrModelImplementation, SpeechSourceKind, TranslationBackend,
+    TranslationLanguage, TurnDetectorClass, TurnDetectorModel,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -204,6 +25,8 @@ pub struct ParapperConfig {
     pub neo: NeoConfig,
     #[serde(flatten)]
     pub input: InputConfig,
+    #[serde(flatten)]
+    pub streaming_recognition: StreamingRecognitionConfig,
     #[serde(flatten)]
     pub asr: AsrConfig,
     #[serde(flatten)]
@@ -231,13 +54,15 @@ pub struct NeoConfig {
     pub http_enabled: bool,
     #[serde(rename = "neo_http_port")]
     pub http_port: u16,
-    #[serde(rename = "neo_send_timing")]
+    #[serde(rename = "neo_send_timing", skip_serializing)]
     pub send_timing: NeoSendTiming,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct InputConfig {
+    #[serde(rename = "input_source_kind")]
+    pub source_kind: InputSourceKind,
     #[serde(rename = "input_device_id")]
     pub device_id: Option<String>,
     #[serde(rename = "input_device_host")]
@@ -248,6 +73,78 @@ pub struct InputConfig {
     pub volume_db: f32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InputSourceKind {
+    #[default]
+    DesktopAudio,
+    WebSocket,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamingRecognitionOutputMode {
+    #[default]
+    WebSocketOnly,
+    WebSocketAndDesktop,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DeveloperConnectionMode {
+    Http,
+    #[default]
+    WebSocket,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct StreamingRecognitionConfig {
+    #[serde(rename = "streaming_recognition_enabled")]
+    pub enabled: bool,
+    #[serde(rename = "developer_connection_mode")]
+    pub mode: DeveloperConnectionMode,
+    #[serde(rename = "developer_http_url")]
+    pub http_url: String,
+    #[serde(rename = "streaming_recognition_bind_address")]
+    pub bind_address: String,
+    #[serde(rename = "streaming_recognition_port")]
+    pub port: u16,
+    #[serde(rename = "streaming_recognition_api_key")]
+    pub api_key: Option<String>,
+    #[serde(rename = "streaming_recognition_output_mode")]
+    pub output_mode: StreamingRecognitionOutputMode,
+}
+
+impl StreamingRecognitionConfig {
+    pub(crate) fn validated_bind_addr(&self) -> Result<SocketAddr> {
+        let ip = self
+            .bind_address
+            .trim()
+            .parse::<IpAddr>()
+            .with_context(|| {
+                format!(
+                    "invalid streaming recognition bind address: {}",
+                    self.bind_address
+                )
+            })?;
+        if self.port == 0 {
+            anyhow::bail!("streaming recognition port must be between 1 and 65535");
+        }
+        if !ip.is_loopback()
+            && self
+                .api_key
+                .as_deref()
+                .is_none_or(|key| key.trim().is_empty())
+        {
+            anyhow::bail!(
+                "an API key is required when streaming recognition accepts LAN connections"
+            );
+        }
+        Ok(SocketAddr::new(ip, self.port))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AsrConfig {
@@ -255,6 +152,8 @@ pub struct AsrConfig {
     pub language: AsrLanguage,
     #[serde(rename = "asr_model")]
     pub model: AsrModel,
+    #[serde(rename = "interim_asr_model")]
+    pub interim_model: Option<AsrModel>,
     #[serde(rename = "asr_precision")]
     pub precision: AsrPrecision,
     #[serde(rename = "asr_num_threads")]
@@ -272,8 +171,12 @@ pub struct AsrConfig {
 pub struct TranslationConfig {
     #[serde(rename = "translation_enabled")]
     pub enabled: bool,
-    #[serde(rename = "translation_plugin_http_port")]
-    pub plugin_http_port: u16,
+    #[serde(rename = "ync_plugin_port", alias = "translation_plugin_http_port")]
+    pub ync_plugin_port: u16,
+    #[serde(rename = "translation_local_server_port")]
+    pub local_server_port: u16,
+    #[serde(rename = "translation_local_server_model")]
+    pub local_server_model: LocalTranslationModel,
     #[serde(rename = "translation_send_timing")]
     pub send_timing: NeoSendTiming,
     #[serde(rename = "translation_mappings")]
@@ -349,164 +252,10 @@ pub struct DebugConfig {
     pub debug_audio_log_limit: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TranslationMapping {
-    pub id: String,
-    pub source_asr_model: Option<AsrModel>,
-    pub target_lang: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SpeechSourceKind {
-    Recognition,
-    Translation,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SpeechBackend {
-    Ync,
-    LocalTts,
-}
-
-impl<'de> Deserialize<'de> for SpeechBackend {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        match value.as_str() {
-            "ync" => Ok(Self::Ync),
-            "local_tts" => Ok(Self::LocalTts),
-            legacy if is_legacy_ync_backend_value(legacy) => Ok(Self::Ync),
-            _ => Err(D::Error::unknown_variant(&value, &["ync", "local_tts"])),
-        }
-    }
-}
-
-impl Default for SpeechBackend {
-    fn default() -> Self {
-        Self::Ync
-    }
-}
-
-fn is_legacy_ync_backend_value(value: &str) -> bool {
-    value.len() == 12 && value.starts_with("yuka") && value.ends_with("kone_neo")
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum LocalTtsVoice {
-    #[serde(rename = "vits_piper_en_US_kristin_medium")]
-    Kristin,
-    #[serde(rename = "vits_piper_en_US_john_medium")]
-    John,
-    #[serde(rename = "vits_piper_en_US_norman_medium")]
-    Norman,
-    #[serde(rename = "supertonic_2_onnx")]
-    Supertonic2Onnx,
-    #[serde(rename = "supertonic_3_onnx")]
-    Supertonic3Onnx,
-}
-
-impl Default for LocalTtsVoice {
-    fn default() -> Self {
-        Self::Kristin
-    }
-}
-
-impl LocalTtsVoice {
-    pub fn family(self) -> LocalTtsFamily {
-        match self {
-            Self::Kristin | Self::John | Self::Norman => LocalTtsFamily::Vits,
-            Self::Supertonic2Onnx | Self::Supertonic3Onnx => LocalTtsFamily::Supertonic,
-        }
-    }
-
-    pub fn dir_name(self) -> &'static str {
-        match self {
-            Self::Kristin => "vits-piper-en_US-kristin-medium",
-            Self::John => "vits-piper-en_US-john-medium",
-            Self::Norman => "vits-piper-en_US-norman-medium",
-            Self::Supertonic2Onnx => "supertonic-2-onnx",
-            Self::Supertonic3Onnx => "supertonic-3-onnx",
-        }
-    }
-
-    pub fn onnx_file_name(self) -> &'static str {
-        match self {
-            Self::Kristin => "en_US-kristin-medium.onnx",
-            Self::John => "en_US-john-medium.onnx",
-            Self::Norman => "en_US-norman-medium.onnx",
-            Self::Supertonic2Onnx | Self::Supertonic3Onnx => "onnx/duration_predictor.onnx",
-        }
-    }
-
-    pub fn supported_language_codes(self) -> Option<&'static [&'static str]> {
-        match self {
-            Self::Supertonic2Onnx => Some(SUPERTONIC2_LANGUAGE_CODES),
-            Self::Supertonic3Onnx => Some(SUPERTONIC3_LANGUAGE_CODES),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalTtsFamily {
-    Vits,
-    Supertonic,
-}
-
-pub const ALL_LOCAL_TTS_VOICES: &[LocalTtsVoice] = &[
-    LocalTtsVoice::Kristin,
-    LocalTtsVoice::John,
-    LocalTtsVoice::Norman,
-    LocalTtsVoice::Supertonic2Onnx,
-    LocalTtsVoice::Supertonic3Onnx,
-];
-
-pub const SUPERTONIC2_LANGUAGE_CODES: &[&str] = &["en", "ko", "es", "pt", "fr"];
-pub const SUPERTONIC3_LANGUAGE_CODES: &[&str] = &[
-    "en", "ko", "ja", "bg", "cs", "da", "el", "es", "et", "fi", "hu", "it", "nl", "pl", "pt", "ro",
-    "ar", "de", "fr", "hi", "id", "ru", "vi",
-];
-
-const PARAKEET_TDT_0_6B_V3_LANGUAGE_CODES: &[&str] = &[
-    "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt",
-    "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
-];
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SpeechMapping {
-    pub id: String,
-    pub source_kind: SpeechSourceKind,
-    #[serde(default)]
-    pub source_asr_model: Option<AsrModel>,
-    pub target_lang: Option<String>,
-    #[serde(default)]
-    pub backend: SpeechBackend,
-    pub talker: String,
-    #[serde(default, deserialize_with = "deserialize_optional_local_tts_voice")]
-    pub local_tts_voice: Option<LocalTtsVoice>,
-    #[serde(default)]
-    pub local_tts_language: Option<String>,
-    #[serde(default)]
-    pub local_tts_speaker_id: Option<i32>,
-    #[serde(default)]
-    pub output_device_id: Option<String>,
-    #[serde(default)]
-    pub output_device_host: Option<String>,
-    #[serde(default)]
-    pub output_device_name: Option<String>,
-    #[serde(default)]
-    pub muted: bool,
-    pub volume: f32,
-}
-
 impl Default for NeoConfig {
     fn default() -> Self {
         Self {
-            http_enabled: true,
+            http_enabled: false,
             http_port: 15520,
             send_timing: NeoSendTiming::Interim,
         }
@@ -516,10 +265,25 @@ impl Default for NeoConfig {
 impl Default for InputConfig {
     fn default() -> Self {
         Self {
+            source_kind: InputSourceKind::DesktopAudio,
             device_id: None,
             device_host: None,
             device_name: None,
             volume_db: 0.0,
+        }
+    }
+}
+
+impl Default for StreamingRecognitionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: DeveloperConnectionMode::WebSocket,
+            http_url: "http://127.0.0.1:15522/api/events".to_string(),
+            bind_address: "127.0.0.1".to_string(),
+            port: 18082,
+            api_key: None,
+            output_mode: StreamingRecognitionOutputMode::WebSocketOnly,
         }
     }
 }
@@ -529,6 +293,7 @@ impl Default for AsrConfig {
         Self {
             language: AsrLanguage::Japanese,
             model: AsrModel::ReazonSpeechK2V2,
+            interim_model: None,
             precision: AsrPrecision::Int8Float32,
             num_threads: 4,
             normalize_input_audio: true,
@@ -545,7 +310,9 @@ impl Default for TranslationConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            plugin_http_port: 8080,
+            ync_plugin_port: 8080,
+            local_server_port: 18081,
+            local_server_model: LocalTranslationModel::default(),
             send_timing: NeoSendTiming::Final,
             mappings: Vec::new(),
         }
@@ -600,6 +367,7 @@ impl Default for ParapperConfig {
         Self {
             neo: NeoConfig::default(),
             input: InputConfig::default(),
+            streaming_recognition: StreamingRecognitionConfig::default(),
             asr: AsrConfig::default(),
             translation: TranslationConfig::default(),
             speech: SpeechConfig::default(),
@@ -624,11 +392,18 @@ impl ParapperConfig {
     }
 
     pub fn required_asr_models(&self) -> Vec<AsrModel> {
-        if self.asr.multilingual_enabled {
+        let mut models = if self.asr.multilingual_enabled {
             self.asr.enabled_models.clone()
         } else {
             vec![self.asr.model]
-        }
+        };
+        push_unique_asr_model(&mut models, self.asr.interim_model);
+        models
+    }
+
+    #[cfg(test)]
+    pub(crate) fn completion_asr_model(&self) -> AsrModel {
+        self.asr.model
     }
 
     pub(crate) fn effective_asr_num_threads(&self) -> i32 {
@@ -760,17 +535,33 @@ impl ParapperConfig {
         self.turn.namo_confidence_threshold = self.turn.namo_confidence_threshold.clamp(0.0, 1.0);
         self.turn.namo_context_max_tokens = self.turn.namo_context_max_tokens.min(512);
         self.input.volume_db = normalize_input_volume_db(self.input.volume_db);
-        if self.asr.model.language() != self.asr.language {
+        self.streaming_recognition.bind_address =
+            self.streaming_recognition.bind_address.trim().to_string();
+        self.streaming_recognition.http_url =
+            self.streaming_recognition.http_url.trim().to_string();
+        self.streaming_recognition.api_key = self
+            .streaming_recognition
+            .api_key
+            .take()
+            .map(|key| key.trim().to_string())
+            .filter(|key| !key.is_empty());
+        if !self.asr.model.supports_completion() || self.asr.model.language() != self.asr.language {
             self.asr.model = AsrModel::default_for_language(self.asr.language);
+            self.asr.language = self.asr.model.language();
         }
         if !self.asr.model.supports_precision(self.asr.precision) {
             self.asr.precision = self.asr.model.default_precision();
         }
+        self.asr.interim_model =
+            normalize_interim_asr_model(self.asr.model, self.asr.interim_model);
         normalize_enabled_asr_models(&mut self.asr.enabled_models);
         if !self.asr.enabled_models.contains(&self.asr.model) {
             self.asr.enabled_models.push(self.asr.model);
         }
         self.translation.mappings = normalize_translation_mappings(self.translation.mappings);
+        if !self.translation.local_server_model.is_available() {
+            self.translation.local_server_model = LocalTranslationModel::default();
+        }
         self.speech.mappings = normalize_speech_mappings(self.speech.mappings);
         self.asr.num_threads = self.asr.num_threads.max(0);
         self = self.normalized_for_platform();
@@ -780,7 +571,6 @@ impl ParapperConfig {
     fn normalized_for_platform(mut self) -> Self {
         if !Self::neo_http_supported() {
             self.neo.http_enabled = false;
-            self.translation.enabled = false;
         }
         if !Self::vrc_osc_supported() {
             self.vrc.osc_micmute = false;
@@ -794,9 +584,11 @@ fn normalize_translation_mappings(mappings: Vec<TranslationMapping>) -> Vec<Tran
         .into_iter()
         .filter_map(|mut mapping| {
             mapping.id = mapping.id.trim().to_string();
-            mapping.target_lang = mapping.target_lang.trim().to_string();
-            if mapping.id.is_empty() || mapping.target_lang.is_empty() {
+            if mapping.id.is_empty() || mapping.source_lang == mapping.target_lang {
                 return None;
+            }
+            if !mapping.local_model.is_available() {
+                mapping.local_model = LocalTranslationModel::default();
             }
             Some(mapping)
         })
@@ -848,23 +640,6 @@ fn normalize_speech_mappings(mappings: Vec<SpeechMapping>) -> Vec<SpeechMapping>
             Some(mapping)
         })
         .collect()
-}
-
-fn deserialize_optional_local_tts_voice<'de, D>(
-    deserializer: D,
-) -> Result<Option<LocalTtsVoice>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<String>::deserialize(deserializer)?;
-    Ok(value.and_then(|value| match value.as_str() {
-        "vits_piper_en_US_kristin_medium" => Some(LocalTtsVoice::Kristin),
-        "vits_piper_en_US_john_medium" => Some(LocalTtsVoice::John),
-        "vits_piper_en_US_norman_medium" => Some(LocalTtsVoice::Norman),
-        "supertonic_2_onnx" => Some(LocalTtsVoice::Supertonic2Onnx),
-        "supertonic_3_onnx" => Some(LocalTtsVoice::Supertonic3Onnx),
-        _ => None,
-    }))
 }
 
 fn normalize_local_tts_language(
@@ -920,16 +695,28 @@ fn non_empty_trimmed(value: &str) -> Option<String> {
 }
 
 fn normalize_enabled_asr_models(models: &mut Vec<AsrModel>) {
-    models.sort_by_key(|model| match model {
-        AsrModel::ReazonSpeechK2V2 => 0,
-        AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8 => 1,
-        AsrModel::NemoParakeetTdt0_6BV2Int8 => 2,
-        AsrModel::NemoParakeetTdt0_6BV3Int8 => 3,
-    });
+    models.retain(|model| model.supports_completion());
+    models.sort_by_key(|model| model.sort_key());
     models.dedup();
     if models.is_empty() {
         models.push(AsrModel::ReazonSpeechK2V2);
     }
+}
+
+fn push_unique_asr_model(models: &mut Vec<AsrModel>, model: Option<AsrModel>) {
+    let Some(model) = model else {
+        return;
+    };
+    if !models.contains(&model) {
+        models.push(model);
+    }
+}
+
+fn normalize_interim_asr_model(
+    primary_model: AsrModel,
+    model: Option<AsrModel>,
+) -> Option<AsrModel> {
+    model.filter(|model| model.is_interim_only() && *model != primary_model)
 }
 
 fn normalize_asr_languages(languages: &mut Vec<AsrLanguage>) {
@@ -937,6 +724,7 @@ fn normalize_asr_languages(languages: &mut Vec<AsrLanguage>) {
         AsrLanguage::Japanese => 0,
         AsrLanguage::English => 1,
         AsrLanguage::EuropeanMultilingual => 2,
+        AsrLanguage::Multilingual => 3,
     });
     languages.dedup();
 }
@@ -950,10 +738,46 @@ mod tests {
     };
 
     use super::{
-        AsrLanguage, AsrModel, AsrPrecision, LocalTtsVoice, NeoSendTiming, NoiseCancellationModel,
-        ParapperConfig, SpeechBackend, SpeechMapping, SpeechSourceKind, TranslationMapping,
-        TurnDetector, TurnDetectorClass, TurnDetectorModel,
+        AsrLanguage, AsrModel, AsrModelCapability, AsrModelImplementation, AsrPrecision,
+        InputSourceKind, LocalTranslationModel, LocalTtsVoice, NeoSendTiming,
+        NoiseCancellationModel, ParapperConfig, SpeechBackend, SpeechMapping, SpeechSourceKind,
+        TranslationBackend, TranslationLanguage, TranslationMapping, TurnDetector,
+        TurnDetectorClass, TurnDetectorModel,
     };
+
+    #[test]
+    fn default_config_uses_desktop_audio_without_opening_an_external_listener() {
+        let config = ParapperConfig::default();
+
+        assert_eq!(config.input.source_kind, InputSourceKind::DesktopAudio);
+        assert!(!config.streaming_recognition.enabled);
+        assert_eq!(
+            config
+                .streaming_recognition
+                .validated_bind_addr()
+                .expect("loopback defaults should be valid")
+                .to_string(),
+            "127.0.0.1:18082"
+        );
+    }
+
+    #[test]
+    fn lan_streaming_recognition_bind_requires_an_explicit_api_key() {
+        let mut config = ParapperConfig::default().streaming_recognition;
+        config.bind_address = "0.0.0.0".to_string();
+        assert!(config.validated_bind_addr().is_err());
+        config.api_key = Some("   ".to_string());
+        assert!(config.validated_bind_addr().is_err());
+
+        config.api_key = Some("secret".to_string());
+        assert_eq!(
+            config
+                .validated_bind_addr()
+                .expect("LAN bind with an API key should be valid")
+                .to_string(),
+            "0.0.0.0:18082"
+        );
+    }
 
     #[test]
     fn default_config_uses_neo_http_port() {
@@ -961,10 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn default_config_sends_text_to_neo() {
-        #[cfg(not(target_os = "macos"))]
-        assert!(ParapperConfig::default().neo.http_enabled);
-        #[cfg(target_os = "macos")]
+    fn default_config_does_not_require_neo_for_normal_use() {
         assert!(!ParapperConfig::default().neo.http_enabled);
     }
 
@@ -1010,6 +831,7 @@ mod tests {
         for nested_key in [
             "neo",
             "input",
+            "streaming_recognition",
             "asr",
             "translation",
             "speech",
@@ -1027,12 +849,31 @@ mod tests {
         }
         assert_eq!(object["neo_http_port"], serde_json::json!(16620));
         assert_eq!(object["input_device_name"], serde_json::json!("Desk Mic"));
+        assert_eq!(
+            object["input_source_kind"],
+            serde_json::json!("desktop_audio")
+        );
+        assert_eq!(
+            object["streaming_recognition_enabled"],
+            serde_json::json!(false)
+        );
         assert_eq!(object["asr_language"], serde_json::json!("english"));
         assert_eq!(
             object["asr_model"],
             serde_json::json!("nemo_parakeet_tdt_0_6b_v2_int8")
         );
         assert_eq!(object["translation_enabled"], serde_json::json!(true));
+        assert!(!object.contains_key("translation_local_server_mode"));
+        assert_eq!(object["ync_plugin_port"], serde_json::json!(8080));
+        assert!(!object.contains_key("translation_plugin_http_port"));
+        assert_eq!(
+            object["translation_local_server_port"],
+            serde_json::json!(18081)
+        );
+        assert_eq!(
+            object["translation_local_server_model"],
+            serde_json::json!("lfm2_q4")
+        );
         assert_eq!(object["turn_detector"], serde_json::json!("namo"));
         assert_eq!(
             object["noise_cancellation_enabled"],
@@ -1064,6 +905,9 @@ mod tests {
                 ],
                 "translation_enabled": true,
                 "translation_plugin_http_port": 18080,
+                "translation_local_server_mode": "on",
+                "translation_local_server_port": 18081,
+                "translation_local_server_model": "cat_translate_0_8b_q4_k_quant",
                 "translation_send_timing": "interim",
                 "translation_mappings": [{
                     "id": "translate-en",
@@ -1113,13 +957,27 @@ mod tests {
                 AsrModel::NemoParakeetTdt0_6BV2Int8
             ]
         );
-        #[cfg(not(target_os = "macos"))]
         assert!(config.translation.enabled);
-        #[cfg(target_os = "macos")]
-        assert!(!config.translation.enabled);
-        assert_eq!(config.translation.plugin_http_port, 18080);
+        assert_eq!(config.translation.ync_plugin_port, 18080);
+        assert_eq!(config.translation.local_server_port, 18081);
+        assert_eq!(
+            config.translation.local_server_model,
+            LocalTranslationModel::Lfm2Q4
+        );
         assert_eq!(config.translation.send_timing, NeoSendTiming::Interim);
         assert_eq!(config.translation.mappings[0].id, "translate-en");
+        assert_eq!(
+            config.translation.mappings[0].backend,
+            TranslationBackend::Ync
+        );
+        assert_eq!(
+            config.translation.mappings[0].source_lang,
+            TranslationLanguage::En
+        );
+        assert_eq!(
+            config.translation.mappings[0].target_lang,
+            TranslationLanguage::Ja
+        );
         assert_eq!(config.models.dir.as_deref(), Some("models"));
         assert!((config.segmentation.vad_threshold - 0.6).abs() < f32::EPSILON);
         assert_eq!(config.segmentation.segment_start_speech_ms, 128);
@@ -1182,6 +1040,99 @@ mod tests {
         });
 
         assert_eq!(config.asr.precision, AsrPrecision::Int8);
+    }
+
+    #[test]
+    fn required_asr_models_include_interim_only_model_without_duplicates() {
+        let config = config_with(|config| {
+            config.asr.model = AsrModel::ReazonSpeechK2V2;
+            config.asr.interim_model = Some(AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8);
+            config.asr.multilingual_enabled = false;
+        });
+
+        assert_eq!(
+            config.required_asr_models(),
+            vec![
+                AsrModel::ReazonSpeechK2V2,
+                AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8,
+            ]
+        );
+    }
+
+    #[test]
+    fn primary_asr_model_normalization_replaces_interim_only_nemotron() {
+        let config = config_with(|config| {
+            config.asr.language = AsrLanguage::Multilingual;
+            config.asr.model = AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8;
+            config.asr.multilingual_enabled = false;
+        });
+
+        assert_eq!(config.asr.language, AsrLanguage::EuropeanMultilingual);
+        assert_eq!(config.asr.model, AsrModel::NemoParakeetTdt0_6BV3Int8);
+        assert_eq!(
+            config.completion_asr_model(),
+            AsrModel::NemoParakeetTdt0_6BV3Int8,
+            "Nemotron streaming models are restricted to interim display"
+        );
+        assert_eq!(
+            config.required_asr_models(),
+            vec![AsrModel::NemoParakeetTdt0_6BV3Int8]
+        );
+    }
+
+    #[test]
+    fn final_capable_interim_override_normalizes_to_primary_model() {
+        let config = config_with(|config| {
+            config.asr.model = AsrModel::ReazonSpeechK2V2;
+            config.asr.interim_model = Some(AsrModel::NemoParakeetTdt0_6BV2Int8);
+        });
+
+        assert_eq!(config.asr.interim_model, None);
+        assert_eq!(
+            config.required_asr_models(),
+            vec![AsrModel::ReazonSpeechK2V2]
+        );
+    }
+
+    #[test]
+    fn nemotron_models_are_int8_only_and_expose_streaming_languages() {
+        let cases = [
+            (
+                AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8,
+                AsrLanguage::English,
+                "en",
+            ),
+            (
+                AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8,
+                AsrLanguage::English,
+                "en",
+            ),
+            (
+                AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8,
+                AsrLanguage::Multilingual,
+                "ja",
+            ),
+            (
+                AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8,
+                AsrLanguage::Multilingual,
+                "ja",
+            ),
+        ];
+
+        for (model, language, required_language_code) in cases {
+            assert!(model.is_nemotron());
+            assert_eq!(model.implementation(), AsrModelImplementation::Nemotron);
+            assert_eq!(model.capability(), AsrModelCapability::InterimOnly);
+            assert_eq!(model.language(), language);
+            assert!(
+                model
+                    .supported_language_codes()
+                    .contains(&required_language_code)
+            );
+            assert_eq!(model.default_precision(), AsrPrecision::Int8);
+            assert!(model.supports_precision(AsrPrecision::Int8));
+            assert!(!model.supports_precision(AsrPrecision::Float32));
+        }
     }
 
     #[test]
@@ -1345,10 +1296,29 @@ mod tests {
         let config = ParapperConfig::default();
 
         assert!(!config.translation.enabled);
-        assert_eq!(config.translation.plugin_http_port, 8080);
+        assert_eq!(config.translation.ync_plugin_port, 8080);
+        assert_eq!(config.translation.local_server_port, 18081);
+        assert_eq!(
+            config.translation.local_server_model,
+            LocalTranslationModel::Lfm2Q4
+        );
         assert_eq!(config.translation.send_timing, NeoSendTiming::Final);
         assert!(config.translation.mappings.is_empty());
         assert!(config.speech.mappings.is_empty());
+    }
+
+    #[test]
+    fn legacy_ync_plugin_port_loads_and_saves_only_the_canonical_key() {
+        let config = serde_json::from_str::<ParapperConfig>(
+            r#"{"translation_plugin_http_port": 18080, "translation_local_server_mode": "on"}"#,
+        )
+        .expect("legacy config should load");
+        assert_eq!(config.translation.ync_plugin_port, 18080);
+
+        let value = serde_json::to_value(config).expect("config should serialize");
+        assert_eq!(value["ync_plugin_port"], serde_json::json!(18080));
+        assert!(value.get("translation_plugin_http_port").is_none());
+        assert!(value.get("translation_local_server_mode").is_none());
     }
 
     #[test]
@@ -1356,6 +1326,68 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&SpeechBackend::Ync).unwrap(),
             r#""ync""#
+        );
+    }
+
+    #[test]
+    fn local_translation_model_serializes_as_model_file_quantization_name() {
+        assert_eq!(
+            serde_json::to_string(&LocalTranslationModel::Lfm2Q4).unwrap(),
+            r#""lfm2_q4""#
+        );
+        assert_eq!(
+            serde_json::to_string(&LocalTranslationModel::CatTranslate0_8BQ4KQuant).unwrap(),
+            r#""cat_translate_0_8b_q4_k_quant""#
+        );
+        for legacy_value in [
+            "f32",
+            "fp32",
+            "model",
+            "q4",
+            "q4f16",
+            "q4_f16",
+            "model_quantized",
+            "k_quant",
+            "q4_k_quant",
+            "lfm2_q4_k_quant",
+        ] {
+            assert_eq!(
+                serde_json::from_str::<LocalTranslationModel>(&format!(r#""{legacy_value}""#))
+                    .unwrap(),
+                LocalTranslationModel::Lfm2Q4
+            );
+        }
+        assert_eq!(
+            serde_json::from_str::<LocalTranslationModel>(r#""cat-translate-0.8b-onnx-q4""#)
+                .unwrap(),
+            LocalTranslationModel::CatTranslate0_8BQ4KQuant
+        );
+    }
+
+    #[test]
+    fn disabled_cat_translation_config_migrates_to_onnx_community_lfm2_q4() {
+        let config = serde_json::from_str::<ParapperConfig>(
+            r#"{
+                "translation_local_server_model": "cat_translate_0_8b_q4_k_quant",
+                "translation_mappings": [{
+                    "id": "legacy-cat",
+                    "backend": "local",
+                    "local_model": "cat_translate_0_8b_q4_k_quant",
+                    "source_lang": "ja",
+                    "target_lang": "en"
+                }]
+            }"#,
+        )
+        .expect("legacy CAT config should deserialize")
+        .normalized();
+
+        assert_eq!(
+            config.translation.local_server_model,
+            LocalTranslationModel::Lfm2Q4
+        );
+        assert_eq!(
+            config.translation.mappings[0].local_model,
+            LocalTranslationModel::Lfm2Q4
         );
     }
 
@@ -1392,12 +1424,18 @@ mod tests {
                 TranslationMapping {
                     id: " translate-ja ".to_string(),
                     source_asr_model: Some(AsrModel::NemoParakeetTdt0_6BV2Int8),
-                    target_lang: " en_US ".to_string(),
+                    backend: TranslationBackend::Local,
+                    local_model: LocalTranslationModel::Lfm2Q4,
+                    source_lang: TranslationLanguage::Ja,
+                    target_lang: TranslationLanguage::En,
                 },
                 TranslationMapping {
-                    id: "empty-target".to_string(),
+                    id: "same-language".to_string(),
                     source_asr_model: None,
-                    target_lang: " ".to_string(),
+                    backend: TranslationBackend::Ync,
+                    local_model: LocalTranslationModel::default(),
+                    source_lang: TranslationLanguage::En,
+                    target_lang: TranslationLanguage::En,
                 },
             ];
             config.speech.mappings = vec![SpeechMapping {
@@ -1420,11 +1458,40 @@ mod tests {
 
         assert_eq!(config.translation.mappings.len(), 1);
         assert_eq!(config.translation.mappings[0].id, "translate-ja");
-        assert_eq!(config.translation.mappings[0].target_lang, "en_US");
+        assert_eq!(
+            config.translation.mappings[0].backend,
+            TranslationBackend::Local
+        );
+        assert_eq!(
+            config.translation.mappings[0].source_lang,
+            TranslationLanguage::Ja
+        );
+        assert_eq!(
+            config.translation.mappings[0].target_lang,
+            TranslationLanguage::En
+        );
         assert_eq!(config.speech.mappings.len(), 1);
         assert_eq!(config.speech.mappings[0].id, "speech-ja");
         assert_eq!(config.speech.mappings[0].talker, "ずんだもん/VOICEVOX");
         assert!((config.speech.mappings[0].volume + 20.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn unsupported_legacy_translation_target_drops_mapping_without_dropping_config() {
+        let config = serde_json::from_str::<ParapperConfig>(
+            r#"{
+                "translation_enabled": true,
+                "translation_mappings": [{
+                    "id": "translate-fr",
+                    "target_lang": "fr_FR"
+                }]
+            }"#,
+        )
+        .expect("unsupported legacy translation mapping should not reject whole config")
+        .normalized();
+
+        assert!(config.translation.enabled);
+        assert!(config.translation.mappings.is_empty());
     }
 
     #[cfg(not(target_os = "macos"))]

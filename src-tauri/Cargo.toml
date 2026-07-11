@@ -15,6 +15,11 @@ workspace = true
 
 [features]
 real-asr-tests = []
+# Off by default; never part of the shipped application. Used by the
+# diagnostics package's streaming_recognition_smoke_server binary, which runs
+# the streaming recognition WebSocket server against a deterministic fake
+# recognition backend for external protocol-client end-to-end tests.
+smoke-server = []
 
 [lib]
 name = "app_lib"
@@ -49,23 +54,36 @@ reqwest = { workspace = true }
 rubato = "1.0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
-sherpa-onnx = { version = "=1.12.39", default-features = false, features = ["shared"] }
-sherpa-onnx-sys = { version = "=1.12.39", default-features = false, features = ["shared"] }
+sherpa-onnx = { version = "=1.13.3", default-features = false, features = ["shared"] }
+sherpa-onnx-sys = { version = "=1.13.3", default-features = false, features = ["shared"] }
 tauri = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
 tauri-plugin-log = { workspace = true }
 tar = "0.4.44"
 tokio = { workspace = true }
+tiny_http = "0.12"
 unicode-normalization = "0.1"
+uuid = { version = "1", features = ["v4"] }
 vibrato-rkyv = { version = "0.7.8", default-features = false, features = ["legacy"] }
 xz2 = "0.1.7"
 zstd = "0.13"
 # Keep tokenizers pinned with ort's current dependency graph to avoid native
 # feature drift while loading Namo tokenizer.json files.
 tokenizers = { version = "=0.22.2", default-features = false, features = ["onig"] }
+tungstenite = "0.29.0"
 
 [dev-dependencies]
 tauri = { workspace = true, features = ["test"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 mdns-sd = "0.19.0"
+
+# System Audio Recording (kTCCServiceAudioCapture) permission for CoreAudio
+# loopback capture. cpal builds the process tap but records silence without this
+# permission, and macOS never auto-prompts, so we request it via the private TCC
+# framework (mirroring RustAudio/cpal#1257). These crates are already in the tree
+# transitively via cpal, so no new versions are pulled in.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+libloading = "0.7"
+objc2-core-foundation = "0.3"

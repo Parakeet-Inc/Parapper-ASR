@@ -1,4 +1,8 @@
-use std::sync::mpsc::Sender;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+    mpsc::Sender,
+};
 
 use anyhow::{Context, Result};
 use cpal::{Device, Sample, SampleFormat, SizedSample, Stream, StreamConfig, traits::DeviceTrait};
@@ -7,6 +11,40 @@ use dasp_sample::ToSample;
 #[derive(Debug)]
 pub(crate) struct InputChunk {
     pub samples: Vec<f32>,
+    _queue_permit: Option<InputQueuePermit>,
+}
+
+#[derive(Debug)]
+struct InputQueuePermit {
+    queued_samples: Arc<AtomicUsize>,
+    samples: usize,
+}
+
+impl Drop for InputQueuePermit {
+    fn drop(&mut self) {
+        self.queued_samples
+            .fetch_sub(self.samples, Ordering::AcqRel);
+    }
+}
+
+impl InputChunk {
+    pub(crate) fn new(samples: Vec<f32>) -> Self {
+        Self {
+            samples,
+            _queue_permit: None,
+        }
+    }
+
+    pub(crate) fn with_queue_permit(samples: Vec<f32>, queued_samples: Arc<AtomicUsize>) -> Self {
+        let sample_count = samples.len();
+        Self {
+            samples,
+            _queue_permit: Some(InputQueuePermit {
+                queued_samples,
+                samples: sample_count,
+            }),
+        }
+    }
 }
 
 pub(crate) fn build_input_stream(
@@ -44,7 +82,7 @@ where
                 }
 
                 let samples = interleaved_to_mono(data, channels);
-                let chunk = InputChunk { samples };
+                let chunk = InputChunk::new(samples);
                 enqueue_input_chunk(&sender, chunk);
             },
             err_fn,
@@ -91,12 +129,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
 
         for sample in 0_u16..32 {
-            enqueue_input_chunk(
-                &sender,
-                InputChunk {
-                    samples: vec![f32::from(sample)],
-                },
-            );
+            enqueue_input_chunk(&sender, InputChunk::new(vec![f32::from(sample)]));
         }
         drop(sender);
 

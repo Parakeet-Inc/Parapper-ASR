@@ -34,7 +34,9 @@ export const en = {
     asrWarning: "ASR warning",
     recognition: {
       idle: "idle",
+      waiting_for_client: "waiting for client",
       listening: "listening",
+      draining: "draining",
       stopped: "stopped",
       error: "error",
     },
@@ -98,8 +100,6 @@ export const en = {
       description:
         "Reads the VRChat mute state through OSCQuery and skips sending to YNC while muted.",
       muteSyncLabel: "Do not send while muted in VRChat (requires OSC)",
-      muteSyncDescription:
-        "When enabled, Parapper checks MuteSelf through VRChat OSCQuery when speech recognition starts and does not bind an OSC UDP port.",
     },
     turnDetector: {
       label: "Turn Detector",
@@ -163,6 +163,12 @@ export const en = {
       label: "ASR model",
       description:
         "Choose a language and sherpa-onnx model. NeMo models are heavier but may provide better accuracy.",
+    },
+    interimAsrModel: {
+      label: "Interim ASR model",
+      description:
+        "ASR model used only for interim display. By default, this uses the primary ASR model.",
+      primary: "Same as ASR model",
     },
     asrPrecision: {
       label: "ASR precision",
@@ -239,7 +245,25 @@ export const en = {
     inputAudioDevice: {
       label: "Input device",
       placeholder: "Default input device",
+      loopbackGroup: "Speaker output (loopback)",
+      networkGroup: "Network input",
+      webSocket: "WebSocket (PCM 16 kHz)",
     },
+  },
+  connectionSettings: {
+    neoEnabled: "Connect to YNC",
+    developerEnabled: "Enable HTTP / WebSocket connection (Developers)",
+    connectionMode: "Connection mode",
+    httpUrl: "HTTP destination URL",
+    httpPayloadExample: "Example HTTP payload",
+    bindAddress: "Bind address",
+    port: "WebSocket port",
+    apiKey: "API key",
+    apiKeyPlaceholder: "Optional for local connections",
+    outputMode: "Recognition output",
+    webSocketOnly: "WebSocket only",
+    webSocketAndDesktop: "WebSocket + desktop integrations",
+    endpoint: "Endpoint: ws://{{address}}:{{port}}/ws/recognition",
   },
   noiseCancellationSettings: {
     enable: {
@@ -266,6 +290,14 @@ export const en = {
       nemoParakeetTdtV2Int8: "English (NeMo Parakeet TDT 0.6B v2 int8)",
       nemoParakeetTdtV3Int8:
         "European multilingual (NeMo Parakeet TDT 0.6B v3 int8)",
+      nemotronSpeechStreamingEn160MsInt8:
+        "English (Nemotron Speech Streaming 0.6B 160ms int8)",
+      nemotronSpeechStreamingEn560MsInt8:
+        "English (Nemotron Speech Streaming 0.6B 560ms int8)",
+      nemotron35AsrStreaming160MsInt8:
+        "Multilingual (Nemotron 3.5 ASR Streaming 0.6B 160ms int8)",
+      nemotron35AsrStreaming560MsInt8:
+        "Multilingual (Nemotron 3.5 ASR Streaming 0.6B 560ms int8)",
     },
     turnDetector: {
       simple: "Simple",
@@ -304,20 +336,70 @@ export const en = {
     title: "Translation",
     enable: {
       label: "Enable translation",
-      description: "Send ASR text to the YNC translation/speech server plugin.",
+      description:
+        "Translate ASR text with either the YNC plugin or the local Japanese/English model.",
     },
     sendTiming: {
       label: "Translation timing",
+    },
+    localServer: {
+      title: "Run a translation HTTP server locally",
+      start: "Start",
+      stop: "Stop",
+      downloadModel: "Download model",
+      status: {
+        stopped: "Stopped",
+        starting: "Starting…",
+        running: "Listening on 127.0.0.1:{{port}}",
+        stopping: "Stopping…",
+        error: "Error",
+        modelMissing: "The server model is not downloaded yet",
+      },
+      setup: {
+        title: "Configure YNC NEO",
+        engine:
+          'In YNC NEO translation settings, select "Local Translation (Personal / Custom API)" for the target language engine.',
+        url: "Set the URL to http://127.0.0.1:{{port}}.",
+        postMode: 'Select "OpenAI Format" for POST mode.',
+        model:
+          'The Model field can contain any display name. Choose the actual model using "Server model" above.',
+        avoidInputApi:
+          "Do not use the YNC NEO built-in /api/input endpoint or port 15520.",
+      },
+      mode: {
+        off: "Off",
+        auto: "With MT",
+        on: "Server only",
+      },
+      port: {
+        label: "Listen port",
+        description:
+          "localhost port that receives translation requests at POST /v1/chat/completions. The usual value is 18081.",
+      },
+      model: {
+        label: "Server model",
+        description:
+          "Local translation model used for requests from external apps.",
+      },
     },
     mapping: {
       title: "Translation mappings",
       anyModel: "All ASR models",
       sourceModel: "Source ASR model",
+      sourceLang: "Source language",
       targetLang: "Target language",
       addRow: "Add translation mapping",
       deleteRow: "Delete translation mapping",
       moveUp: "Move translation mapping up",
       moveDown: "Move translation mapping down",
+    },
+    backend: {
+      label: "Translation backend",
+      ync: "YNC",
+      local: "Local",
+    },
+    localModel: {
+      label: "Local translation model",
     },
   },
   speechSettings: {
@@ -476,6 +558,11 @@ export const en = {
     },
     speechStopFailed: {
       title: "Failed to interrupt speech",
+    },
+    loopbackPermissionRequired: {
+      title: "System Audio Recording permission required",
+      message:
+        "Allow Parapper to record system audio in System Settings → Privacy & Security → System Audio Recording, otherwise speaker capture stays silent.",
     },
   },
   downloadProgress: {

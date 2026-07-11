@@ -55,7 +55,7 @@ fn turn_runtime_internal_grammar_boundary_keeps_turn_open_without_rerecognition(
 }
 
 #[test]
-fn turn_runtime_internal_grammar_boundary_after_interim_reemits_same_open_turn() {
+fn turn_runtime_internal_grammar_boundary_after_interim_does_not_reemit_unchanged_open_turn() {
     let mut builder = RecognitionSessionTestBuilder::new()
         .turn_detector(TurnDetector::Namo)
         .segment_start_speech_ms(1)
@@ -99,11 +99,8 @@ fn turn_runtime_internal_grammar_boundary_after_interim_reemits_same_open_turn()
                 output.output_sequence,
             ))
             .collect::<Vec<_>>(),
-        vec![
-            ("turn-1-1-0", "一。二。三...", false, 1, 1),
-            ("turn-1-1-0", "一。二。三...", false, 1, 2),
-        ],
-        "internal grammar boundary evaluation should keep replacing the same open turn row"
+        vec![("turn-1-1-0", "一。二。三...", false, 1, 1)],
+        "internal grammar boundary evaluation must not re-emit an interim whose text is unchanged since the last emitted interim"
     );
     assert_eq!(runtime.turn_store.open_turn_id, Some(1));
 }

@@ -5,11 +5,22 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 
-use crate::connect::TextTransport;
+use crate::connect::{TextInputPayload, TextTransport};
 
 #[cfg(windows)]
 use crate::connect::registry::detect_dword_value_u16;
+
+#[derive(Serialize)]
+struct TextInputRequestBody<'a> {
+    #[serde(rename = "Text")]
+    text: &'a str,
+    #[serde(rename = "fixedText")]
+    fixed_text: bool,
+    #[serde(rename = "textID")]
+    text_id: &'a str,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct YncTextInputTransport {
@@ -31,8 +42,13 @@ impl YncTextInputTransport {
         format!("{}:{}", self.host, port)
     }
 
-    pub(super) fn send_text_to_port(&self, port: u16, text: &str) -> Result<()> {
-        let encoded_text = percent_encode_query_component(text);
+    pub(super) fn send_text_to_port(&self, port: u16, payload: TextInputPayload<'_>) -> Result<()> {
+        let body = serde_json::to_string(&TextInputRequestBody {
+            text: payload.text,
+            fixed_text: payload.is_final,
+            text_id: payload.text_id,
+        })
+        .context("Failed to serialize YNC text input request body")?;
         let endpoint = self.endpoint(port);
         let address = endpoint
             .parse::<SocketAddr>()
@@ -43,7 +59,8 @@ impl YncTextInputTransport {
             .set_write_timeout(Some(self.timeout))
             .context("Failed to set YNC text input write timeout")?;
         let request = format!(
-            "GET /api/input?text={encoded_text} HTTP/1.1\r\nHost: {endpoint}\r\nConnection: close\r\n\r\n"
+            "POST /api/input HTTP/1.1\r\nHost: {endpoint}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
         );
         stream
             .write_all(request.as_bytes())
@@ -54,8 +71,8 @@ impl YncTextInputTransport {
 }
 
 impl TextTransport for YncTextInputTransport {
-    fn send_text(&mut self, text: &str) -> Result<()> {
-        self.send_text_to_port(self.configured_port, text)
+    fn send_text(&mut self, payload: TextInputPayload<'_>) -> Result<()> {
+        self.send_text_to_port(self.configured_port, payload)
     }
 }
 
@@ -72,23 +89,4 @@ pub fn detect_ync_text_input_http_port() -> Option<u16> {
 #[cfg(not(windows))]
 pub fn detect_ync_text_input_http_port() -> Option<u16> {
     None
-}
-
-pub(super) fn percent_encode_query_component(text: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut encoded = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                encoded.push(byte as char);
-            }
-            b' ' => encoded.push_str("%20"),
-            _ => {
-                encoded.push('%');
-                encoded.push(HEX[(byte >> 4) as usize] as char);
-                encoded.push(HEX[(byte & 0x0f) as usize] as char);
-            }
-        }
-    }
-    encoded
 }

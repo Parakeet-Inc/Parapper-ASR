@@ -13,17 +13,25 @@ pub(super) struct SegmentBuilderConfig {
 
 impl SegmentBuilderConfig {
     pub(super) fn from_config(config: &ParapperConfig) -> Self {
+        let streaming_interim_asr_enabled = config.turn.interim_result_enabled
+            && config
+                .asr
+                .interim_model
+                .unwrap_or(config.asr.model)
+                .is_nemotron();
         Self {
             segment_start_threshold: chunks_for_millis(
                 config.segmentation.segment_start_speech_ms,
                 config.segmentation.vad_interval_ms,
             ),
-            interim_result_threshold: config.turn.interim_result_enabled.then(|| {
-                chunks_for_millis(
-                    config.turn.interim_result_silence_ms,
-                    config.segmentation.vad_interval_ms,
-                )
-            }),
+            interim_result_threshold: (config.turn.interim_result_enabled
+                && !streaming_interim_asr_enabled)
+                .then(|| {
+                    chunks_for_millis(
+                        config.turn.interim_result_silence_ms,
+                        config.segmentation.vad_interval_ms,
+                    )
+                }),
             turn_check_threshold: chunks_for_millis(
                 config.turn.check_silence_ms,
                 config.segmentation.vad_interval_ms,

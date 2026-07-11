@@ -4,8 +4,9 @@ use tauri::Listener;
 
 use crate::{
     config::{
-        AsrLanguage, AsrModel, NeoSendTiming, ParapperConfig, SpeechBackend, SpeechMapping,
-        SpeechSourceKind, TranslationMapping,
+        AsrLanguage, AsrModel, LocalTranslationModel, NeoSendTiming, ParapperConfig, SpeechBackend,
+        SpeechMapping, SpeechSourceKind, TranslationBackend, TranslationLanguage,
+        TranslationMapping,
     },
     connect::test_support::{TimedMockHttpServer, json_response, request_id_from_plugin_request},
     delivery::{
@@ -26,7 +27,7 @@ fn source_meta() -> RecognitionSourceMeta {
 
 fn recognized_output(id: &str, text: &str) -> RecognizedTextOutput {
     RecognizedTextOutput {
-        phrase: Vec::new(),
+        phrase: Vec::new().into(),
         text: text.to_string(),
         source_asr_model: AsrModel::ReazonSpeechK2V2,
         source_language: AsrLanguage::Japanese,
@@ -40,7 +41,10 @@ fn translation_mapping(id: &str, target_lang: &str) -> TranslationMapping {
     TranslationMapping {
         id: id.to_string(),
         source_asr_model: Some(AsrModel::ReazonSpeechK2V2),
-        target_lang: target_lang.to_string(),
+        backend: TranslationBackend::Ync,
+        local_model: LocalTranslationModel::default(),
+        source_lang: TranslationLanguage::Ja,
+        target_lang: TranslationLanguage::from_code(target_lang).expect("en/ja translation target"),
     }
 }
 
@@ -86,7 +90,7 @@ fn recognized_text_pipeline_dispatches_translation_and_speech_sinks() {
             let request_id = request_id_from_plugin_request(request);
             if request.contains(r#""operation":"translate""#) {
                 assert!(
-                    request.contains(r#""lang":"en_US""#),
+                    request.contains(r#""lang":"en""#),
                     "unexpected translation target: {request}"
                 );
                 assert!(
@@ -94,7 +98,7 @@ fn recognized_text_pipeline_dispatches_translation_and_speech_sinks() {
                     "unexpected translation source text: {request}"
                 );
                 let body = format!(
-                    r#"{{"operation":"translate","status":"success","id":"{request_id}","lang":"en_US","text":"translated {request_id}"}}"#
+                    r#"{{"operation":"translate","status":"success","id":"{request_id}","lang":"en","text":"translated {request_id}"}}"#
                 );
                 return json_response(&body);
             }
@@ -135,11 +139,11 @@ fn recognized_text_pipeline_dispatches_translation_and_speech_sinks() {
         speech_ids,
         vec![
             "speech-turn-pipeline-1-speech-recognition",
-            "speech-turn-pipeline-1|en_US-speech-translation",
+            "speech-turn-pipeline-1|en-speech-translation",
         ]
     );
     assert!(translated_event.contains(r#""source_recognition_id":"turn-pipeline-1""#));
-    assert!(translated_event.contains(r#""target_lang":"en_US""#));
+    assert!(translated_event.contains(r#""target_lang":"en""#));
     assert!(translated_event.contains(r#""translated_text":"translated turn-pipeline-1""#));
     let translated_event: serde_json::Value =
         serde_json::from_str(&translated_event).expect("translated event should be JSON");
@@ -159,15 +163,15 @@ fn pipeline_test_config(port: u16) -> ParapperConfig {
     parapper_config! {
         neo_http_enabled: false,
         translation_enabled: true,
-        translation_plugin_http_port: port,
+        ync_plugin_port: port,
         translation_send_timing: NeoSendTiming::Final,
-        translation_mappings: vec![translation_mapping("translate-en", "en_US")],
+        translation_mappings: vec![translation_mapping("translate-en", "en")],
         speech_mappings: vec![
             SpeechMapping {
                 ..speech_mapping("speech-recognition", SpeechSourceKind::Recognition)
             },
             SpeechMapping {
-                target_lang: Some("en_US".to_string()),
+                target_lang: Some("en".to_string()),
                 talker: "Microsoft Zira Desktop/SAPI5".to_string(),
                 ..speech_mapping("speech-translation", SpeechSourceKind::Translation)
             },

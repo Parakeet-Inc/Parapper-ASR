@@ -1,18 +1,38 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, anyhow};
 #[cfg(any(not(test), feature = "real-asr-tests"))]
 use sherpa_onnx::{
     OfflineNemoEncDecCtcModelConfig, OfflineRecognizer, OfflineRecognizerConfig,
-    OfflineRecognizerResult, OfflineTransducerModelConfig,
+    OfflineRecognizerResult, OfflineTransducerModelConfig, OnlineRecognizer,
+    OnlineRecognizerConfig, OnlineStream, OnlineTransducerModelConfig,
+    RecognizerResult as OnlineRecognizerResult,
 };
 
 #[cfg(any(not(test), feature = "real-asr-tests"))]
 use crate::audio::ASR_SAMPLE_RATE;
-use crate::config::{AsrModel, AsrPrecision};
+use crate::config::{AsrModel, AsrModelImplementation, AsrPrecision, AsrStreamLanguage};
+use crate::recognition::transcription::asr::task::AsrStreamingSessionKey;
 
 pub trait AsrEngine: Send {
     fn transcribe(&mut self, samples: &[f32]) -> Result<AsrTranscript>;
+
+    fn transcribe_streaming_delta(
+        &mut self,
+        _session: AsrStreamingSessionKey,
+        samples: &[f32],
+    ) -> Result<AsrTranscript> {
+        self.transcribe(samples)
+    }
+
+    fn clear_streaming_session(&mut self, _session: AsrStreamingSessionKey) {
+        self.clear_streaming_sessions();
+    }
+
+    fn clear_streaming_sessions(&mut self) {}
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +93,16 @@ impl AsrTranscript {
             result.durations.as_deref(),
         )
     }
+
+    #[cfg(any(not(test), feature = "real-asr-tests"))]
+    fn from_sherpa_online_result(result: OnlineRecognizerResult) -> Self {
+        Self::from_parts(
+            result.text,
+            result.tokens,
+            result.timestamps.as_deref(),
+            None,
+        )
+    }
 }
 
 fn token_char_ranges_relative_to_trimmed_text(
@@ -102,11 +132,19 @@ fn token_char_ranges_relative_to_trimmed_text(
 
 #[cfg(any(not(test), feature = "real-asr-tests"))]
 pub struct SherpaOnnxAsrEngine {
-    recognizer: OfflineRecognizer,
+    recognizer: SherpaOnnxRecognizer,
+    model: AsrModel,
+    streaming_sessions: HashMap<AsrStreamingSessionKey, OnlineStream>,
 }
 
 #[cfg(all(test, not(feature = "real-asr-tests")))]
 pub struct SherpaOnnxAsrEngine;
+
+#[cfg(any(not(test), feature = "real-asr-tests"))]
+enum SherpaOnnxRecognizer {
+    Offline(OfflineRecognizer),
+    Online(OnlineRecognizer),
+}
 
 // The recognizer is owned by the ASR worker thread after construction. Runtime
 // access stays behind `&mut self`, so the wrapper is never shared concurrently.
@@ -161,8 +199,8 @@ impl SherpaOnnxTransducerModelFiles {
     }
 
     fn file_names(model: AsrModel, precision: AsrPrecision) -> SherpaOnnxTransducerFileNames {
-        match model {
-            AsrModel::ReazonSpeechK2V2 => match precision {
+        match model.implementation() {
+            AsrModelImplementation::ReazonSpeechK2 => match precision {
                 AsrPrecision::Int8 => SherpaOnnxTransducerFileNames {
                     encoder: "encoder-epoch-99-avg-1.int8.onnx",
                     decoder: "decoder-epoch-99-avg-1.int8.onnx",
@@ -182,10 +220,10 @@ impl SherpaOnnxTransducerModelFiles {
                     tokens: "tokens.txt",
                 },
             },
-            AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8 => {
+            AsrModelImplementation::NemoParakeetTdtCtc => {
                 unreachable!("NeMo CTC models do not use transducer file names")
             }
-            AsrModel::NemoParakeetTdt0_6BV2Int8 | AsrModel::NemoParakeetTdt0_6BV3Int8 => {
+            AsrModelImplementation::NemoParakeetTdt | AsrModelImplementation::Nemotron => {
                 SherpaOnnxTransducerFileNames {
                     encoder: "encoder.int8.onnx",
                     decoder: "decoder.int8.onnx",
@@ -228,14 +266,14 @@ impl SherpaOnnxNemoCtcModelFiles {
     }
 
     fn file_names(model: AsrModel) -> SherpaOnnxNemoCtcFileNames {
-        match model {
-            AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8 => SherpaOnnxNemoCtcFileNames {
+        match model.implementation() {
+            AsrModelImplementation::NemoParakeetTdtCtc => SherpaOnnxNemoCtcFileNames {
                 model: "model.int8.onnx",
                 tokens: "tokens.txt",
             },
-            AsrModel::ReazonSpeechK2V2
-            | AsrModel::NemoParakeetTdt0_6BV2Int8
-            | AsrModel::NemoParakeetTdt0_6BV3Int8 => {
+            AsrModelImplementation::ReazonSpeechK2
+            | AsrModelImplementation::NemoParakeetTdt
+            | AsrModelImplementation::Nemotron => {
                 unreachable!("transducer models do not use NeMo CTC file names")
             }
         }
@@ -260,13 +298,13 @@ impl SherpaOnnxNemoCtcModelFiles {
 impl SherpaOnnxModelFiles {
     #[cfg(any(not(test), feature = "real-asr-tests"))]
     fn from_dir(model_dir: &Path, model: AsrModel, precision: AsrPrecision) -> Result<Self> {
-        match model {
-            AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8 => Ok(Self::NemoCtc(
+        match model.implementation() {
+            AsrModelImplementation::NemoParakeetTdtCtc => Ok(Self::NemoCtc(
                 SherpaOnnxNemoCtcModelFiles::from_dir(model_dir, model)?,
             )),
-            AsrModel::ReazonSpeechK2V2
-            | AsrModel::NemoParakeetTdt0_6BV2Int8
-            | AsrModel::NemoParakeetTdt0_6BV3Int8 => Ok(Self::Transducer(
+            AsrModelImplementation::ReazonSpeechK2
+            | AsrModelImplementation::NemoParakeetTdt
+            | AsrModelImplementation::Nemotron => Ok(Self::Transducer(
                 SherpaOnnxTransducerModelFiles::from_dir(model_dir, model, precision)?,
             )),
         }
@@ -284,7 +322,11 @@ impl SherpaOnnxAsrEngine {
         let files = SherpaOnnxModelFiles::from_dir(model_dir, model, precision)?;
         let recognizer = create_recognizer(&files, model, num_threads)?;
 
-        Ok(Self { recognizer })
+        Ok(Self {
+            recognizer,
+            model,
+            streaming_sessions: HashMap::new(),
+        })
     }
 
     #[cfg(all(test, not(feature = "real-asr-tests")))]
@@ -300,6 +342,19 @@ impl SherpaOnnxAsrEngine {
 
 #[cfg(any(not(test), feature = "real-asr-tests"))]
 fn create_recognizer(
+    files: &SherpaOnnxModelFiles,
+    model: AsrModel,
+    num_threads: i32,
+) -> Result<SherpaOnnxRecognizer> {
+    if model.is_nemotron() {
+        return create_online_recognizer(files, model, num_threads)
+            .map(SherpaOnnxRecognizer::Online);
+    }
+    create_offline_recognizer(files, model, num_threads).map(SherpaOnnxRecognizer::Offline)
+}
+
+#[cfg(any(not(test), feature = "real-asr-tests"))]
+fn create_offline_recognizer(
     files: &SherpaOnnxModelFiles,
     model: AsrModel,
     num_threads: i32,
@@ -333,20 +388,50 @@ fn create_recognizer(
 }
 
 #[cfg(any(not(test), feature = "real-asr-tests"))]
+fn create_online_recognizer(
+    files: &SherpaOnnxModelFiles,
+    model: AsrModel,
+    num_threads: i32,
+) -> Result<OnlineRecognizer> {
+    let SherpaOnnxModelFiles::Transducer(files) = files else {
+        return Err(anyhow!("Nemotron ASR requires transducer model files"));
+    };
+    let mut config = OnlineRecognizerConfig::default();
+    config.model_config.transducer = OnlineTransducerModelConfig {
+        encoder: Some(files.encoder.display().to_string()),
+        decoder: Some(files.decoder.display().to_string()),
+        joiner: Some(files.joiner.display().to_string()),
+    };
+    config.model_config.tokens = Some(files.tokens.display().to_string());
+    config.model_config.provider = Some("cpu".to_string());
+    config.model_config.model_type = model_type(model).map(str::to_string);
+    config.model_config.modeling_unit = modeling_unit(model).map(str::to_string);
+    config.model_config.num_threads = num_threads;
+    config.decoding_method = Some("greedy_search".to_string());
+    config.max_active_paths = 1;
+    config.enable_endpoint = true;
+
+    OnlineRecognizer::create(&config)
+        .ok_or_else(|| anyhow!("Failed to create sherpa-onnx online recognizer"))
+}
+
+#[cfg(any(not(test), feature = "real-asr-tests"))]
 fn model_type(model: AsrModel) -> Option<&'static str> {
-    match model {
-        AsrModel::NemoParakeetTdt0_6BV2Int8 | AsrModel::NemoParakeetTdt0_6BV3Int8 => {
+    match model.implementation() {
+        AsrModelImplementation::NemoParakeetTdt | AsrModelImplementation::Nemotron => {
             Some("nemo_transducer")
         }
-        AsrModel::ReazonSpeechK2V2 | AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8 => None,
+        AsrModelImplementation::ReazonSpeechK2 | AsrModelImplementation::NemoParakeetTdtCtc => None,
     }
 }
 
 #[cfg(any(not(test), feature = "real-asr-tests"))]
 fn modeling_unit(model: AsrModel) -> Option<&'static str> {
-    match model {
-        AsrModel::ReazonSpeechK2V2 | AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8 => Some("cjkchar"),
-        AsrModel::NemoParakeetTdt0_6BV2Int8 | AsrModel::NemoParakeetTdt0_6BV3Int8 => None,
+    match model.implementation() {
+        AsrModelImplementation::ReazonSpeechK2
+        | AsrModelImplementation::NemoParakeetTdtCtc
+        | AsrModelImplementation::Nemotron => Some("cjkchar"),
+        AsrModelImplementation::NemoParakeetTdt => None,
     }
 }
 
@@ -357,17 +442,64 @@ impl AsrEngine for SherpaOnnxAsrEngine {
             return Ok(AsrTranscript::from_text(""));
         }
 
-        let recognizer = &self.recognizer;
-        let stream = recognizer.create_stream();
-        stream.accept_waveform(
-            i32::try_from(ASR_SAMPLE_RATE).expect("ASR sample rate fits in i32"),
+        match &self.recognizer {
+            SherpaOnnxRecognizer::Offline(recognizer) => {
+                let stream = recognizer.create_stream();
+                stream.accept_waveform(
+                    i32::try_from(ASR_SAMPLE_RATE).expect("ASR sample rate fits in i32"),
+                    samples,
+                );
+                recognizer.decode(&stream);
+                let result = stream
+                    .get_result()
+                    .ok_or_else(|| anyhow!("Failed to fetch sherpa-onnx result"))?;
+                Ok(AsrTranscript::from_sherpa_result(result))
+            }
+            SherpaOnnxRecognizer::Online(recognizer) => {
+                transcribe_online(recognizer, self.model, samples)
+            }
+        }
+    }
+
+    #[cfg(any(not(test), feature = "real-asr-tests"))]
+    fn transcribe_streaming_delta(
+        &mut self,
+        session: AsrStreamingSessionKey,
+        samples: &[f32],
+    ) -> Result<AsrTranscript> {
+        if samples.is_empty() {
+            return Ok(AsrTranscript::from_text(""));
+        }
+        let SherpaOnnxRecognizer::Online(recognizer) = &self.recognizer else {
+            return self.transcribe(samples);
+        };
+        transcribe_online_streaming_delta(
+            recognizer,
+            self.model,
+            &mut self.streaming_sessions,
+            session,
             samples,
-        );
-        recognizer.decode(&stream);
-        let result = stream
-            .get_result()
-            .ok_or_else(|| anyhow!("Failed to fetch sherpa-onnx result"))?;
-        Ok(AsrTranscript::from_sherpa_result(result))
+        )
+    }
+
+    #[cfg(any(not(test), feature = "real-asr-tests"))]
+    fn clear_streaming_session(&mut self, session: AsrStreamingSessionKey) {
+        let SherpaOnnxRecognizer::Online(recognizer) = &self.recognizer else {
+            return;
+        };
+        if let Some(stream) = self.streaming_sessions.remove(&session) {
+            recognizer.reset(&stream);
+        }
+    }
+
+    #[cfg(any(not(test), feature = "real-asr-tests"))]
+    fn clear_streaming_sessions(&mut self) {
+        let SherpaOnnxRecognizer::Online(recognizer) = &self.recognizer else {
+            return;
+        };
+        for (_, stream) in self.streaming_sessions.drain() {
+            recognizer.reset(&stream);
+        }
     }
 
     #[cfg(all(test, not(feature = "real-asr-tests")))]
@@ -376,9 +508,96 @@ impl AsrEngine for SherpaOnnxAsrEngine {
     }
 }
 
+#[cfg(any(not(test), feature = "real-asr-tests"))]
+fn transcribe_online(
+    recognizer: &OnlineRecognizer,
+    model: AsrModel,
+    samples: &[f32],
+) -> Result<AsrTranscript> {
+    const NEMOTRON_CHUNK_SAMPLES: usize = ASR_SAMPLE_RATE as usize * 160 / 1000;
+    let stream = recognizer.create_stream();
+    if let Some(language) = nemotron_stream_language_option(model) {
+        stream.set_option("language", language);
+    }
+
+    for chunk in samples.chunks(NEMOTRON_CHUNK_SAMPLES) {
+        stream.accept_waveform(
+            i32::try_from(ASR_SAMPLE_RATE).expect("ASR sample rate fits in i32"),
+            chunk,
+        );
+        while recognizer.is_ready(&stream) {
+            recognizer.decode(&stream);
+        }
+    }
+    stream.input_finished();
+    while recognizer.is_ready(&stream) {
+        recognizer.decode(&stream);
+    }
+    let result = recognizer
+        .get_result(&stream)
+        .ok_or_else(|| anyhow!("Failed to fetch sherpa-onnx online result"))?;
+    Ok(AsrTranscript::from_sherpa_online_result(result))
+}
+
+#[cfg(any(not(test), feature = "real-asr-tests"))]
+fn transcribe_online_streaming_delta(
+    recognizer: &OnlineRecognizer,
+    model: AsrModel,
+    streams: &mut HashMap<AsrStreamingSessionKey, OnlineStream>,
+    session: AsrStreamingSessionKey,
+    samples: &[f32],
+) -> Result<AsrTranscript> {
+    let stream = streams.entry(session).or_insert_with(|| {
+        let stream = recognizer.create_stream();
+        if let Some(language) = nemotron_stream_language_option(model) {
+            stream.set_option("language", language);
+        }
+        stream
+    });
+    stream.accept_waveform(
+        i32::try_from(ASR_SAMPLE_RATE).expect("ASR sample rate fits in i32"),
+        samples,
+    );
+    while recognizer.is_ready(stream) {
+        recognizer.decode(stream);
+    }
+    let result = recognizer
+        .get_result(stream)
+        .ok_or_else(|| anyhow!("Failed to fetch sherpa-onnx online streaming result"))?;
+    Ok(AsrTranscript::from_sherpa_online_result(result))
+}
+
+#[cfg(any(not(test), feature = "real-asr-tests"))]
+fn nemotron_stream_language_option(model: AsrModel) -> Option<&'static str> {
+    match model.stream_language() {
+        AsrStreamLanguage::Nemotron35Auto => Some(nemotron_35_multilingual_language_option()),
+        AsrStreamLanguage::None => None,
+    }
+}
+
+#[cfg(all(
+    any(not(test), feature = "real-asr-tests"),
+    test,
+    feature = "real-asr-tests"
+))]
+fn nemotron_35_multilingual_language_option() -> &'static str {
+    "ja-JP"
+}
+
+#[cfg(all(
+    any(not(test), feature = "real-asr-tests"),
+    not(all(test, feature = "real-asr-tests"))
+))]
+fn nemotron_35_multilingual_language_option() -> &'static str {
+    "auto"
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AsrTranscript, SherpaOnnxNemoCtcModelFiles, SherpaOnnxTransducerModelFiles};
+    use super::{
+        AsrEngine, AsrTranscript, SherpaOnnxAsrEngine, SherpaOnnxNemoCtcModelFiles,
+        SherpaOnnxTransducerModelFiles,
+    };
     use crate::config::{AsrModel, AsrPrecision};
 
     #[test]
@@ -386,6 +605,10 @@ mod tests {
         for model in [
             AsrModel::NemoParakeetTdt0_6BV2Int8,
             AsrModel::NemoParakeetTdt0_6BV3Int8,
+            AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8,
+            AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8,
+            AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8,
+            AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8,
         ] {
             let names =
                 SherpaOnnxTransducerModelFiles::expected_file_names(model, AsrPrecision::Int8);
@@ -418,6 +641,187 @@ mod tests {
         assert_eq!(names.decoder, "decoder-epoch-99-avg-1.onnx");
         assert_eq!(names.joiner, "joiner-epoch-99-avg-1.int8.onnx");
         assert_eq!(names.tokens, "tokens.txt");
+    }
+
+    #[cfg(feature = "real-asr-tests")]
+    #[test]
+    fn real_asr_tests_pin_nemotron_35_stream_language_to_ja_jp() {
+        assert_eq!(
+            super::nemotron_stream_language_option(AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8),
+            Some("ja-JP")
+        );
+        assert_eq!(
+            super::nemotron_stream_language_option(AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8),
+            Some("ja-JP")
+        );
+        assert_eq!(
+            super::nemotron_stream_language_option(
+                AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8
+            ),
+            None
+        );
+        assert_eq!(
+            super::nemotron_stream_language_option(
+                AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8
+            ),
+            None
+        );
+    }
+
+    #[cfg(feature = "real-asr-tests")]
+    #[test]
+    #[ignore = "requires downloaded Nemotron 3.5 ASR 160ms model"]
+    fn downloaded_nemotron_35_streaming_model_transcribes_archive_test_wavs() {
+        let model_dir =
+            std::env::var_os("PARAPPER_NEMOTRON_MODEL_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::path::PathBuf::from(std::env::var_os("APPDATA").expect(
+                        "APPDATA or PARAPPER_NEMOTRON_MODEL_DIR is required for real ASR test",
+                    ))
+                    .join("com.parakeet-inc.parapper")
+                    .join("models")
+                    .join("sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-160ms-int8-2026-06-11")
+                });
+        let wav_path = model_dir.join("test_wavs").join("ja.wav");
+        let wave = sherpa_onnx::Wave::read(&wav_path.display().to_string())
+            .unwrap_or_else(|| panic!("failed to read {}", wav_path.display()));
+        assert_eq!(wave.sample_rate(), 16_000);
+        let mut engine = SherpaOnnxAsrEngine::new(
+            &model_dir,
+            AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8,
+            AsrPrecision::Int8,
+            2,
+        )
+        .expect("Nemotron engine should load from the downloaded model dir");
+
+        let transcript = engine
+            .transcribe(wave.samples())
+            .expect("Nemotron engine should transcribe the archive test wav");
+
+        assert!(
+            !transcript.text.trim().is_empty(),
+            "Nemotron archive test wav should produce non-empty text"
+        );
+    }
+
+    #[cfg(feature = "real-asr-tests")]
+    #[test]
+    #[ignore = "diagnostic: requires downloaded Nemotron 3.5 and Parakeet TDT CTC JA models"]
+    fn measure_cpu4_rtf_nemotron_35_vs_parakeet_tdt_ctc_ja() {
+        use std::time::{Duration, Instant};
+
+        fn models_root() -> std::path::PathBuf {
+            std::env::var_os("PARAPPER_MODELS_ROOT")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::path::PathBuf::from(
+                        std::env::var_os("APPDATA")
+                            .expect("APPDATA or PARAPPER_MODELS_ROOT is required"),
+                    )
+                    .join("com.parakeet-inc.parapper")
+                    .join("models")
+                })
+        }
+
+        fn measure(
+            label: &str,
+            model: AsrModel,
+            model_dir: &std::path::Path,
+            samples: &[f32],
+            audio_sec: f64,
+        ) -> (f64, String) {
+            let mut engine = SherpaOnnxAsrEngine::new(model_dir, model, AsrPrecision::Int8, 4)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to load {label} from {}: {err:#}",
+                        model_dir.display()
+                    )
+                });
+            let warmup = engine
+                .transcribe(samples)
+                .unwrap_or_else(|err| panic!("{label} warmup transcription failed: {err:#}"));
+            println!("{label} warmup text: {:?}", warmup.text);
+
+            let repeats = std::env::var("PARAPPER_ASR_RTF_REPEATS")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(3)
+                .max(1);
+            let mut total = Duration::ZERO;
+            let mut last_text = String::new();
+            for iteration in 1..=repeats {
+                let started_at = Instant::now();
+                let transcript = engine.transcribe(samples).unwrap_or_else(|err| {
+                    panic!("{label} transcription iteration {iteration} failed: {err:#}")
+                });
+                let elapsed = started_at.elapsed();
+                let rtf = elapsed.as_secs_f64() / audio_sec;
+                println!(
+                    "{label} iter {iteration}: elapsed_ms={:.1} rtf={:.3} text={:?}",
+                    elapsed.as_secs_f64() * 1000.0,
+                    rtf,
+                    transcript.text
+                );
+                total += elapsed;
+                last_text = transcript.text;
+            }
+            let avg_rtf = total.as_secs_f64() / repeats as f64 / audio_sec;
+            println!("{label} avg_rtf={avg_rtf:.3} repeats={repeats}");
+            (avg_rtf, last_text)
+        }
+
+        let models_root = models_root();
+        let nemotron_dir = models_root.join(crate::model::catalog::asr_model_dir_name(
+            AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8,
+        ));
+        let parakeet_dir = models_root.join(crate::model::catalog::asr_model_dir_name(
+            AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8,
+        ));
+        let wav_path = std::env::var_os("PARAPPER_ASR_RTF_WAV")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| nemotron_dir.join("test_wavs").join("ja.wav"));
+        let wave = sherpa_onnx::Wave::read(&wav_path.display().to_string())
+            .unwrap_or_else(|| panic!("failed to read {}", wav_path.display()));
+        assert_eq!(
+            wave.sample_rate(),
+            i32::try_from(crate::audio::ASR_SAMPLE_RATE).expect("ASR sample rate fits in i32")
+        );
+        let audio_sec = wave.samples().len() as f64 / f64::from(crate::audio::ASR_SAMPLE_RATE);
+        println!(
+            "RTF input: {} samples={} audio_sec={:.3}",
+            wav_path.display(),
+            wave.samples().len(),
+            audio_sec
+        );
+
+        let (nemotron_rtf, nemotron_text) = measure(
+            "nemotron_3_5_asr_streaming_0_6b_160ms_int8_cpu4",
+            AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8,
+            &nemotron_dir,
+            wave.samples(),
+            audio_sec,
+        );
+        let (parakeet_rtf, parakeet_text) = measure(
+            "nemo_parakeet_tdt_ctc_0_6b_ja_35000_int8_cpu4",
+            AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8,
+            &parakeet_dir,
+            wave.samples(),
+            audio_sec,
+        );
+
+        println!(
+            "RTF comparison cpu4: nemotron={nemotron_rtf:.3} parakeet_tdt_ctc_ja={parakeet_rtf:.3} ratio={:.3}",
+            nemotron_rtf / parakeet_rtf
+        );
+        assert!(
+            !nemotron_text.trim().is_empty(),
+            "Nemotron should produce non-empty text for the RTF input"
+        );
+        assert!(
+            !parakeet_text.trim().is_empty(),
+            "Parakeet TDT CTC JA should produce non-empty text for the RTF input"
+        );
     }
 
     #[test]

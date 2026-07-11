@@ -102,10 +102,10 @@ fn run_translation_request(handle: &AppHandle, request: &TranslationRequest) {
         "Translation request start source_id={} final={} targets={}",
         request.source_recognition_id,
         request.is_final,
-        request.targets.join(",")
+        request.target_lang_codes().join(",")
     );
     let started_at = Instant::now();
-    let result = translate_text(request);
+    let result = translate_text(Some(handle), request);
     let elapsed_millis = started_at.elapsed().as_millis();
     match result {
         Ok(translations) => {
@@ -139,9 +139,13 @@ fn run_translation_request(handle: &AppHandle, request: &TranslationRequest) {
                 request.source_recognition_id,
                 elapsed_millis
             );
-            for target_lang in &request.targets {
-                let result =
-                    translation_result(request, target_lang.clone(), String::new(), elapsed_millis);
+            for target_lang in request.target_lang_codes() {
+                let result = translation_result(
+                    request,
+                    target_lang.to_string(),
+                    String::new(),
+                    elapsed_millis,
+                );
                 emit_translation_text_event(
                     handle,
                     result,
@@ -157,7 +161,7 @@ fn run_translation_request(handle: &AppHandle, request: &TranslationRequest) {
 pub(crate) fn translate_and_spawn_speech_for_test(
     request: &TranslationRequest,
 ) -> anyhow::Result<Vec<(String, String)>> {
-    let translations = translate_text(request)?;
+    let translations = translate_text(None, request)?;
     for (target_lang, translated_text) in &translations {
         spawn_translation_speech_if_needed(None, request, target_lang, translated_text);
     }

@@ -82,6 +82,11 @@ const initialRuntimeState: RuntimeState = {
   translationSpeechDelaySuspected: false,
 };
 
+const recognitionIsRunning = (status: RecognitionStatus) =>
+  status === "waiting_for_client" ||
+  status === "listening" ||
+  status === "draining";
+
 const TRANSLATION_SPEECH_DELAY_WARNING_MS = 3000;
 
 const initialModelState: ModelState = {
@@ -221,7 +226,7 @@ export const useAppState = ({
         setRuntime((current) => ({
           ...current,
           status: loadedStatus,
-          running: loadedStatus === "listening",
+          running: recognitionIsRunning(loadedStatus),
           starting: false,
         }));
 
@@ -318,6 +323,14 @@ export const useAppState = ({
 
   useEffect(() => {
     const unlistenCallbacks = [
+      listen<RecognitionStatus>("parapper://status", (event) => {
+        setRuntime((current) => ({
+          ...current,
+          status: event.payload,
+          running: recognitionIsRunning(event.payload),
+          starting: false,
+        }));
+      }),
       listen<InputLevelEvent | number>("parapper://input-level", (event) => {
         const level = parseInputLevelEvent(event.payload);
         setRuntime((current) => ({
@@ -554,6 +567,9 @@ const shouldReplaceRecognitionEvent = (
     is_final: boolean;
   },
 ) => {
+  if (current.is_final && !incoming.is_final) {
+    return false;
+  }
   if (incoming.source.turn_revision !== current.source.turn_revision) {
     return incoming.source.turn_revision > current.source.turn_revision;
   }

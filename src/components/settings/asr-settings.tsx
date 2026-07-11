@@ -23,10 +23,21 @@ export const AsrSettings: React.FC<AsrSettingsProps> = ({
   onApplyAsrModel,
 }) => {
   const { t } = useTranslation();
-  const { asrModelSelectOptions, selectedAsrPrecisionOptions } =
-    useAsrModelOptions(config.asr_model);
+  const {
+    asrModelSelectOptions,
+    interimOnlyAsrModelSelectOptions,
+    selectedAsrPrecisionOptions,
+  } = useAsrModelOptions(config.asr_model);
   const asrThreadOptions = buildAsrThreadOptions(t);
   const runtimeLockedTooltip = t("tooltip.runtimeLocked");
+  const primaryAsrModelValue = "__primary_asr_model__";
+  const splitAsrModelOptions = [
+    {
+      value: primaryAsrModelValue,
+      label: t("settings.interimAsrModel.primary"),
+    },
+    ...interimOnlyAsrModelSelectOptions,
+  ];
   const selectedEnabledAsrModels = config.enabled_asr_models?.length
     ? config.enabled_asr_models
     : [config.asr_model];
@@ -58,6 +69,29 @@ export const AsrSettings: React.FC<AsrSettingsProps> = ({
               onApplyAsrModel(value as AsrModel);
             }
           }}
+        />
+      </DisabledReasonTooltip>
+      <DisabledReasonTooltip
+        disabled={runtimeLocked}
+        label={runtimeLockedTooltip}
+      >
+        <Select
+          label={settingLabel(
+            t("settings.interimAsrModel.label"),
+            t("settings.interimAsrModel.description"),
+          )}
+          data={splitAsrModelOptions}
+          value={config.interim_asr_model ?? primaryAsrModelValue}
+          allowDeselect={false}
+          disabled={runtimeLocked}
+          onChange={(value) =>
+            onUpdateConfig(
+              "interim_asr_model",
+              value && value !== primaryAsrModelValue
+                ? (value as AsrModel)
+                : null,
+            )
+          }
         />
       </DisabledReasonTooltip>
       <DisabledReasonTooltip

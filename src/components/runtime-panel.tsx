@@ -20,7 +20,7 @@ import { useTranslation } from "react-i18next";
 import { RecognitionLog } from "./recognition-log";
 import type { RuntimeState } from "../hooks/use-app-state";
 import { useSyncedLogRowHeights } from "../hooks/use-synced-log-row-heights";
-import { buildAudioDeviceOptions } from "../lib/audio-devices";
+import { buildAudioDeviceOptions, isLoopbackHost } from "../lib/audio-devices";
 import {
   normalizeParapperErrorPayload,
   notifyParapperIssue,
@@ -36,6 +36,13 @@ import type {
 
 import IconMic from "~icons/material-symbols/mic";
 import IconRefresh from "~icons/material-symbols/refresh";
+
+const WEBSOCKET_INPUT_VALUE = "parapper\u0000websocket";
+
+const recognitionIsRunning = (status: RecognitionStatus) =>
+  status === "waiting_for_client" ||
+  status === "listening" ||
+  status === "draining";
 
 type RuntimePanelProps = {
   config: ParapperConfig;
@@ -79,14 +86,40 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
 }) => {
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const inputAudioDeviceOptions = useMemo(
-    () => buildAudioDeviceOptions(inputAudioDevices),
-    [inputAudioDevices],
-  );
+  const inputAudioDeviceOptions = useMemo(() => {
+    const options = buildAudioDeviceOptions(
+      inputAudioDevices,
+      t("settings.inputAudioDevice.loopbackGroup"),
+    );
+    if (
+      (config.streaming_recognition_enabled &&
+        config.developer_connection_mode === "web_socket") ||
+      config.input_source_kind === "web_socket"
+    ) {
+      options.push({
+        group: t("settings.inputAudioDevice.networkGroup"),
+        items: [
+          {
+            label: t("settings.inputAudioDevice.webSocket"),
+            value: WEBSOCKET_INPUT_VALUE,
+          },
+        ],
+      });
+    }
+    return options;
+  }, [
+    config.input_source_kind,
+    config.streaming_recognition_enabled,
+    config.developer_connection_mode,
+    inputAudioDevices,
+    t,
+  ]);
   const selectedInputAudioDevice =
-    config.input_device_host && config.input_device_id
-      ? `${config.input_device_host}\u0000${config.input_device_id}`
-      : null;
+    config.input_source_kind === "web_socket"
+      ? WEBSOCKET_INPUT_VALUE
+      : config.input_device_host && config.input_device_id
+        ? `${config.input_device_host}\u0000${config.input_device_id}`
+        : null;
   const hasTranslationPanel = Boolean(translationPanel);
   const hasYncSpeech =
     config.neo_http_enabled &&
@@ -110,7 +143,7 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
     setRuntime((current) => ({
       ...current,
       status: nextStatus,
-      running: nextStatus === "listening",
+      running: recognitionIsRunning(nextStatus),
       starting: false,
     }));
     return nextStatus;
@@ -122,7 +155,7 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
       setRuntime((current) => ({
         ...current,
         status: nextStatus,
-        running: false,
+        running: recognitionIsRunning(nextStatus),
         starting: false,
       }));
     } catch (error) {
@@ -143,7 +176,7 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
       setRuntime((current) => ({
         ...current,
         status: nextStatus,
-        running: nextStatus === "listening",
+        running: recognitionIsRunning(nextStatus),
         starting: false,
       }));
     } catch (error) {
@@ -166,11 +199,36 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
   const stopSpeech = async () => {
     try {
       await invoke("neo_speech_stop", {
-        port: config.translation_plugin_http_port,
+        port: config.ync_plugin_port,
       });
     } catch (error) {
       notifications.show({
         title: t("notifications.speechStopFailed.title"),
+        message: String(error),
+        color: notificationColor.error,
+      });
+    }
+  };
+
+  // Loopback (speaker) capture needs the macOS "System Audio Recording"
+  // permission; without it the tap records silence. Prompt for it as soon as a
+  // loopback source is chosen, and guide the user to System Settings if declined.
+  const ensureLoopbackPermission = async () => {
+    try {
+      const granted = await invoke<boolean>(
+        "request_loopback_audio_permission",
+      );
+      if (!granted) {
+        notifications.show({
+          title: t("notifications.loopbackPermissionRequired.title"),
+          message: t("notifications.loopbackPermissionRequired.message"),
+          color: notificationColor.warn,
+        });
+        await invoke("open_system_audio_permission_settings");
+      }
+    } catch (error) {
+      notifications.show({
+        title: t("notifications.loopbackPermissionRequired.title"),
         message: String(error),
         color: notificationColor.error,
       });
@@ -237,9 +295,18 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
                     if (!value) {
                       onApplyAudioDeviceConfig({
                         ...config,
+                        input_source_kind: "desktop_audio",
                         input_device_id: null,
                         input_device_host: null,
                         input_device_name: null,
+                      });
+                      return;
+                    }
+
+                    if (value === WEBSOCKET_INPUT_VALUE) {
+                      onApplyAudioDeviceConfig({
+                        ...config,
+                        input_source_kind: "web_socket",
                       });
                       return;
                     }
@@ -251,10 +318,14 @@ export const RuntimePanel: React.FC<RuntimePanelProps> = ({
                     );
                     onApplyAudioDeviceConfig({
                       ...config,
+                      input_source_kind: "desktop_audio",
                       input_device_id: id,
                       input_device_host: host,
                       input_device_name: device?.display_name ?? null,
                     });
+                    if (isLoopbackHost(host)) {
+                      void ensureLoopbackPermission();
+                    }
                   }}
                 />
               </Box>

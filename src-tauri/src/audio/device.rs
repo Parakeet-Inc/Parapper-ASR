@@ -27,7 +27,15 @@ pub(crate) struct OutputDeviceSelection {
 }
 
 pub fn collect_input_devices() -> Vec<DeviceInfo> {
-    collect_devices(DeviceDirection::Input)
+    let mut devices = collect_devices(DeviceDirection::Input);
+    if LOOPBACK_SUPPORTED {
+        // Output devices are exposed as additional "loopback" sources so the user can
+        // transcribe whatever is playing through the speakers. cpal records them by
+        // building an input stream on the output device (a CoreAudio process tap on
+        // macOS, WASAPI loopback on Windows).
+        devices.extend(collect_loopback_devices());
+    }
+    devices
 }
 
 pub fn collect_output_devices() -> Vec<DeviceInfo> {
@@ -59,9 +67,14 @@ pub(crate) fn selected_input_device(config: &ParapperConfig) -> Result<InputDevi
     if let (Some(host), Some(id)) = (
         config.input.device_host.as_deref(),
         config.input.device_id.as_deref(),
-    ) && let Some(selected) = find_input_device(host, id)?
-    {
-        return Ok(selected);
+    ) {
+        if let Some(real_host) = loopback_source_host(host) {
+            if LOOPBACK_SUPPORTED && let Some(selected) = find_loopback_device(real_host, id)? {
+                return Ok(selected);
+            }
+        } else if let Some(selected) = find_input_device(host, id)? {
+            return Ok(selected);
+        }
     }
 
     default_input_device()
@@ -123,6 +136,97 @@ fn find_output_device(host_name: &str, device_id: &str) -> Result<Option<OutputD
     }
 
     Ok(None)
+}
+
+/// Loopback (system-audio) capture is only wired up on platforms where cpal records an
+/// output device by building an input stream on it: a `CoreAudio` process tap on macOS
+/// (requires macOS 14.4+) and `WASAPI` loopback on Windows.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+const LOOPBACK_SUPPORTED: bool = true;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const LOOPBACK_SUPPORTED: bool = false;
+
+/// Suffix appended to a host name to mark a device entry as a loopback capture source.
+/// A real host name never contains it, so it round-trips unambiguously through the saved
+/// `input_device_host`/`input_device_id` config and back into device resolution.
+const LOOPBACK_HOST_SUFFIX: &str = " (Loopback)";
+
+fn loopback_host_label(real_host: &str) -> String {
+    format!("{real_host}{LOOPBACK_HOST_SUFFIX}")
+}
+
+/// Returns the underlying host name if `host_label` refers to a loopback source.
+fn loopback_source_host(host_label: &str) -> Option<&str> {
+    host_label.strip_suffix(LOOPBACK_HOST_SUFFIX)
+}
+
+fn collect_loopback_devices() -> Vec<DeviceInfo> {
+    let mut devices = Vec::new();
+    for host_id in available_non_asio_hosts() {
+        let Ok(host) = cpal::host_from_id(host_id) else {
+            continue;
+        };
+        let Ok(output_devices) = host.output_devices() else {
+            continue;
+        };
+        for device in output_devices {
+            let Some(device_info) = loopback_device_info(host_id, &device) else {
+                continue;
+            };
+            devices.push(device_info);
+        }
+    }
+
+    devices
+}
+
+fn loopback_device_info(host_id: HostId, device: &Device) -> Option<DeviceInfo> {
+    let default_config = device.default_output_config().ok()?;
+    let stream_config = default_config.config();
+    Some(DeviceInfo {
+        id: device_id(device),
+        host: loopback_host_label(&host_name_from_id(host_id)),
+        display_name: device_name(device),
+        channels: stream_config.channels,
+        sample_rate: stream_config.sample_rate,
+    })
+}
+
+fn find_loopback_device(host_name: &str, device_id: &str) -> Result<Option<InputDeviceSelection>> {
+    for host_id in available_non_asio_hosts() {
+        if host_name_from_id(host_id) != host_name {
+            continue;
+        }
+        let host = cpal::host_from_id(host_id)?;
+        for device in host.output_devices()? {
+            let Some(device_info) = loopback_device_info(host_id, &device) else {
+                continue;
+            };
+            if device_info.id == device_id {
+                // A CoreAudio process tap records silence without the System Audio
+                // Recording permission, so require it before starting capture.
+                super::ensure_system_audio_permission()?;
+                return Ok(Some(loopback_selection(device)?));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+/// Builds an input selection that captures an output device's audio via loopback.
+///
+/// The source device is the output device itself; cpal transparently creates the
+/// process tap / loopback stream when an input stream is built on it. Because the
+/// device has no input configuration, the stream is driven by its output format
+/// (`default_output_config`).
+fn loopback_selection(device: Device) -> Result<InputDeviceSelection> {
+    let default_config = device.default_output_config()?;
+    Ok(InputDeviceSelection {
+        stream_config: default_config.config(),
+        sample_format: default_config.sample_format(),
+        device,
+    })
 }
 
 fn default_input_device() -> Result<InputDeviceSelection> {

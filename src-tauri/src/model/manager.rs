@@ -11,14 +11,16 @@ use serde::{Deserialize, Serialize};
 use tar::Archive;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::{fs::File, io::AsyncWriteExt};
-use vibrato_rkyv::Dictionary;
+use vibrato_rkyv::{Dictionary, LoadMode};
 use xz2::read::XzDecoder;
 
 use super::catalog::{
-    ALL_ASR_MODELS, ALL_NAMO_TURN_DETECTOR_MODELS, ALL_NOISE_CANCELLATION_MODELS,
-    NamoTurnDetectorModel, VAD_MODEL_URL, VIBRATO_MODEL_MAGIC, asr_model_base_url,
-    asr_model_dir_name, asr_model_required_file_names, language_id_model_base_url,
-    language_id_model_dir_name, language_id_model_files, local_tts_model_archive_name,
+    ALL_ASR_MODELS, ALL_LOCAL_TRANSLATION_MODELS, ALL_NAMO_TURN_DETECTOR_MODELS,
+    ALL_NOISE_CANCELLATION_MODELS, NamoTurnDetectorModel, VAD_MODEL_URL, VIBRATO_MODEL_MAGIC,
+    asr_model_archive_name, asr_model_base_url, asr_model_dir_name, asr_model_required_file_names,
+    language_id_model_base_url, language_id_model_dir_name, language_id_model_files,
+    local_translation_model_base_url, local_translation_model_dir_name,
+    local_translation_model_required_file_names, local_tts_model_archive_name,
     local_tts_model_base_url, local_tts_model_required_dir_names,
     local_tts_model_required_file_names, namo_turn_detector_base_url, namo_turn_detector_dir_name,
     namo_turn_detector_files, noise_cancellation_model_base_url, noise_cancellation_model_dir_name,
@@ -26,8 +28,8 @@ use super::catalog::{
     vibrato_unidic_archive_url, vibrato_unidic_dir_name,
 };
 use crate::config::{
-    ALL_LOCAL_TTS_VOICES, AsrModel, AsrPrecision, LocalTtsFamily, LocalTtsVoice,
-    NoiseCancellationModel, ParapperConfig, SpeechBackend,
+    ALL_LOCAL_TTS_VOICES, AsrModel, AsrPrecision, LocalTranslationModel, LocalTtsFamily,
+    LocalTtsVoice, NoiseCancellationModel, ParapperConfig, SpeechBackend, TranslationBackend,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +41,7 @@ pub struct ModelStatus {
     pub language_id: Option<ModelAssetStatus>,
     pub turn_detectors: Vec<ModelAssetStatus>,
     pub tts: Vec<ModelAssetStatus>,
+    pub local_translation: Option<ModelAssetStatus>,
     pub noise_cancellation: Option<ModelAssetStatus>,
 }
 
@@ -88,11 +91,14 @@ struct DownloadTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DownloadTargetKind {
     File,
+    LocalFile,
     TarBz2Directory,
     TarXzDirectory,
 }
 
 const STALE_EXTRACTION_MARKER_AGE: Duration = Duration::from_secs(60 * 60 * 6);
+const CAT_TRANSLATE_0_8B_Q4_K_QUANT_LOCAL_SOURCE_DIR_NAME: &str =
+    "cat-translate-0.8b-onnx-q4-k-quant-diagnostic";
 
 pub fn models_root(handle: &AppHandle) -> Result<PathBuf> {
     Ok(handle.path().app_data_dir()?.join("models"))
@@ -177,6 +183,28 @@ pub fn local_tts_model_dir(handle: &AppHandle, voice: LocalTtsVoice) -> Result<P
     Ok(local_tts_model_dir_from_root(&models_root(handle)?, voice))
 }
 
+pub fn local_translation_model_dir_from_root(root: &Path, model: LocalTranslationModel) -> PathBuf {
+    root.join(local_translation_model_dir_name(model))
+}
+
+pub fn local_translation_model_dir(
+    handle: &AppHandle,
+    model: LocalTranslationModel,
+) -> Result<PathBuf> {
+    Ok(local_translation_model_dir_from_root(
+        &models_root(handle)?,
+        model,
+    ))
+}
+
+pub fn local_translation_model_is_installed(
+    handle: &AppHandle,
+    model: LocalTranslationModel,
+) -> Result<bool> {
+    let model_dir = local_translation_model_dir(handle, model)?;
+    Ok(local_translation_model_installed(&model_dir, model))
+}
+
 pub fn noise_cancellation_model_dir_from_root(
     root: &Path,
     model: NoiseCancellationModel,
@@ -244,6 +272,13 @@ pub fn model_status_from_root(root: &Path, config: &ParapperConfig) -> ModelStat
                 ModelAssetStatus::new(&path, local_tts_model_installed(&path, voice))
             })
             .collect(),
+        local_translation: {
+            let models = local_translation_models_for_config(config);
+            (!models.is_empty()).then(|| {
+                let path = local_translation_status_path(root, &models);
+                ModelAssetStatus::new(&path, local_translation_models_installed(root, &models))
+            })
+        },
         noise_cancellation: config.noise_cancellation.enabled.then(|| {
             let path =
                 noise_cancellation_model_dir_from_root(root, config.noise_cancellation.model);
@@ -300,6 +335,13 @@ pub fn any_model_installed_in(root: &Path) -> bool {
         }
     }
 
+    if ALL_LOCAL_TRANSLATION_MODELS.iter().any(|model| {
+        let local_translation_path = local_translation_model_dir_from_root(root, *model);
+        local_translation_model_installed(&local_translation_path, *model)
+    }) {
+        return true;
+    }
+
     for model in ALL_NOISE_CANCELLATION_MODELS {
         let noise_cancellation_path = noise_cancellation_model_dir_from_root(root, *model);
         if noise_cancellation_model_installed(&noise_cancellation_path, *model) {
@@ -325,6 +367,7 @@ pub async fn ensure_models_downloaded(
     push_language_id_download_targets(&mut targets, &root, config)?;
     push_namo_download_targets(&mut targets, &root, config)?;
     push_local_tts_download_targets(&mut targets, &root, config)?;
+    push_local_translation_download_targets(&mut targets, &root, config)?;
     push_noise_cancellation_download_targets(&mut targets, &root, config)?;
 
     let total_files = targets.len();
@@ -387,6 +430,18 @@ fn push_asr_download_targets(
         fs::create_dir_all(&asr_path)
             .with_context(|| format!("Failed to create ASR model dir: {}", asr_path.display()))?;
         let precision = config.asr_precision_for(model);
+        if asr_model_installed_for(&asr_path, model, precision) {
+            continue;
+        }
+        if let Some(archive_name) = asr_model_archive_name(model) {
+            targets.push(DownloadTarget {
+                url: format!("{}/{}", asr_model_base_url(model), archive_name),
+                output_path: asr_path,
+                file_name: archive_name,
+                kind: DownloadTargetKind::TarBz2Directory,
+            });
+            continue;
+        }
         push_missing_file_targets(
             targets,
             &asr_path,
@@ -463,7 +518,7 @@ fn push_missing_file_targets_with_query(
 ) {
     for file_name in file_names {
         let output_path = model_dir.join(file_name);
-        if output_path.is_file() {
+        if output_path.is_file() || target_output_already_scheduled(targets, &output_path) {
             continue;
         }
         let url = if append_download_query {
@@ -576,6 +631,7 @@ fn materialize_zstd_japanese_morph_dictionary_as_rkyv(
                 output_path.display()
             )
         })?;
+        wait_for_rkyv_dictionary_mmap(output_path)?;
         return Ok(());
     }
     fs::remove_file(&temporary_path).ok();
@@ -683,7 +739,34 @@ fn transcode_zstd_legacy_japanese_morph_dictionary_to_rkyv(
             output_path.display()
         )
     })?;
+    wait_for_rkyv_dictionary_mmap(output_path)?;
     Ok(())
+}
+
+fn wait_for_rkyv_dictionary_mmap(path: &Path) -> Result<()> {
+    const ATTEMPTS: usize = 10;
+    const RETRY_DELAY: Duration = Duration::from_millis(20);
+
+    let mut last_error = None;
+    for attempt in 0..ATTEMPTS {
+        match vibrato_rkyv::Dictionary::from_path(path, LoadMode::TrustCache) {
+            Ok(dictionary) => {
+                drop(dictionary);
+                return Ok(());
+            }
+            Err(err) => {
+                last_error = Some(err);
+                if attempt + 1 < ATTEMPTS {
+                    std::thread::sleep(RETRY_DELAY);
+                }
+            }
+        }
+    }
+    Err(anyhow::anyhow!(
+        "Failed to mmap materialized Japanese morph dictionary {} after {ATTEMPTS} attempts: {}",
+        path.display(),
+        last_error.expect("at least one mmap attempt")
+    ))
 }
 
 fn japanese_morph_dictionary_compatible(path: &Path) -> Result<bool> {
@@ -728,6 +811,26 @@ fn local_tts_model_installed(model_dir: &Path, voice: LocalTtsVoice) -> bool {
             .all(|dir| model_dir.join(dir).is_dir())
 }
 
+fn local_translation_model_installed(model_dir: &Path, model: LocalTranslationModel) -> bool {
+    local_translation_model_required_file_names(model)
+        .iter()
+        .all(|file| model_dir.join(file).is_file())
+}
+
+fn local_translation_models_installed(root: &Path, models: &[LocalTranslationModel]) -> bool {
+    models.iter().all(|model| {
+        let model_dir = local_translation_model_dir_from_root(root, *model);
+        local_translation_model_installed(&model_dir, *model)
+    })
+}
+
+fn local_translation_status_path(root: &Path, models: &[LocalTranslationModel]) -> PathBuf {
+    match models {
+        [model] => local_translation_model_dir_from_root(root, *model),
+        _ => root.to_path_buf(),
+    }
+}
+
 fn noise_cancellation_model_installed(model_dir: &Path, model: NoiseCancellationModel) -> bool {
     noise_cancellation_model_required_file_names(model)
         .iter()
@@ -761,6 +864,125 @@ fn push_local_tts_download_targets(
         }
     }
     Ok(())
+}
+
+fn push_local_translation_download_targets(
+    targets: &mut Vec<DownloadTarget>,
+    root: &Path,
+    config: &ParapperConfig,
+) -> Result<()> {
+    push_local_translation_download_targets_with_source_resolver(
+        targets,
+        root,
+        config,
+        local_translation_model_local_source_dir,
+    )
+}
+
+fn push_local_translation_download_targets_with_source_resolver(
+    targets: &mut Vec<DownloadTarget>,
+    root: &Path,
+    config: &ParapperConfig,
+    local_source_dir: impl Fn(LocalTranslationModel) -> Option<PathBuf>,
+) -> Result<()> {
+    for model in local_translation_models_for_config(config) {
+        push_local_translation_model_download_targets(targets, root, model, &local_source_dir)?;
+    }
+    Ok(())
+}
+
+fn push_local_translation_model_download_targets(
+    targets: &mut Vec<DownloadTarget>,
+    root: &Path,
+    model: LocalTranslationModel,
+    local_source_dir: &impl Fn(LocalTranslationModel) -> Option<PathBuf>,
+) -> Result<()> {
+    let model_dir = local_translation_model_dir_from_root(root, model);
+    fs::create_dir_all(&model_dir).with_context(|| {
+        format!(
+            "Failed to create local translation model dir: {}",
+            model_dir.display()
+        )
+    })?;
+    let required_files = local_translation_model_required_file_names(model);
+    if let Some(base_url) = local_translation_model_base_url(model) {
+        push_missing_file_targets(targets, &model_dir, required_files, base_url);
+    } else {
+        let source_dir = local_source_dir(model)
+            .with_context(|| format!("Local translation model {model:?} has no download source"))?;
+        push_missing_local_file_targets(targets, &model_dir, required_files, &source_dir)?;
+    }
+    Ok(())
+}
+
+pub async fn ensure_local_translation_model_downloaded(
+    handle: &AppHandle,
+    model: LocalTranslationModel,
+) -> Result<()> {
+    let root = models_root(handle)?;
+    fs::create_dir_all(&root)
+        .with_context(|| format!("Failed to create model dir: {}", root.display()))?;
+
+    let mut targets = Vec::new();
+    push_local_translation_model_download_targets(
+        &mut targets,
+        &root,
+        model,
+        &local_translation_model_local_source_dir,
+    )?;
+
+    let total_files = targets.len();
+    for (index, target) in targets.into_iter().enumerate() {
+        download_file(handle, &target, index, total_files).await?;
+    }
+    Ok(())
+}
+
+fn push_missing_local_file_targets(
+    targets: &mut Vec<DownloadTarget>,
+    model_dir: &Path,
+    file_names: &[&str],
+    source_dir: &Path,
+) -> Result<()> {
+    for file_name in file_names {
+        let output_path = model_dir.join(file_name);
+        if output_path.is_file() || target_output_already_scheduled(targets, &output_path) {
+            continue;
+        }
+        let source_path = source_dir.join(file_name);
+        if !source_path.is_file() {
+            anyhow::bail!(
+                "Local translation model source file is missing: {}",
+                source_path.display()
+            );
+        }
+        targets.push(DownloadTarget {
+            url: source_path.display().to_string(),
+            output_path,
+            file_name: (*file_name).to_string(),
+            kind: DownloadTargetKind::LocalFile,
+        });
+    }
+    Ok(())
+}
+
+fn target_output_already_scheduled(targets: &[DownloadTarget], output_path: &Path) -> bool {
+    targets
+        .iter()
+        .any(|target| target.output_path == output_path)
+}
+
+fn local_translation_model_local_source_dir(model: LocalTranslationModel) -> Option<PathBuf> {
+    match model {
+        LocalTranslationModel::Lfm2Q4 => None,
+        LocalTranslationModel::CatTranslate0_8BQ4KQuant => Some(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("onnx-optimize")
+                .join("outputs")
+                .join(CAT_TRANSLATE_0_8B_Q4_K_QUANT_LOCAL_SOURCE_DIR_NAME),
+        ),
+    }
 }
 
 fn push_noise_cancellation_download_targets(
@@ -825,6 +1047,28 @@ fn local_tts_voices_for_config(config: &ParapperConfig) -> Vec<LocalTtsVoice> {
     voices
 }
 
+fn local_translation_models_for_config(config: &ParapperConfig) -> Vec<LocalTranslationModel> {
+    if !config.translation.enabled {
+        return Vec::new();
+    }
+
+    let mut models = Vec::new();
+    if config.translation.enabled {
+        models.extend(
+            config
+                .translation
+                .mappings
+                .iter()
+                .filter(|mapping| mapping.backend == TranslationBackend::Local)
+                .filter(|mapping| ALL_LOCAL_TRANSLATION_MODELS.contains(&mapping.local_model))
+                .map(|mapping| mapping.local_model),
+        );
+    }
+    models.sort_by_key(|model| model.sort_key());
+    models.dedup();
+    models
+}
+
 async fn download_file(
     handle: &AppHandle,
     target: &DownloadTarget,
@@ -835,6 +1079,10 @@ async fn download_file(
     if let Some(parent) = target.output_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create model output dir: {}", parent.display()))?;
+    }
+    if target.kind == DownloadTargetKind::LocalFile {
+        copy_local_model_file(handle, target, file_index, total_files)?;
+        return Ok(());
     }
     if target.kind != DownloadTargetKind::File && temporary_path.is_file() {
         match install_downloaded_archive(handle, target, &temporary_path, file_index, total_files) {
@@ -907,6 +1155,7 @@ async fn download_file(
                 )
             })?;
         }
+        DownloadTargetKind::LocalFile => unreachable!("local files are copied before download"),
         DownloadTargetKind::TarBz2Directory => {
             extract_tar_bz2_directory(&temporary_path, &target.output_path)?;
         }
@@ -921,6 +1170,42 @@ async fn download_file(
         file_index,
         total_files,
         total_bytes.unwrap_or(0),
+        total_bytes,
+        file_index + 1 == total_files,
+    );
+    Ok(())
+}
+
+fn copy_local_model_file(
+    handle: &AppHandle,
+    target: &DownloadTarget,
+    file_index: usize,
+    total_files: usize,
+) -> Result<()> {
+    let source_path = Path::new(&target.url);
+    let total_bytes = source_path.metadata().map(|metadata| metadata.len()).ok();
+    emit_download_progress(
+        handle,
+        &target.file_name,
+        file_index,
+        total_files,
+        0,
+        total_bytes,
+        false,
+    );
+    let copied_bytes = fs::copy(source_path, &target.output_path).with_context(|| {
+        format!(
+            "Failed to copy local model file from {} to {}",
+            source_path.display(),
+            target.output_path.display()
+        )
+    })?;
+    emit_download_progress(
+        handle,
+        &target.file_name,
+        file_index,
+        total_files,
+        copied_bytes,
         total_bytes,
         file_index + 1 == total_files,
     );
@@ -950,6 +1235,7 @@ fn install_downloaded_archive(
 
     match target.kind {
         DownloadTargetKind::File => unreachable!("file downloads are not archive-installed"),
+        DownloadTargetKind::LocalFile => unreachable!("local files are not archive-installed"),
         DownloadTargetKind::TarBz2Directory => {
             extract_tar_bz2_directory(temporary_path, &target.output_path)?;
         }
@@ -1186,16 +1472,24 @@ fn emit_download_progress(
 #[cfg(test)]
 mod tests {
     use super::{
+        CAT_TRANSLATE_0_8B_Q4_K_QUANT_LOCAL_SOURCE_DIR_NAME, DownloadTargetKind,
         NamoTurnDetectorModel, contained_tar_entry_path, default_asr_model_dir_from_root,
         japanese_morph_dictionary_compatible, japanese_morph_dictionary_paths_from_model_dir,
-        local_tts_voices_for_config, materialize_rkyv_japanese_morph_dictionary,
-        model_status_from_root, namo_turn_detector_models_for_config,
+        local_translation_model_dir_from_root, local_translation_model_local_source_dir,
+        local_translation_models_for_config, local_tts_voices_for_config,
+        materialize_rkyv_japanese_morph_dictionary, model_status_from_root,
+        namo_turn_detector_models_for_config,
+        push_local_translation_download_targets_with_source_resolver,
     };
     use crate::config::{
-        AsrModel, AsrPrecision, LocalTtsVoice, NoiseCancellationModel, ParapperConfig,
-        SpeechBackend, SpeechMapping, SpeechSourceKind, TurnDetector,
+        AsrModel, AsrPrecision, LocalTranslationModel, LocalTtsVoice, NoiseCancellationModel,
+        ParapperConfig, SpeechBackend, SpeechMapping, SpeechSourceKind, TranslationBackend,
+        TranslationLanguage, TranslationMapping, TurnDetector,
     };
-    use crate::model::catalog::{VIBRATO_MODEL_MAGIC, asr_model_required_file_names};
+    use crate::model::catalog::{
+        VIBRATO_MODEL_MAGIC, asr_model_archive_name, asr_model_required_file_names,
+        local_translation_model_required_file_names,
+    };
     use std::{fs, path::Path, time::SystemTime};
 
     #[test]
@@ -1548,6 +1842,44 @@ mod tests {
         assert!(status.asr.installed);
     }
 
+    #[test]
+    fn nemotron_asr_status_uses_selected_archive_required_files() {
+        for (model, archive_name) in [
+            (
+                AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8,
+                "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-160ms-int8-2026-06-11.tar.bz2",
+            ),
+            (
+                AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8,
+                "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11.tar.bz2",
+            ),
+        ] {
+            let root = unique_test_models_root("model-status-nemotron-asr");
+            let config = parapper_config! {
+                asr_language: crate::config::AsrLanguage::Multilingual,
+                asr_model: model,
+                asr_precision: AsrPrecision::Int8,
+                ..ParapperConfig::default()
+            }
+            .normalized();
+
+            assert_eq!(asr_model_archive_name(model).as_deref(), Some(archive_name));
+
+            let missing = model_status_from_root(&root, &config);
+            assert!(!missing.asr.installed);
+
+            write_required_asr_model_files(&root, model, AsrPrecision::Int8);
+            write_required_asr_model_files(
+                &root,
+                config.completion_asr_model(),
+                config.asr_precision_for(config.completion_asr_model()),
+            );
+
+            let installed = model_status_from_root(&root, &config);
+            assert!(installed.asr.installed);
+        }
+    }
+
     struct TestModelsRoot {
         path: std::path::PathBuf,
     }
@@ -1670,6 +2002,179 @@ mod tests {
                 .tts
                 .len(),
             2
+        );
+    }
+
+    #[test]
+    fn local_translation_status_uses_selected_distribution_model_files_without_requiring_other_variants()
+     {
+        let root = unique_test_models_root("model-status-local-translation");
+        let disabled =
+            model_status_from_root(std::path::Path::new("models"), &ParapperConfig::default());
+        assert!(disabled.local_translation.is_none());
+
+        for local_model in [LocalTranslationModel::Lfm2Q4] {
+            let root = root.join(format!("{local_model:?}"));
+            let config = parapper_config! {
+                translation_enabled: true,
+                translation_mappings: vec![TranslationMapping {
+                    id: "translate-ja-en-local".to_string(),
+                    source_asr_model: None,
+                    backend: TranslationBackend::Local,
+                    local_model,
+                    source_lang: TranslationLanguage::Ja,
+                    target_lang: TranslationLanguage::En,
+                }],
+                ..ParapperConfig::default()
+            };
+            assert_eq!(
+                local_translation_models_for_config(&config),
+                vec![local_model]
+            );
+
+            let missing = model_status_from_root(&root, &config);
+            assert_eq!(
+                missing
+                    .local_translation
+                    .as_ref()
+                    .map(|status| status.installed),
+                Some(false)
+            );
+
+            let model_dir = local_translation_model_dir_from_root(&root, local_model);
+            for file in local_translation_model_required_file_names(local_model) {
+                let path = model_dir.join(file);
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)
+                        .expect("failed to create local translation file parent");
+                }
+                fs::write(path, b"test").expect("failed to write local translation required file");
+            }
+
+            let installed = model_status_from_root(&root, &config);
+            assert_eq!(
+                installed
+                    .local_translation
+                    .as_ref()
+                    .map(|status| status.installed),
+                Some(true)
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_lfm2_q4_translation_mappings_require_model_once() {
+        let config = parapper_config! {
+            translation_enabled: true,
+            translation_mappings: vec![
+                TranslationMapping {
+                    id: "translate-ja-en-lfm2-1".to_string(),
+                    source_asr_model: None,
+                    backend: TranslationBackend::Local,
+                    local_model: LocalTranslationModel::Lfm2Q4,
+                    source_lang: TranslationLanguage::Ja,
+                    target_lang: TranslationLanguage::En,
+                },
+                TranslationMapping {
+                    id: "translate-ja-en-lfm2-2".to_string(),
+                    source_asr_model: None,
+                    backend: TranslationBackend::Local,
+                    local_model: LocalTranslationModel::Lfm2Q4,
+                    source_lang: TranslationLanguage::Ja,
+                    target_lang: TranslationLanguage::En,
+                },
+            ],
+            ..ParapperConfig::default()
+        };
+
+        assert_eq!(
+            local_translation_models_for_config(&config),
+            vec![LocalTranslationModel::Lfm2Q4]
+        );
+    }
+
+    #[test]
+    fn onnx_community_lfm2_q4_download_targets_use_hugging_face_files() {
+        let root = unique_test_models_root("model-status-local-translation-targets");
+        let models_root = root.join("models");
+        let config = parapper_config! {
+            translation_enabled: true,
+            translation_mappings: vec![TranslationMapping {
+                id: "translate-ja-en-lfm2".to_string(),
+                source_asr_model: None,
+                backend: TranslationBackend::Local,
+                local_model: LocalTranslationModel::Lfm2Q4,
+                source_lang: TranslationLanguage::Ja,
+                target_lang: TranslationLanguage::En,
+            }],
+            ..ParapperConfig::default()
+        };
+        let mut targets = Vec::new();
+
+        push_local_translation_download_targets_with_source_resolver(
+            &mut targets,
+            &models_root,
+            &config,
+            |_| None,
+        )
+        .expect("ONNX Community LFM2 Q4 should not require a local source");
+
+        let expected_len =
+            local_translation_model_required_file_names(LocalTranslationModel::Lfm2Q4).len();
+        let mut output_paths = targets
+            .iter()
+            .map(|target| target.output_path.clone())
+            .collect::<Vec<_>>();
+        output_paths.sort();
+        output_paths.dedup();
+        assert_eq!(targets.len(), expected_len);
+        assert_eq!(targets.len(), output_paths.len());
+        assert!(
+            targets
+                .iter()
+                .all(|target| target.kind == DownloadTargetKind::File)
+        );
+        assert!(targets.iter().all(|target| target.url.starts_with(
+            "https://huggingface.co/onnx-community/LFM2-350M-ENJP-MT-ONNX/resolve/main/"
+        )));
+    }
+
+    #[test]
+    fn listener_model_selection_does_not_change_internal_translation_model_requirements() {
+        let config = parapper_config! {
+            translation_enabled: false,
+            translation_local_server_model: LocalTranslationModel::CatTranslate0_8BQ4KQuant,
+            ..ParapperConfig::default()
+        };
+
+        assert!(local_translation_models_for_config(&config).is_empty());
+        assert!(
+            model_status_from_root(std::path::Path::new("models"), &config)
+                .local_translation
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn cat_translate_local_source_uses_k_quant_without_embedding_quantization() {
+        let source_dir = local_translation_model_local_source_dir(
+            LocalTranslationModel::CatTranslate0_8BQ4KQuant,
+        )
+        .expect("CAT translation model should have a local diagnostic source");
+
+        assert!(source_dir.ends_with(CAT_TRANSLATE_0_8B_Q4_K_QUANT_LOCAL_SOURCE_DIR_NAME));
+        assert!(
+            !source_dir
+                .to_string_lossy()
+                .contains("gather-emb-diagnostic")
+        );
+    }
+
+    #[test]
+    fn onnx_community_lfm2_q4_does_not_use_a_local_export_source() {
+        assert_eq!(
+            local_translation_model_local_source_dir(LocalTranslationModel::Lfm2Q4),
+            None
         );
     }
 }

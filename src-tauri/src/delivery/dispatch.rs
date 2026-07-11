@@ -64,7 +64,7 @@ mod tests {
     #[test]
     fn ync_delivery_final_flag_does_not_promote_partial_turns() {
         let output = RecognizedTextOutput {
-            phrase: Vec::new(),
+            phrase: Vec::new().into(),
             text: "今日は...".to_string(),
             source_asr_model: AsrModel::ReazonSpeechK2V2,
             source_language: AsrLanguage::Japanese,

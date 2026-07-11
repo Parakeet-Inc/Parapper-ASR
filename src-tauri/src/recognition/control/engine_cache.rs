@@ -13,6 +13,7 @@ use crate::{
     recognition::{
         transcription::{
             asr::engine::{AsrEngine, AsrTranscript, SherpaOnnxAsrEngine},
+            asr::task::AsrStreamingSessionKey,
             route::language_id::engine::SpokenLanguageIdentificationEngine,
         },
         turn::decision::engine::{NamoTokenizerKind, NamoTurnDecision, NamoTurnDetectorEngine},
@@ -22,6 +23,7 @@ use crate::{
 #[derive(Default)]
 pub(crate) struct AsrEngineCache {
     engines: HashMap<AsrModel, Box<dyn AsrEngine>>,
+    streaming_sessions: HashMap<AsrStreamingSessionKey, usize>,
 }
 
 impl AsrEngineCache {
@@ -70,6 +72,48 @@ impl AsrEngineCache {
             .get_mut(&route.model)
             .ok_or_else(|| anyhow::anyhow!("{:?} ASR engine was not preloaded", route.model))?;
         engine.transcribe(samples)
+    }
+
+    pub(crate) fn streaming_leading_padding_samples(
+        &self,
+        session: AsrStreamingSessionKey,
+    ) -> Option<usize> {
+        self.streaming_sessions.get(&session).copied()
+    }
+
+    pub(crate) fn transcribe_streaming_delta(
+        &mut self,
+        route: RecognitionRoute,
+        session: AsrStreamingSessionKey,
+        samples: &[f32],
+        leading_padding_samples_for_new_session: usize,
+    ) -> Result<(AsrTranscript, usize)> {
+        let engine = self
+            .engines
+            .get_mut(&route.model)
+            .ok_or_else(|| anyhow::anyhow!("{:?} ASR engine was not preloaded", route.model))?;
+        let existing_padding = self.streaming_sessions.get(&session).copied();
+        let leading_padding_samples =
+            existing_padding.unwrap_or(leading_padding_samples_for_new_session);
+        self.streaming_sessions
+            .entry(session)
+            .or_insert(leading_padding_samples);
+        let transcript = match engine.transcribe_streaming_delta(session, samples) {
+            Ok(transcript) => transcript,
+            Err(err) => {
+                self.streaming_sessions.remove(&session);
+                engine.clear_streaming_session(session);
+                return Err(err);
+            }
+        };
+        Ok((transcript, leading_padding_samples))
+    }
+
+    pub(crate) fn clear_streaming_sessions(&mut self) {
+        for engine in self.engines.values_mut() {
+            engine.clear_streaming_sessions();
+        }
+        self.streaming_sessions.clear();
     }
 
     #[cfg(test)]

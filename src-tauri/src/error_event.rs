@@ -8,6 +8,7 @@ pub enum ParapperErrorType {
     Resampler,
     Vad,
     Asr,
+    RecognitionBusy,
     ModelDownload,
     NeoHttp,
     OscQuery,

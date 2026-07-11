@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "type": "session.ready",
+  "session_id": "fixture-session",
+  "capabilities": {
+    "partial": true,
+    "speech_started": true,
+    "cancel": true
+  }
+}

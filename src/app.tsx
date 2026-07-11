@@ -133,6 +133,7 @@ export const App: React.FC = () => {
     model.status?.language_id?.installed === false ||
     model.status?.turn_detectors.some((status) => !status.installed) === true ||
     model.status?.tts.some((status) => !status.installed) === true ||
+    model.status?.local_translation?.installed === false ||
     model.status?.noise_cancellation?.installed === false;
   const canStartRecognition = !modelsMissing;
 

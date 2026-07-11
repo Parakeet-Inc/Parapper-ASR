@@ -4,7 +4,7 @@ use tauri::AppHandle;
 
 use crate::{config::ParapperConfig, delivery::RecognizedTextOutput, synthesis, translation};
 
-use super::{ui_event, ync_text};
+use super::{developer_http, ui_event, ync_text};
 
 pub(crate) struct DispatchContext<'a> {
     pub(crate) handle: &'a AppHandle,
@@ -55,12 +55,13 @@ pub(crate) trait RecognizedTextSink: Send + Sync {
     fn deliver(&self, ctx: &DispatchContext<'_>, output: &RecognizedTextOutput);
 }
 
-pub(crate) fn registered_recognized_text_sinks() -> [&'static dyn RecognizedTextSink; 4] {
+pub(crate) fn registered_recognized_text_sinks() -> [&'static dyn RecognizedTextSink; 5] {
     [
         &TRANSLATION_SINK,
         &SYNTHESIS_SINK,
         &ui_event::SINK,
         &ync_text::SINK,
+        &developer_http::SINK,
     ]
 }
 

@@ -4,8 +4,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
-    AsrLanguage, AsrModel, AsrPrecision, LocalTtsVoice, NoiseCancellationModel, ParapperConfig,
-    SpeechBackend, SpeechMapping, SpeechSourceKind, TranslationMapping, TurnDetector,
+    AsrLanguage, AsrModel, AsrPrecision, LocalTranslationModel, LocalTtsVoice,
+    NoiseCancellationModel, ParapperConfig, SpeechBackend, SpeechMapping, SpeechSourceKind,
+    TranslationLanguage, TranslationMapping, TurnDetector,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,7 +175,7 @@ fn japanese_to_english_translation_speech_config() -> ParapperConfig {
     config.translation.mappings = vec![japanese_to_english_translation_mapping()];
     config.speech.mappings = vec![supertonic_translation_speech_mapping(
         "speech-en",
-        "en_US",
+        "en",
         LocalTtsVoice::Supertonic2Onnx,
         "en",
     )];
@@ -185,7 +186,10 @@ fn japanese_to_english_translation_mapping() -> TranslationMapping {
     TranslationMapping {
         id: "translate-ja-en".to_string(),
         source_asr_model: Some(AsrModel::ReazonSpeechK2V2),
-        target_lang: "en_US".to_string(),
+        backend: Default::default(),
+        local_model: LocalTranslationModel::default(),
+        source_lang: TranslationLanguage::Ja,
+        target_lang: TranslationLanguage::En,
     }
 }
 
@@ -201,24 +205,30 @@ fn japanese_english_bidirectional_translation_speech_config() -> ParapperConfig 
         TranslationMapping {
             id: "translate-ja-en".to_string(),
             source_asr_model: Some(AsrModel::ReazonSpeechK2V2),
-            target_lang: "en_US".to_string(),
+            backend: Default::default(),
+            local_model: LocalTranslationModel::default(),
+            source_lang: TranslationLanguage::Ja,
+            target_lang: TranslationLanguage::En,
         },
         TranslationMapping {
             id: "translate-en-ja".to_string(),
             source_asr_model: Some(AsrModel::NemoParakeetTdt0_6BV2Int8),
-            target_lang: "ja_JP".to_string(),
+            backend: Default::default(),
+            local_model: LocalTranslationModel::default(),
+            source_lang: TranslationLanguage::En,
+            target_lang: TranslationLanguage::Ja,
         },
     ];
     config.speech.mappings = vec![
         supertonic_translation_speech_mapping(
             "speech-en",
-            "en_US",
+            "en",
             LocalTtsVoice::Supertonic2Onnx,
             "en",
         ),
         supertonic_translation_speech_mapping(
             "speech-ja",
-            "ja_JP",
+            "ja",
             LocalTtsVoice::Supertonic3Onnx,
             "ja",
         ),
@@ -288,8 +298,13 @@ fn supertonic_translation_speech_mapping(
 
 #[cfg(test)]
 mod tests {
-    use super::{japanese_english_bidirectional_translation_speech_config, load_config_presets};
-    use crate::config::{AsrModel, LocalTtsVoice};
+    use super::{
+        japanese_english_bidirectional_translation_speech_config, load_config_presets,
+        save_config_preset,
+    };
+    use crate::config::{
+        AsrModel, InputSourceKind, LocalTtsVoice, ParapperConfig, StreamingRecognitionOutputMode,
+    };
 
     #[test]
     fn bidirectional_translation_speech_preset_uses_enabled_asr_models() {
@@ -342,5 +357,35 @@ mod tests {
                 preset.name
             );
         }
+    }
+
+    #[test]
+    fn user_preset_round_trip_keeps_streaming_input_and_connection_fields() {
+        let path = std::env::temp_dir().join(format!(
+            "parapper-streaming-preset-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut expected = ParapperConfig::default();
+        expected.input.source_kind = InputSourceKind::WebSocket;
+        expected.streaming_recognition.enabled = true;
+        expected.streaming_recognition.bind_address = "0.0.0.0".to_string();
+        expected.streaming_recognition.port = 19082;
+        expected.streaming_recognition.api_key = Some("secret".to_string());
+        expected.streaming_recognition.output_mode =
+            StreamingRecognitionOutputMode::WebSocketAndDesktop;
+
+        save_config_preset(&path, "network".to_string(), expected.clone()).unwrap();
+        let actual = load_config_presets(&path)
+            .unwrap()
+            .into_iter()
+            .find(|preset| preset.name == "network")
+            .expect("saved network preset should be present")
+            .config;
+        assert_eq!(actual, expected);
+        let _ = std::fs::remove_file(path);
     }
 }

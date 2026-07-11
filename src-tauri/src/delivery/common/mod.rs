@@ -3,7 +3,8 @@ pub(crate) mod text_format;
 pub(crate) mod timing;
 
 pub(crate) use mapping::{
-    SpeechTextSource, speech_mapping_matches, translation_targets_for_mappings,
+    SpeechTextSource, TranslationProviderId, TranslationTarget, speech_mapping_matches,
+    translation_targets_for_mappings,
 };
 pub(crate) use text_format::{continuing_turn_text, finalize_turn_text, join_turn_segments};
 pub(crate) use timing::speech_timing_allows;

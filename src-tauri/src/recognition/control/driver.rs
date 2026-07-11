@@ -11,7 +11,7 @@ use crate::{
     config::ParapperConfig,
     recognition::segmentation::{
         flow::{SegmentationFlow, SegmentationFrameEvents},
-        segment::builder::SegmentBuilderEvent,
+        segment::builder::{SegmentBuilderEvent, SegmentCloseReason},
         vad::engine::VadResult,
     },
 };
@@ -20,7 +20,17 @@ pub(crate) trait RecognitionDriverHandle {
     fn update_config(&mut self, config: &ParapperConfig);
     fn push_vad_frame(&mut self, samples: &[f32], vad_result: VadResult);
     fn step(&mut self);
-    fn shutdown(&mut self);
+    fn shutdown(&mut self) -> RecognitionShutdownResult;
+    fn cancel(&mut self) {
+        let _ = self.shutdown();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecognitionShutdownResult {
+    Completed,
+    TimedOut,
+    Cancelled,
 }
 
 pub(crate) struct RecognitionDriver {
@@ -45,6 +55,7 @@ pub(crate) fn replay_vad_frames_for_runtime(
 }
 
 impl RecognitionDriver {
+    #[cfg(test)]
     pub(crate) fn new_for_production(
         handle: &AppHandle,
         config: &ParapperConfig,
@@ -52,6 +63,25 @@ impl RecognitionDriver {
     ) -> Self {
         Self::new(
             RecognitionSession::new_for_production(handle, config, asr_startup_sender),
+            config,
+        )
+    }
+
+    /// Production driver with a session-scoped output sink (see
+    /// [`RecognitionSession::new_for_production_with_output_sink`]).
+    pub(crate) fn new_for_production_with_output_sink(
+        handle: &AppHandle,
+        config: &ParapperConfig,
+        asr_startup_sender: Option<AsrWorkerStartupSender>,
+        output_sink: Box<dyn super::TurnOutputSink>,
+    ) -> Self {
+        Self::new(
+            RecognitionSession::new_for_production_with_output_sink(
+                handle,
+                config,
+                asr_startup_sender,
+                output_sink,
+            ),
             config,
         )
     }
@@ -66,7 +96,7 @@ impl RecognitionDriver {
         }
     }
 
-    fn shutdown_flush_and_drain(&mut self) {
+    fn shutdown_flush_and_drain(&mut self) -> RecognitionShutdownResult {
         let frame_events = self.segmentation_flow.flush();
         self.runtime.push_segment_event_frame(frame_events);
         let started_at = Instant::now();
@@ -79,7 +109,7 @@ impl RecognitionDriver {
             }
             if started_at.elapsed() >= SHUTDOWN_DRAIN_TIMEOUT {
                 log::warn!("Timed out while draining recognition shutdown work");
-                break;
+                return RecognitionShutdownResult::TimedOut;
             }
             thread::sleep(SHUTDOWN_DRAIN_POLL_INTERVAL);
         }
@@ -91,6 +121,7 @@ impl RecognitionDriver {
             self.runtime
                 .finalize_timeout_turn_after_rerecognition(open_turn_id);
         }
+        RecognitionShutdownResult::Completed
     }
 }
 
@@ -115,11 +146,13 @@ impl RecognitionSession {
         }
         let route_settings_changed = self.config.asr.language != config.asr.language
             || self.config.asr.model != config.asr.model
+            || self.config.asr.interim_model != config.asr.interim_model
             || self.config.asr.multilingual_enabled != config.asr.multilingual_enabled
             || self.config.asr.enabled_models != config.asr.enabled_models;
         self.config = config.clone();
         if route_settings_changed {
             self.turn_store.last_recognition_route = None;
+            self.pending.interim_asr.clear_streaming();
         }
         self.io.asr_runner.update_config(config);
         self.io.turn_decision_runner.update_config(config);
@@ -151,10 +184,35 @@ impl RecognitionSession {
 
         for event in frame_events.events {
             match event {
-                SegmentBuilderEvent::SegmentStarted { .. }
-                | SegmentBuilderEvent::SegmentExtended { .. } => {
+                SegmentBuilderEvent::SegmentStarted {
+                    segment_id,
+                    previous_segment_id,
+                    audio_so_far,
+                    vad_results,
+                } => {
                     self.activity.segment_activity_epoch =
                         self.activity.segment_activity_epoch.saturating_add(1);
+                    self.record_interim_segment_started(
+                        segment_id,
+                        previous_segment_id,
+                        audio_so_far,
+                        vad_results,
+                    );
+                }
+                SegmentBuilderEvent::SegmentExtended {
+                    segment_id,
+                    previous_segment_id,
+                    new_audio,
+                    vad_result,
+                } => {
+                    self.activity.segment_activity_epoch =
+                        self.activity.segment_activity_epoch.saturating_add(1);
+                    self.record_interim_segment_extended(
+                        segment_id,
+                        previous_segment_id,
+                        new_audio,
+                        vad_result,
+                    );
                 }
                 SegmentBuilderEvent::TurnCheckSilenceReached {
                     previous_segment_id,
@@ -173,6 +231,9 @@ impl RecognitionSession {
                     source_vad_results,
                     reason,
                 } => {
+                    if reason == SegmentCloseReason::EndSilenceReached {
+                        self.reset_interim_streaming_for_completion(segment_id);
+                    }
                     self.record_segment_closed_asr_candidate(
                         segment_id,
                         previous_segment_id,
@@ -231,8 +292,13 @@ impl RecognitionDriverHandle for RecognitionDriver {
         self.runtime.dispatch_next_asr_request_if_idle();
     }
 
-    fn shutdown(&mut self) {
-        self.shutdown_flush_and_drain();
+    fn shutdown(&mut self) -> RecognitionShutdownResult {
+        let result = self.shutdown_flush_and_drain();
+        self.runtime.io.asr_runner.shutdown();
+        result
+    }
+
+    fn cancel(&mut self) {
         self.runtime.io.asr_runner.shutdown();
     }
 }

@@ -1,14 +1,17 @@
 import {
-  Badge,
+  Accordion,
   Button,
+  Code,
+  Collapse,
   Group,
   NumberInput,
-  Progress,
+  Paper,
+  PasswordInput,
   SegmentedControl,
   Stack,
   Switch,
   Text,
-  Tooltip,
+  TextInput,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { invoke } from "@tauri-apps/api/core";
@@ -18,340 +21,306 @@ import { useTranslation } from "react-i18next";
 import { isMacOs } from "../../lib/platform";
 import { notificationColor } from "../../lib/theme";
 import type {
-  ModelDownloadProgress,
-  ModelStatus,
-  NeoSendTiming,
+  DeveloperConnectionMode,
   ParapperConfig,
+  StreamingRecognitionOutputMode,
 } from "../../lib/types";
-import { DisabledReasonTooltip, settingLabel } from "../ui/display";
 
 type ConnectionSettingsProps = {
   config: ParapperConfig;
-  modelStatus: ModelStatus | null;
-  downloadingModels: boolean;
-  modelDownloadProgress: ModelDownloadProgress | null;
   runtimeLocked: boolean;
   onUpdateConfig: <K extends keyof ParapperConfig>(
     key: K,
     value: ParapperConfig[K],
   ) => void;
-  onDownloadSelectedModels: () => void;
 };
 
 export const ConnectionSettings: React.FC<ConnectionSettingsProps> = ({
   config,
-  modelStatus,
-  downloadingModels,
-  modelDownloadProgress,
   runtimeLocked,
   onUpdateConfig,
-  onDownloadSelectedModels,
 }) => {
   const { t } = useTranslation();
   const [detectingNeoPort, setDetectingNeoPort] = useState(false);
   const [detectingPluginPort, setDetectingPluginPort] = useState(false);
-  const runtimeLockedTooltip = t("tooltip.runtimeLocked");
   const nativeConnectionsDisabled = isMacOs();
-  const neoHttpEnabled = !nativeConnectionsDisabled && config.neo_http_enabled;
-  const yncPluginAvailable = !nativeConnectionsDisabled;
-  const downloadProgressPercent = Math.round(
-    (modelDownloadProgress?.progress ?? 0) * 100,
-  );
-  const downloadButtonLabel =
-    downloadingModels || modelDownloadProgress
-      ? `${t("settings.downloadModels.button")} ${downloadProgressPercent}%`
-      : t("settings.downloadModels.button");
-  const modelAssetBadges = [
-    {
-      key: "noise-cancellation",
-      label: "NC",
-      installed: modelStatus?.noise_cancellation?.installed === true,
-      preparing: modelStatus?.noise_cancellation?.preparing === true,
-      visible: Boolean(modelStatus?.noise_cancellation),
-    },
-    {
-      key: "vad",
-      label: "VAD",
-      installed: modelStatus?.vad.installed === true,
-      preparing: modelStatus?.vad.preparing === true,
-      visible: true,
-    },
-    {
-      key: "asr",
-      label: "ASR",
-      installed: modelStatus?.asr.installed === true,
-      preparing: modelStatus?.asr.preparing === true,
-      visible: true,
-    },
-    {
-      key: "japanese-morph",
-      label: "Morph",
-      installed: modelStatus?.japanese_morph?.installed === true,
-      preparing: modelStatus?.japanese_morph?.preparing === true,
-      visible: Boolean(modelStatus?.japanese_morph),
-    },
-    {
-      key: "language-id",
-      label: "SLI",
-      installed: modelStatus?.language_id?.installed === true,
-      preparing: modelStatus?.language_id?.preparing === true,
-      visible: Boolean(modelStatus?.language_id),
-    },
-    {
-      key: "turn-detectors",
-      label: "TD",
-      installed:
-        modelStatus?.turn_detectors?.every((status) => status.installed) ===
-        true,
-      preparing:
-        modelStatus?.turn_detectors?.some((status) => status.preparing) ===
-        true,
-      visible: Boolean(modelStatus?.turn_detectors?.length),
-    },
-    {
-      key: "tts",
-      label: "TTS",
-      installed: modelStatus?.tts?.every((status) => status.installed) === true,
-      preparing: modelStatus?.tts?.some((status) => status.preparing) === true,
-      visible: Boolean(modelStatus?.tts?.length),
-    },
-  ];
+  const neoEnabled = !nativeConnectionsDisabled && config.neo_http_enabled;
+  const developerEnabled = config.streaming_recognition_enabled;
 
-  const findNeoHttpPort = async () => {
-    setDetectingNeoPort(true);
+  const findPort = async (
+    command: "find_neo_http_port" | "find_ync_plugin_http_port",
+    key: "neo_http_port" | "ync_plugin_port",
+    notificationKey: "neoPort" | "pluginPort",
+    setDetecting: (value: boolean) => void,
+  ) => {
+    setDetecting(true);
     try {
-      const port = await invoke<number | null>("find_neo_http_port");
+      const port = await invoke<number | null>(command);
       if (!port) {
         notifications.show({
-          title: t("notifications.neoPortNotFound.title"),
-          message: t("notifications.neoPortNotFound.message"),
+          title: t(`notifications.${notificationKey}NotFound.title`),
+          message: t(`notifications.${notificationKey}NotFound.message`),
           color: notificationColor.warn,
         });
         return;
       }
-      onUpdateConfig("neo_http_port", port);
+      onUpdateConfig(key, port);
       notifications.show({
-        title: t("notifications.neoPortDetected.title"),
-        message: t("notifications.neoPortDetected.message", { port }),
+        title: t(`notifications.${notificationKey}Detected.title`),
+        message: t(`notifications.${notificationKey}Detected.message`, {
+          port,
+        }),
       });
     } finally {
-      setDetectingNeoPort(false);
-    }
-  };
-
-  const findPluginHttpPort = async () => {
-    setDetectingPluginPort(true);
-    try {
-      const port = await invoke<number | null>("find_ync_plugin_http_port");
-      if (!port) {
-        notifications.show({
-          title: t("notifications.pluginPortNotFound.title"),
-          message: t("notifications.pluginPortNotFound.message"),
-          color: notificationColor.warn,
-        });
-        return;
-      }
-      onUpdateConfig("translation_plugin_http_port", port);
-      notifications.show({
-        title: t("notifications.pluginPortDetected.title"),
-        message: t("notifications.pluginPortDetected.message", { port }),
-      });
-    } finally {
-      setDetectingPluginPort(false);
+      setDetecting(false);
     }
   };
 
   return (
-    <Stack gap="sm">
-      <Stack gap={4}>
-        {settingLabel(
-          t("settings.neoHttpEnabled.label"),
-          t("settings.neoHttpEnabled.description"),
-        )}
-        <Switch
-          aria-label={t("settings.neoHttpEnabled.label")}
-          checked={!nativeConnectionsDisabled && config.neo_http_enabled}
-          disabled={nativeConnectionsDisabled}
-          onChange={(event) =>
-            onUpdateConfig("neo_http_enabled", event.currentTarget.checked)
+    <Stack gap="md">
+      <ConnectionSection
+        enabled={neoEnabled}
+        title={t("connectionSettings.neoEnabled")}
+        disabled={nativeConnectionsDisabled || runtimeLocked}
+        onToggle={(enabled) => onUpdateConfig("neo_http_enabled", enabled)}
+      >
+        <PortSetting
+          label={t("settings.neoHttpPort.label")}
+          value={config.neo_http_port}
+          loading={detectingNeoPort}
+          disabled={runtimeLocked}
+          findLabel={t("common.search")}
+          onChange={(port) => onUpdateConfig("neo_http_port", port)}
+          onFind={() =>
+            void findPort(
+              "find_neo_http_port",
+              "neo_http_port",
+              "neoPort",
+              setDetectingNeoPort,
+            )
           }
         />
-      </Stack>
-      {neoHttpEnabled ? (
-        <>
-          <Group align="end" gap="xs" wrap="nowrap">
-            <NumberInput
-              label={settingLabel(
-                t("settings.neoHttpPort.label"),
-                t("settings.neoHttpPort.description"),
-              )}
-              value={config.neo_http_port}
-              min={1}
-              max={65535}
-              style={{ flex: 1 }}
-              onChange={(value) =>
-                onUpdateConfig(
-                  "neo_http_port",
-                  typeof value === "number" ? value : 15520,
-                )
-              }
-            />
-            <Button
-              variant="light"
-              loading={detectingNeoPort}
-              onClick={() => void findNeoHttpPort()}
-            >
-              {t("common.search")}
-            </Button>
-          </Group>
-        </>
-      ) : null}
-      {yncPluginAvailable ? (
-        <>
-          <Group align="end" gap="xs" wrap="nowrap">
-            <NumberInput
-              label={settingLabel(
-                t("settings.translationPluginHttpPort.label"),
-                t("settings.translationPluginHttpPort.description"),
-              )}
-              value={config.translation_plugin_http_port}
-              min={1}
-              max={65535}
-              disabled={runtimeLocked}
-              style={{ flex: 1 }}
-              onChange={(value) =>
-                onUpdateConfig(
-                  "translation_plugin_http_port",
-                  typeof value === "number" ? value : 8080,
-                )
-              }
-            />
-            <Button
-              variant="light"
-              loading={detectingPluginPort}
-              disabled={runtimeLocked}
-              onClick={() => void findPluginHttpPort()}
-            >
-              {t("common.search")}
-            </Button>
-          </Group>
-        </>
-      ) : null}
-      {neoHttpEnabled ? (
-        <Stack gap={4}>
-          {settingLabel(
-            t("settings.neoSendTiming.label"),
-            t("settings.neoSendTiming.description"),
-          )}
+        <PortSetting
+          label={t("settings.translationPluginHttpPort.label")}
+          value={config.ync_plugin_port}
+          loading={detectingPluginPort}
+          disabled={runtimeLocked}
+          findLabel={t("common.search")}
+          onChange={(port) => onUpdateConfig("ync_plugin_port", port)}
+          onFind={() =>
+            void findPort(
+              "find_ync_plugin_http_port",
+              "ync_plugin_port",
+              "pluginPort",
+              setDetectingPluginPort,
+            )
+          }
+        />
+        <Switch
+          label={t("settings.oscQuery.muteSyncLabel")}
+          checked={!nativeConnectionsDisabled && config.vrc_osc_micmute}
+          disabled={nativeConnectionsDisabled || runtimeLocked}
+          onChange={(event) =>
+            onUpdateConfig("vrc_osc_micmute", event.currentTarget.checked)
+          }
+        />
+      </ConnectionSection>
+
+      <ConnectionSection
+        enabled={developerEnabled}
+        title={t("connectionSettings.developerEnabled")}
+        disabled={runtimeLocked}
+        onToggle={(enabled) =>
+          onUpdateConfig("streaming_recognition_enabled", enabled)
+        }
+      >
+        <Stack gap={6}>
+          <Text size="sm" fw={500}>
+            {t("connectionSettings.connectionMode")}
+          </Text>
           <SegmentedControl
-            aria-label={t("settings.neoSendTiming.label")}
-            value={config.neo_send_timing}
+            fullWidth
+            value={config.developer_connection_mode}
+            disabled={runtimeLocked}
             data={[
-              {
-                value: "interim",
-                label: t("options.neoSendTiming.interim"),
-              },
-              {
-                value: "final",
-                label: t("options.neoSendTiming.final"),
-              },
+              { value: "http", label: "HTTP" },
+              { value: "web_socket", label: "WebSocket" },
             ]}
             onChange={(value) =>
-              onUpdateConfig("neo_send_timing", value as NeoSendTiming)
+              onUpdateConfig(
+                "developer_connection_mode",
+                value as DeveloperConnectionMode,
+              )
             }
           />
         </Stack>
-      ) : null}
-      <Stack gap={4}>
-        {settingLabel(
-          t("settings.oscQuery.muteSyncLabel"),
-          t("settings.oscQuery.muteSyncDescription"),
-        )}
-        <DisabledReasonTooltip
-          disabled={runtimeLocked}
-          label={runtimeLockedTooltip}
-        >
-          <Switch
-            aria-label={t("settings.oscQuery.muteSyncLabel")}
-            checked={!nativeConnectionsDisabled && config.vrc_osc_micmute}
-            disabled={nativeConnectionsDisabled || runtimeLocked}
-            onChange={(event) =>
-              onUpdateConfig("vrc_osc_micmute", event.currentTarget.checked)
-            }
-          />
-        </DisabledReasonTooltip>
-      </Stack>
-      <Stack gap={2}>
-        {settingLabel(
-          t("settings.modelDir.label"),
-          t("settings.modelDir.description"),
-        )}
-        <Text size="xs" c="dimmed" style={{ wordBreak: "break-all" }}>
-          {modelStatus?.asr.path ?? t("common.unset")}
-        </Text>
-      </Stack>
-      <Stack gap="sm">
-        <Group gap="xs">
-          {modelAssetBadges
-            .filter((badge) => badge.visible)
-            .map((badge) => (
-              <Badge
-                key={badge.key}
-                color={
-                  badge.installed
-                    ? notificationColor.ok
-                    : badge.preparing
-                      ? "blue"
-                    : notificationColor.warn
-                }
-                variant="light"
-              >
-                {badge.label}{" "}
-                {badge.installed
-                  ? t("status.ready")
-                  : badge.preparing
-                    ? t("status.downloading")
-                    : t("status.missing")}
-              </Badge>
-            ))}
-        </Group>
-        <Tooltip
-          label={
-            runtimeLocked
-              ? runtimeLockedTooltip
-              : t("settings.downloadModels.tooltipReady")
-          }
-          multiline
-          w={280}
-        >
-          <span style={{ display: "block", width: "fit-content" }}>
-            <Button
-              variant="default"
-              disabled={runtimeLocked || downloadingModels}
-              onClick={onDownloadSelectedModels}
-            >
-              {downloadButtonLabel}
-            </Button>
-          </span>
-        </Tooltip>
-        {downloadingModels || modelDownloadProgress ? (
-          <Stack gap={4}>
-            <Progress
-              value={(modelDownloadProgress?.progress ?? 0) * 100}
-              color="primary"
+
+        {config.developer_connection_mode === "http" ? (
+          <>
+            <TextInput
+              label={t("connectionSettings.httpUrl")}
+              value={config.developer_http_url}
+              disabled={runtimeLocked}
+              onChange={(event) =>
+                onUpdateConfig("developer_http_url", event.currentTarget.value)
+              }
             />
-            {modelDownloadProgress ? (
-              <Text size="xs" c="dimmed">
-                {t("downloadProgress.label", {
-                  file: modelDownloadProgress.file_name,
-                  index: modelDownloadProgress.file_index,
-                  total: modelDownloadProgress.total_files,
-                })}
+            <Accordion variant="contained">
+              <Accordion.Item value="http-payload-example">
+                <Accordion.Control>
+                  {t("connectionSettings.httpPayloadExample")}
+                </Accordion.Control>
+                <Accordion.Panel>
+                  <Code block>{developerHttpPayloadExample}</Code>
+                </Accordion.Panel>
+              </Accordion.Item>
+            </Accordion>
+          </>
+        ) : (
+          <>
+            <TextInput
+              label={t("connectionSettings.bindAddress")}
+              value={config.streaming_recognition_bind_address}
+              disabled={runtimeLocked}
+              onChange={(event) =>
+                onUpdateConfig(
+                  "streaming_recognition_bind_address",
+                  event.currentTarget.value,
+                )
+              }
+            />
+            <NumberInput
+              label={t("connectionSettings.port")}
+              value={config.streaming_recognition_port}
+              min={1}
+              max={65535}
+              disabled={runtimeLocked}
+              onChange={(value) =>
+                onUpdateConfig(
+                  "streaming_recognition_port",
+                  typeof value === "number" ? value : 18082,
+                )
+              }
+            />
+            <PasswordInput
+              label={t("connectionSettings.apiKey")}
+              placeholder={t("connectionSettings.apiKeyPlaceholder")}
+              value={config.streaming_recognition_api_key ?? ""}
+              disabled={runtimeLocked}
+              onChange={(event) =>
+                onUpdateConfig(
+                  "streaming_recognition_api_key",
+                  event.currentTarget.value || null,
+                )
+              }
+            />
+            <Stack gap={4}>
+              <Text size="sm" fw={500}>
+                {t("connectionSettings.outputMode")}
               </Text>
-            ) : null}
-          </Stack>
-        ) : null}
-      </Stack>
+              <SegmentedControl
+                value={config.streaming_recognition_output_mode}
+                disabled={runtimeLocked}
+                data={[
+                  {
+                    value: "web_socket_only",
+                    label: t("connectionSettings.webSocketOnly"),
+                  },
+                  {
+                    value: "web_socket_and_desktop",
+                    label: t("connectionSettings.webSocketAndDesktop"),
+                  },
+                ]}
+                onChange={(value) =>
+                  onUpdateConfig(
+                    "streaming_recognition_output_mode",
+                    value as StreamingRecognitionOutputMode,
+                  )
+                }
+              />
+            </Stack>
+            <Text size="xs" c="dimmed">
+              {t("connectionSettings.endpoint", {
+                address: config.streaming_recognition_bind_address,
+                port: config.streaming_recognition_port,
+              })}
+            </Text>
+          </>
+        )}
+      </ConnectionSection>
     </Stack>
   );
 };
+
+const ConnectionSection: React.FC<{
+  enabled: boolean;
+  title: string;
+  disabled: boolean;
+  onToggle: (enabled: boolean) => void;
+  children: React.ReactNode;
+}> = ({ enabled, title, disabled, onToggle, children }) => (
+  <Paper withBorder radius="md" p="md">
+    <Stack gap="sm">
+      <Switch
+        checked={enabled}
+        disabled={disabled}
+        label={<Text fw={600}>{title}</Text>}
+        onChange={(event) => onToggle(event.currentTarget.checked)}
+      />
+      <Collapse in={enabled}>
+        <Stack gap="sm" pt="xs">
+          {children}
+        </Stack>
+      </Collapse>
+    </Stack>
+  </Paper>
+);
+
+const developerHttpPayloadExample = `{
+  "version": 1,
+  "type": "turn.final",
+  "id": "turn-3",
+  "text": "こんにちは。",
+  "turn_session_id": 7,
+  "turn_id": 3,
+  "revision": 2,
+  "output_sequence": 4,
+  "segment_id": 8,
+  "previous_segment_id": 7,
+  "source_asr_model": "reazonspeech_k2_v2",
+  "source_language": "japanese",
+  "detected_language": null,
+  "recognized_at_ms": 1000,
+  "elapsed_ms": 96,
+  "audio_duration_ms": 1280
+}`;
+
+const PortSetting: React.FC<{
+  label: string;
+  value: number;
+  loading: boolean;
+  disabled: boolean;
+  findLabel: string;
+  onChange: (value: number) => void;
+  onFind: () => void;
+}> = ({ label, value, loading, disabled, findLabel, onChange, onFind }) => (
+  <Group align="end" gap="xs" wrap="nowrap">
+    <NumberInput
+      label={label}
+      value={value}
+      min={1}
+      max={65535}
+      disabled={disabled}
+      style={{ flex: 1 }}
+      onChange={(next) => onChange(typeof next === "number" ? next : value)}
+    />
+    <Button
+      variant="light"
+      loading={loading}
+      disabled={disabled}
+      onClick={onFind}
+    >
+      {findLabel}
+    </Button>
+  </Group>
+);

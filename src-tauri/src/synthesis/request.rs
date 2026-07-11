@@ -73,7 +73,7 @@ fn build_speech_requests_inner(
         .iter()
         .filter(|mapping| speech_mapping_matches(mapping, source, source_asr_model))
         .map(|mapping| QueuedSpeechRequest {
-            port: config.translation.plugin_http_port,
+            port: config.translation.ync_plugin_port,
             id: format!("speech-{source_event_id}-{}", mapping.id),
             source_event_id: source_event_id.to_string(),
             source_meta: source_meta.clone(),

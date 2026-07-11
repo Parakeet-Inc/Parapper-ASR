@@ -162,7 +162,7 @@ fn turn_runtime_grammar_boundary_terminal_predicate_end_finalizes_without_namo_d
             turn_id: 1,
             segment_id: 1,
             output_sequence: 1,
-            phrase: vec![1.0, 2.0, 3.0],
+            phrase: vec![1.0, 2.0, 3.0].into(),
             elapsed_millis: 0,
         },],
         "terminal predicate boundary should finalize the whole turn"

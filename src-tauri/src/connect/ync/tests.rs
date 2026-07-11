@@ -9,11 +9,11 @@ use std::{
 use super::{SpeechRequest, YncPluginClient, YncTextInputTransport};
 use crate::{
     config::TurnDetector,
-    connect::TextTransport,
     connect::test_support::{
         MockHttpServer, TimedMockHttpServer, json_response, request_id_from_plugin_request,
         text_response,
     },
+    connect::{TextInputPayload, TextTransport},
 };
 
 // YNC has two distinct HTTP surfaces:
@@ -210,18 +210,34 @@ fn plugin_client_reads_voice_list() {
     assert_eq!(voices, vec!["ずんだもん/VOICEVOX"]);
 }
 
+fn text_input_payload(text: &str) -> TextInputPayload<'_> {
+    TextInputPayload {
+        text,
+        is_final: false,
+        text_id: "abc-1",
+    }
+}
+
 #[test]
 fn text_input_transport_posts_text_to_input_api() {
     let server = MockHttpServer::start(1, |_request, _index| text_response("ok"));
 
     let mut transport = YncTextInputTransport::localhost(server.port());
-    transport.send_text("こんにちは").unwrap();
+    transport
+        .send_text(text_input_payload("こんにちは"))
+        .unwrap();
     let request = server.recv_request();
     server.join();
 
-    assert!(request.starts_with(
-        "GET /api/input?text=%E3%81%93%E3%82%93%E3%81%AB%E3%81%A1%E3%81%AF HTTP/1.1\r\n"
-    ));
+    assert!(request.starts_with("POST /api/input HTTP/1.1\r\n"));
+    assert!(request.contains("Content-Type: application/json"));
+    let (_, body) = request
+        .split_once("\r\n\r\n")
+        .expect("request should contain a body");
+    assert_eq!(
+        body,
+        r#"{"Text":"こんにちは","fixedText":false,"textID":"abc-1"}"#
+    );
 }
 
 #[test]
@@ -232,7 +248,9 @@ fn text_input_transport_accepts_keep_alive_response() {
     });
 
     let mut transport = YncTextInputTransport::localhost(server.port());
-    transport.send_text("こんにちは").unwrap();
+    transport
+        .send_text(text_input_payload("こんにちは"))
+        .unwrap();
     server.join();
 }
 
@@ -241,7 +259,9 @@ fn text_input_transport_accepts_empty_response_after_request() {
     let server = MockHttpServer::start(1, |_request, _index| String::new());
 
     let mut transport = YncTextInputTransport::localhost(server.port());
-    transport.send_text("こんにちは").unwrap();
+    transport
+        .send_text(text_input_payload("こんにちは"))
+        .unwrap();
     server.join();
 }
 
@@ -255,7 +275,7 @@ fn text_input_transport_does_not_wait_for_slow_response() {
     let transport = YncTextInputTransport::localhost(server.port());
     let started_at = Instant::now();
     transport
-        .send_text_to_port(server.port(), "こんにちは")
+        .send_text_to_port(server.port(), text_input_payload("こんにちは"))
         .unwrap();
     let elapsed = started_at.elapsed();
 
@@ -264,14 +284,6 @@ fn text_input_transport_does_not_wait_for_slow_response() {
         "text input waited for the HTTP response: {elapsed:?}"
     );
     server.join();
-}
-
-#[test]
-fn percent_encode_query_component_encodes_utf8_and_reserved_chars() {
-    assert_eq!(
-        super::text_input::percent_encode_query_component("a b+c=こんにちは"),
-        "a%20b%2Bc%3D%E3%81%93%E3%82%93%E3%81%AB%E3%81%A1%E3%81%AF"
-    );
 }
 
 #[test]

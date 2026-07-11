@@ -134,6 +134,10 @@ ENV/
 env.bak/
 venv.bak/
 tmp/
+/work/
+/plan/
+/documents/inner/
+/survey/
 
 # Spyder project settings
 .spyderproject
