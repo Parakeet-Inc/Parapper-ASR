@@ -666,9 +666,11 @@ fn normalize_local_tts_speaker_id(
     speaker_id: Option<i32>,
 ) -> Option<i32> {
     match voice {
-        Some(LocalTtsVoice::Supertonic2Onnx | LocalTtsVoice::Supertonic3Onnx) => {
-            Some(speaker_id.unwrap_or(0).clamp(0, 9))
-        }
+        Some(
+            LocalTtsVoice::Supertonic2Onnx
+            | LocalTtsVoice::Supertonic3Onnx
+            | LocalTtsVoice::Supertonic3OnnxQuantized,
+        ) => Some(speaker_id.unwrap_or(0).clamp(0, 9)),
         _ => None,
     }
 }
@@ -962,7 +964,7 @@ mod tests {
         assert_eq!(config.translation.local_server_port, 18081);
         assert_eq!(
             config.translation.local_server_model,
-            LocalTranslationModel::Lfm2Q4
+            LocalTranslationModel::CatTranslate0_8BQ4KQuant
         );
         assert_eq!(config.translation.send_timing, NeoSendTiming::Interim);
         assert_eq!(config.translation.mappings[0].id, "translate-en");
@@ -1365,7 +1367,7 @@ mod tests {
     }
 
     #[test]
-    fn disabled_cat_translation_config_migrates_to_onnx_community_lfm2_q4() {
+    fn published_cat_translation_config_remains_selected_after_normalization() {
         let config = serde_json::from_str::<ParapperConfig>(
             r#"{
                 "translation_local_server_model": "cat_translate_0_8b_q4_k_quant",
@@ -1383,11 +1385,11 @@ mod tests {
 
         assert_eq!(
             config.translation.local_server_model,
-            LocalTranslationModel::Lfm2Q4
+            LocalTranslationModel::CatTranslate0_8BQ4KQuant
         );
         assert_eq!(
             config.translation.mappings[0].local_model,
-            LocalTranslationModel::Lfm2Q4
+            LocalTranslationModel::CatTranslate0_8BQ4KQuant
         );
     }
 
@@ -1666,6 +1668,43 @@ mod tests {
         assert_eq!(
             config.speech.mappings[0].local_tts_language.as_deref(),
             Some("ja")
+        );
+    }
+
+    #[test]
+    fn quantized_supertonic3_preserves_its_model_identity_and_normalizes_voice_options() {
+        let config = config_with(|config| {
+            config.speech.mappings = vec![SpeechMapping {
+                id: "speech-supertonic3-quantized".to_string(),
+                source_kind: SpeechSourceKind::Recognition,
+                source_asr_model: None,
+                target_lang: None,
+                backend: SpeechBackend::LocalTts,
+                talker: String::new(),
+                local_tts_voice: Some(LocalTtsVoice::Supertonic3OnnxQuantized),
+                local_tts_language: Some(" JA ".to_string()),
+                local_tts_speaker_id: Some(99),
+                output_device_id: None,
+                output_device_host: None,
+                output_device_name: None,
+                muted: false,
+                volume: 1.0,
+            }];
+        });
+
+        assert_eq!(
+            config.speech.mappings[0].local_tts_voice,
+            Some(LocalTtsVoice::Supertonic3OnnxQuantized)
+        );
+        assert_eq!(
+            config.speech.mappings[0].local_tts_language.as_deref(),
+            Some("ja")
+        );
+        assert_eq!(config.speech.mappings[0].local_tts_speaker_id, Some(9));
+        let value = serde_json::to_value(&config).expect("config should serialize");
+        assert_eq!(
+            value["speech_mappings"][0]["local_tts_voice"],
+            serde_json::json!("supertonic_3_onnx_quantized")
         );
     }
 

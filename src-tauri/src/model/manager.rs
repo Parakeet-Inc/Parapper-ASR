@@ -8,24 +8,26 @@ use std::{
 use anyhow::{Context, Result};
 use bzip2::read::BzDecoder;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tar::Archive;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::{fs::File, io::AsyncWriteExt};
-use vibrato_rkyv::{Dictionary, LoadMode};
-use xz2::read::XzDecoder;
+use vibrato_rkyv::LoadMode;
 
 use super::catalog::{
     ALL_ASR_MODELS, ALL_LOCAL_TRANSLATION_MODELS, ALL_NAMO_TURN_DETECTOR_MODELS,
-    ALL_NOISE_CANCELLATION_MODELS, NamoTurnDetectorModel, VAD_MODEL_URL, VIBRATO_MODEL_MAGIC,
-    asr_model_archive_name, asr_model_base_url, asr_model_dir_name, asr_model_required_file_names,
-    language_id_model_base_url, language_id_model_dir_name, language_id_model_files,
-    local_translation_model_base_url, local_translation_model_dir_name,
-    local_translation_model_required_file_names, local_tts_model_archive_name,
-    local_tts_model_base_url, local_tts_model_required_dir_names,
-    local_tts_model_required_file_names, namo_turn_detector_base_url, namo_turn_detector_dir_name,
-    namo_turn_detector_files, noise_cancellation_model_base_url, noise_cancellation_model_dir_name,
+    ALL_NOISE_CANCELLATION_MODELS, FileIntegrity, NamoTurnDetectorModel, VAD_MODEL_URL,
+    VIBRATO_MODEL_MAGIC, asr_model_archive_name, asr_model_base_url, asr_model_dir_name,
+    asr_model_required_file_names, language_id_model_base_url, language_id_model_dir_name,
+    language_id_model_files, local_translation_model_base_url, local_translation_model_dir_name,
+    local_translation_model_file_integrity, local_translation_model_required_file_names,
+    local_tts_model_archive_name, local_tts_model_base_url, local_tts_model_file_integrity,
+    local_tts_model_required_dir_names, local_tts_model_required_file_names,
+    namo_turn_detector_base_url, namo_turn_detector_dir_name, namo_turn_detector_files,
+    noise_cancellation_model_base_url, noise_cancellation_model_dir_name,
     noise_cancellation_model_required_file_names, supertonic_tts_model_base_url,
-    vibrato_unidic_archive_url, vibrato_unidic_dir_name,
+    vibrato_unidic_archive_integrity, vibrato_unidic_archive_name, vibrato_unidic_archive_url,
+    vibrato_unidic_dir_name, vibrato_unidic_expanded_integrity,
 };
 use crate::config::{
     ALL_LOCAL_TTS_VOICES, AsrModel, AsrPrecision, LocalTranslationModel, LocalTtsFamily,
@@ -86,6 +88,7 @@ struct DownloadTarget {
     output_path: PathBuf,
     file_name: String,
     kind: DownloadTargetKind,
+    integrity: Option<FileIntegrity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,13 +96,10 @@ enum DownloadTargetKind {
     File,
     LocalFile,
     TarBz2Directory,
-    TarXzDirectory,
+    TarZstdJapaneseMorphDirectory,
 }
 
 const STALE_EXTRACTION_MARKER_AGE: Duration = Duration::from_secs(60 * 60 * 6);
-const CAT_TRANSLATE_0_8B_Q4_K_QUANT_LOCAL_SOURCE_DIR_NAME: &str =
-    "cat-translate-0.8b-onnx-q4-k-quant-diagnostic";
-
 pub fn models_root(handle: &AppHandle) -> Result<PathBuf> {
     Ok(handle.path().app_data_dir()?.join("models"))
 }
@@ -396,8 +396,9 @@ fn push_japanese_morph_download_targets(
     targets.push(DownloadTarget {
         url: vibrato_unidic_archive_url().to_string(),
         output_path: model_dir,
-        file_name: format!("{}.tar.xz", vibrato_unidic_dir_name()),
-        kind: DownloadTargetKind::TarXzDirectory,
+        file_name: vibrato_unidic_archive_name().to_string(),
+        kind: DownloadTargetKind::TarZstdJapaneseMorphDirectory,
+        integrity: Some(vibrato_unidic_archive_integrity()),
     });
     Ok(())
 }
@@ -416,6 +417,7 @@ fn push_vad_download_targets(targets: &mut Vec<DownloadTarget>, handle: &AppHand
         output_path: vad_path,
         file_name: "silero_vad.onnx".to_string(),
         kind: DownloadTargetKind::File,
+        integrity: None,
     });
     Ok(())
 }
@@ -439,6 +441,7 @@ fn push_asr_download_targets(
                 output_path: asr_path,
                 file_name: archive_name,
                 kind: DownloadTargetKind::TarBz2Directory,
+                integrity: None,
             });
             continue;
         }
@@ -531,6 +534,7 @@ fn push_missing_file_targets_with_query(
             output_path,
             file_name: (*file_name).to_string(),
             kind: DownloadTargetKind::File,
+            integrity: None,
         });
     }
 }
@@ -556,9 +560,65 @@ fn language_id_model_installed(model_dir: &std::path::Path) -> bool {
 }
 
 fn japanese_morph_model_installed(model_dir: &Path) -> bool {
-    japanese_morph_dictionary_paths_from_model_dir(model_dir)
-        .iter()
-        .any(|path| japanese_morph_dictionary_compatible(path).unwrap_or(false))
+    if let Err(err) = recover_interrupted_directory_replacement(model_dir) {
+        log::warn!(
+            "Failed to clean up interrupted Japanese morph dictionary replacement at {}: {err}",
+            model_dir.display()
+        );
+    }
+    japanese_morph_model_present_for_integrity(model_dir, vibrato_unidic_expanded_integrity())
+}
+
+fn japanese_morph_model_present_for_integrity(model_dir: &Path, expected: FileIntegrity) -> bool {
+    let dictionary_path = model_dir.join("system.dic");
+    japanese_morph_install_manifest_compatible(model_dir, expected)
+        && dictionary_path
+            .metadata()
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() == expected.size)
+}
+
+fn japanese_morph_model_installed_for_integrity(model_dir: &Path, expected: FileIntegrity) -> bool {
+    let dictionary_path = model_dir.join("system.dic");
+    japanese_morph_install_manifest_compatible(model_dir, expected)
+        && verify_file_integrity(
+            &dictionary_path,
+            expected,
+            "installed Japanese morph dictionary",
+        )
+        .is_ok()
+}
+
+fn japanese_morph_install_manifest_compatible(model_dir: &Path, expected: FileIntegrity) -> bool {
+    let Ok(contents) = fs::read(model_dir.join("manifest.json")) else {
+        return false;
+    };
+    let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&contents) else {
+        return false;
+    };
+    manifest
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        == Some(1)
+        && manifest
+            .get("dictionary_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(vibrato_unidic_dir_name())
+        && manifest
+            .get("representation")
+            .and_then(serde_json::Value::as_str)
+            == Some("compact-raw")
+        && manifest
+            .get("feature_encoding")
+            .and_then(serde_json::Value::as_str)
+            == Some("[PP][S][F]")
+        && manifest
+            .pointer("/expanded_dictionary/size")
+            .and_then(serde_json::Value::as_u64)
+            == Some(expected.size)
+        && manifest
+            .pointer("/expanded_dictionary/sha256")
+            .and_then(serde_json::Value::as_str)
+            == Some(expected.sha256)
 }
 
 fn japanese_morph_model_preparing(model_dir: &Path) -> bool {
@@ -605,7 +665,6 @@ fn materialize_rkyv_japanese_morph_dictionary(model_dir: &Path) -> Result<()> {
     }
     let output_path = model_dir.join("system.dic");
     materialize_zstd_japanese_morph_dictionary_as_rkyv(&compressed_path, &output_path)?;
-    fs::remove_file(&compressed_path).ok();
     Ok(())
 }
 
@@ -631,11 +690,13 @@ fn materialize_zstd_japanese_morph_dictionary_as_rkyv(
                 output_path.display()
             )
         })?;
-        wait_for_rkyv_dictionary_mmap(output_path)?;
         return Ok(());
     }
     fs::remove_file(&temporary_path).ok();
-    transcode_zstd_legacy_japanese_morph_dictionary_to_rkyv(compressed_path, output_path)
+    anyhow::bail!(
+        "Japanese morph dictionary is not the expected Vibrato rkyv format: {}",
+        compressed_path.display()
+    )
 }
 
 fn decompress_zstd_dictionary_to_file(compressed_path: &Path, output_path: &Path) -> Result<()> {
@@ -672,84 +733,17 @@ fn decompress_zstd_dictionary_to_file(compressed_path: &Path, output_path: &Path
     Ok(())
 }
 
-fn transcode_zstd_legacy_japanese_morph_dictionary_to_rkyv(
-    compressed_path: &Path,
-    output_path: &Path,
-) -> Result<()> {
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "Failed to create Japanese morph dictionary dir: {}",
-                parent.display()
-            )
-        })?;
-    }
-    let input = fs::File::open(compressed_path).with_context(|| {
-        format!(
-            "Failed to open compressed Japanese morph dictionary: {}",
-            compressed_path.display()
-        )
-    })?;
-    let decoder = zstd::Decoder::new(input).with_context(|| {
-        format!(
-            "Failed to decode Japanese morph dictionary: {}",
-            compressed_path.display()
-        )
-    })?;
-    let temporary_path = output_path.with_extension("dic.transcoding");
-    let mut output = fs::File::create(&temporary_path).with_context(|| {
-        format!(
-            "Failed to create rkyv Japanese morph dictionary: {}",
-            temporary_path.display()
-        )
-    })?;
-
-    // The upstream archive is a legacy Vibrato dictionary; convert it once during installation.
-    let dictionary = unsafe { Dictionary::from_legacy_reader(decoder) }.with_context(|| {
-        format!(
-            "Failed to read legacy Japanese morph dictionary: {}",
-            compressed_path.display()
-        )
-    })?;
-    dictionary.write(&mut output).with_context(|| {
-        format!(
-            "Failed to write rkyv Japanese morph dictionary: {}",
-            temporary_path.display()
-        )
-    })?;
-    output.flush().with_context(|| {
-        format!(
-            "Failed to flush rkyv Japanese morph dictionary: {}",
-            temporary_path.display()
-        )
-    })?;
-    drop(output);
-
-    if !japanese_morph_dictionary_compatible(&temporary_path)? {
-        fs::remove_file(&temporary_path).ok();
-        anyhow::bail!(
-            "Transcoded Japanese morph dictionary is not a Vibrato rkyv dictionary: {}",
-            compressed_path.display()
-        );
-    }
-    fs::rename(&temporary_path, output_path).with_context(|| {
-        format!(
-            "Failed to move rkyv Japanese morph dictionary from {} to {}",
-            temporary_path.display(),
-            output_path.display()
-        )
-    })?;
-    wait_for_rkyv_dictionary_mmap(output_path)?;
-    Ok(())
-}
-
 fn wait_for_rkyv_dictionary_mmap(path: &Path) -> Result<()> {
     const ATTEMPTS: usize = 10;
-    const RETRY_DELAY: Duration = Duration::from_millis(20);
+    const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(20);
+    const MAX_RETRY_DELAY: Duration = Duration::from_secs(1);
 
     let mut last_error = None;
+    let mut retry_delay = INITIAL_RETRY_DELAY;
     for attempt in 0..ATTEMPTS {
-        match vibrato_rkyv::Dictionary::from_path(path, LoadMode::TrustCache) {
+        // Validate without writing Vibrato's global proof cache. Parallel installs can otherwise
+        // contend on the same metadata-derived cache file on Windows and report access denied.
+        match vibrato_rkyv::Dictionary::from_path(path, LoadMode::Validate) {
             Ok(dictionary) => {
                 drop(dictionary);
                 return Ok(());
@@ -757,7 +751,8 @@ fn wait_for_rkyv_dictionary_mmap(path: &Path) -> Result<()> {
             Err(err) => {
                 last_error = Some(err);
                 if attempt + 1 < ATTEMPTS {
-                    std::thread::sleep(RETRY_DELAY);
+                    std::thread::sleep(retry_delay);
+                    retry_delay = retry_delay.saturating_mul(2).min(MAX_RETRY_DELAY);
                 }
             }
         }
@@ -847,12 +842,23 @@ fn push_local_tts_download_targets(
         fs::create_dir_all(root)
             .with_context(|| format!("Failed to create model root dir: {}", root.display()))?;
         if voice.family() == LocalTtsFamily::Supertonic {
-            push_missing_file_targets(
-                targets,
-                &model_dir,
-                &local_tts_model_required_file_names(voice),
-                supertonic_tts_model_base_url(voice),
-            );
+            let required_files = local_tts_model_required_file_names(voice);
+            if voice == LocalTtsVoice::Supertonic3OnnxQuantized {
+                push_missing_verified_local_tts_file_targets(
+                    targets,
+                    &model_dir,
+                    voice,
+                    &required_files,
+                    supertonic_tts_model_base_url(voice),
+                )?;
+            } else {
+                push_missing_file_targets(
+                    targets,
+                    &model_dir,
+                    &required_files,
+                    supertonic_tts_model_base_url(voice),
+                );
+            }
         } else if !local_tts_model_archive_installed(&model_dir, voice) {
             let archive_name = local_tts_model_archive_name(voice);
             targets.push(DownloadTarget {
@@ -860,8 +866,59 @@ fn push_local_tts_download_targets(
                 output_path: model_dir,
                 file_name: archive_name,
                 kind: DownloadTargetKind::TarBz2Directory,
+                integrity: None,
             });
         }
+    }
+    Ok(())
+}
+
+fn push_missing_verified_local_tts_file_targets(
+    targets: &mut Vec<DownloadTarget>,
+    model_dir: &Path,
+    voice: LocalTtsVoice,
+    file_names: &[&str],
+    base_url: &str,
+) -> Result<()> {
+    for file_name in file_names {
+        let output_path = model_dir.join(file_name);
+        let integrity = local_tts_model_file_integrity(voice, file_name);
+        if output_path.is_file() {
+            match integrity {
+                Some(expected) => {
+                    if verify_file_integrity(
+                        &output_path,
+                        expected,
+                        "installed local TTS model file",
+                    )
+                    .is_ok()
+                    {
+                        continue;
+                    }
+                    log::warn!(
+                        "Replacing local TTS model file that does not match the published distribution: {}",
+                        output_path.display()
+                    );
+                    fs::remove_file(&output_path).with_context(|| {
+                        format!(
+                            "Failed to remove invalid local TTS model file: {}",
+                            output_path.display()
+                        )
+                    })?;
+                }
+                None => continue,
+            }
+        }
+        if target_output_already_scheduled(targets, &output_path) {
+            continue;
+        }
+        targets.push(DownloadTarget {
+            url: format!("{base_url}/{file_name}?download=true"),
+            output_path,
+            file_name: (*file_name).to_string(),
+            kind: DownloadTargetKind::File,
+            integrity,
+        });
     }
     Ok(())
 }
@@ -906,11 +963,67 @@ fn push_local_translation_model_download_targets(
     })?;
     let required_files = local_translation_model_required_file_names(model);
     if let Some(base_url) = local_translation_model_base_url(model) {
-        push_missing_file_targets(targets, &model_dir, required_files, base_url);
+        push_missing_local_translation_file_targets(
+            targets,
+            &model_dir,
+            model,
+            required_files,
+            base_url,
+        )?;
     } else {
         let source_dir = local_source_dir(model)
             .with_context(|| format!("Local translation model {model:?} has no download source"))?;
         push_missing_local_file_targets(targets, &model_dir, required_files, &source_dir)?;
+    }
+    Ok(())
+}
+
+fn push_missing_local_translation_file_targets(
+    targets: &mut Vec<DownloadTarget>,
+    model_dir: &Path,
+    model: LocalTranslationModel,
+    file_names: &[&str],
+    base_url: &str,
+) -> Result<()> {
+    for file_name in file_names {
+        let output_path = model_dir.join(file_name);
+        let integrity = local_translation_model_file_integrity(model, file_name);
+        if output_path.is_file() {
+            match integrity {
+                Some(expected) => {
+                    if verify_file_integrity(
+                        &output_path,
+                        expected,
+                        "installed local translation model file",
+                    )
+                    .is_ok()
+                    {
+                        continue;
+                    }
+                    log::warn!(
+                        "Replacing local translation model file that does not match the published distribution: {}",
+                        output_path.display()
+                    );
+                    fs::remove_file(&output_path).with_context(|| {
+                        format!(
+                            "Failed to remove invalid local translation model file: {}",
+                            output_path.display()
+                        )
+                    })?;
+                }
+                None => continue,
+            }
+        }
+        if target_output_already_scheduled(targets, &output_path) {
+            continue;
+        }
+        targets.push(DownloadTarget {
+            url: format!("{base_url}/{file_name}?download=true"),
+            output_path,
+            file_name: (*file_name).to_string(),
+            kind: DownloadTargetKind::File,
+            integrity,
+        });
     }
     Ok(())
 }
@@ -961,6 +1074,7 @@ fn push_missing_local_file_targets(
             output_path,
             file_name: (*file_name).to_string(),
             kind: DownloadTargetKind::LocalFile,
+            integrity: None,
         });
     }
     Ok(())
@@ -974,14 +1088,7 @@ fn target_output_already_scheduled(targets: &[DownloadTarget], output_path: &Pat
 
 fn local_translation_model_local_source_dir(model: LocalTranslationModel) -> Option<PathBuf> {
     match model {
-        LocalTranslationModel::Lfm2Q4 => None,
-        LocalTranslationModel::CatTranslate0_8BQ4KQuant => Some(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("onnx-optimize")
-                .join("outputs")
-                .join(CAT_TRANSLATE_0_8B_Q4_K_QUANT_LOCAL_SOURCE_DIR_NAME),
-        ),
+        LocalTranslationModel::Lfm2Q4 | LocalTranslationModel::CatTranslate0_8BQ4KQuant => None,
     }
 }
 
@@ -1042,6 +1149,7 @@ fn local_tts_voices_for_config(config: &ParapperConfig) -> Vec<LocalTtsVoice> {
         LocalTtsVoice::Norman => 2,
         LocalTtsVoice::Supertonic2Onnx => 3,
         LocalTtsVoice::Supertonic3Onnx => 4,
+        LocalTtsVoice::Supertonic3OnnxQuantized => 5,
     });
     voices.dedup();
     voices
@@ -1069,8 +1177,8 @@ fn local_translation_models_for_config(config: &ParapperConfig) -> Vec<LocalTran
     models
 }
 
-async fn download_file(
-    handle: &AppHandle,
+async fn download_file<R: tauri::Runtime>(
+    handle: &AppHandle<R>,
     target: &DownloadTarget,
     file_index: usize,
     total_files: usize,
@@ -1084,17 +1192,8 @@ async fn download_file(
         copy_local_model_file(handle, target, file_index, total_files)?;
         return Ok(());
     }
-    if target.kind != DownloadTargetKind::File && temporary_path.is_file() {
-        match install_downloaded_archive(handle, target, &temporary_path, file_index, total_files) {
-            Ok(()) => return Ok(()),
-            Err(err) => {
-                log::warn!(
-                    "Failed to install existing model archive {}; downloading it again: {err}",
-                    temporary_path.display()
-                );
-                fs::remove_file(&temporary_path).ok();
-            }
-        }
+    if try_install_cached_archive(handle, target, &temporary_path, file_index, total_files)? {
+        return Ok(());
     }
     let mut response = reqwest::get(&target.url)
         .await
@@ -1102,6 +1201,16 @@ async fn download_file(
         .error_for_status()
         .with_context(|| format!("Model download returned an error: {}", target.url))?;
     let total_bytes = response.content_length();
+    if let (Some(integrity), Some(actual_size)) = (target.integrity, total_bytes)
+        && actual_size != integrity.size
+    {
+        anyhow::bail!(
+            "Model download size header did not match {}: expected {} bytes, got {} bytes",
+            target.url,
+            integrity.size,
+            actual_size
+        );
+    }
     emit_download_progress(
         handle,
         &target.file_name,
@@ -1144,26 +1253,7 @@ async fn download_file(
     }
     file.flush().await?;
     drop(file);
-
-    match target.kind {
-        DownloadTargetKind::File => {
-            fs::rename(&temporary_path, &target.output_path).with_context(|| {
-                format!(
-                    "Failed to move downloaded model from {} to {}",
-                    temporary_path.display(),
-                    target.output_path.display()
-                )
-            })?;
-        }
-        DownloadTargetKind::LocalFile => unreachable!("local files are copied before download"),
-        DownloadTargetKind::TarBz2Directory => {
-            extract_tar_bz2_directory(&temporary_path, &target.output_path)?;
-        }
-        DownloadTargetKind::TarXzDirectory => {
-            extract_tar_xz_directory(&temporary_path, &target.output_path)?;
-            materialize_rkyv_japanese_morph_dictionary(&target.output_path)?;
-        }
-    }
+    install_downloaded_target(target, &temporary_path)?;
     emit_download_progress(
         handle,
         &target.file_name,
@@ -1176,8 +1266,58 @@ async fn download_file(
     Ok(())
 }
 
-fn copy_local_model_file(
-    handle: &AppHandle,
+fn try_install_cached_archive<R: tauri::Runtime>(
+    handle: &AppHandle<R>,
+    target: &DownloadTarget,
+    temporary_path: &Path,
+    file_index: usize,
+    total_files: usize,
+) -> Result<bool> {
+    if !cached_archive_available(target, temporary_path)? {
+        return Ok(false);
+    }
+    if target.integrity.is_some() {
+        install_downloaded_archive(handle, target, temporary_path, file_index, total_files)?;
+        return Ok(true);
+    }
+
+    match install_downloaded_archive(handle, target, temporary_path, file_index, total_files) {
+        Ok(()) => Ok(true),
+        Err(err) => {
+            log::warn!(
+                "Failed to install existing model archive {}; downloading it again: {err}",
+                temporary_path.display()
+            );
+            fs::remove_file(temporary_path).ok();
+            Ok(false)
+        }
+    }
+}
+
+fn cached_archive_available(target: &DownloadTarget, temporary_path: &Path) -> Result<bool> {
+    if target.kind == DownloadTargetKind::File || !temporary_path.is_file() {
+        return Ok(false);
+    }
+    if let Some(integrity) = target.integrity {
+        if let Err(err) = verify_file_integrity(temporary_path, integrity, "cached model archive") {
+            log::warn!(
+                "Discarding invalid cached model archive {}: {err}",
+                temporary_path.display()
+            );
+            fs::remove_file(temporary_path).with_context(|| {
+                format!(
+                    "Failed to remove invalid cached model archive: {}",
+                    temporary_path.display()
+                )
+            })?;
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn copy_local_model_file<R: tauri::Runtime>(
+    handle: &AppHandle<R>,
     target: &DownloadTarget,
     file_index: usize,
     total_files: usize,
@@ -1212,8 +1352,8 @@ fn copy_local_model_file(
     Ok(())
 }
 
-fn install_downloaded_archive(
-    handle: &AppHandle,
+fn install_downloaded_archive<R: tauri::Runtime>(
+    handle: &AppHandle<R>,
     target: &DownloadTarget,
     temporary_path: &Path,
     file_index: usize,
@@ -1233,17 +1373,7 @@ fn install_downloaded_archive(
         false,
     );
 
-    match target.kind {
-        DownloadTargetKind::File => unreachable!("file downloads are not archive-installed"),
-        DownloadTargetKind::LocalFile => unreachable!("local files are not archive-installed"),
-        DownloadTargetKind::TarBz2Directory => {
-            extract_tar_bz2_directory(temporary_path, &target.output_path)?;
-        }
-        DownloadTargetKind::TarXzDirectory => {
-            extract_tar_xz_directory(temporary_path, &target.output_path)?;
-            materialize_rkyv_japanese_morph_dictionary(&target.output_path)?;
-        }
-    }
+    install_downloaded_target(target, temporary_path)?;
 
     emit_download_progress(
         handle,
@@ -1257,6 +1387,74 @@ fn install_downloaded_archive(
     Ok(())
 }
 
+fn install_downloaded_target(target: &DownloadTarget, temporary_path: &Path) -> Result<()> {
+    if let Some(integrity) = target.integrity {
+        verify_file_integrity(temporary_path, integrity, "downloaded model archive")?;
+    }
+    match target.kind {
+        DownloadTargetKind::File => {
+            fs::rename(temporary_path, &target.output_path).with_context(|| {
+                format!(
+                    "Failed to move downloaded model from {} to {}",
+                    temporary_path.display(),
+                    target.output_path.display()
+                )
+            })?;
+        }
+        DownloadTargetKind::LocalFile => unreachable!("local files are not archive-installed"),
+        DownloadTargetKind::TarBz2Directory => {
+            extract_tar_bz2_directory(temporary_path, &target.output_path)?;
+        }
+        DownloadTargetKind::TarZstdJapaneseMorphDirectory => {
+            install_zstd_japanese_morph_directory(temporary_path, &target.output_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn verify_file_integrity(path: &Path, expected: FileIntegrity, label: &str) -> Result<()> {
+    let actual_size = path
+        .metadata()
+        .with_context(|| format!("Failed to inspect {label}: {}", path.display()))?
+        .len();
+    if actual_size != expected.size {
+        anyhow::bail!(
+            "{label} size mismatch for {}: expected {} bytes, got {} bytes",
+            path.display(),
+            expected.size,
+            actual_size
+        );
+    }
+
+    let actual_sha256 = sha256_file(path, label)?;
+    if actual_sha256 != expected.sha256 {
+        anyhow::bail!(
+            "{label} SHA-256 mismatch for {}: expected {}, got {}",
+            path.display(),
+            expected.sha256,
+            actual_sha256
+        );
+    }
+    Ok(())
+}
+
+fn sha256_file(path: &Path, label: &str) -> Result<String> {
+    let mut input = fs::File::open(path)
+        .with_context(|| format!("Failed to open {label}: {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .with_context(|| format!("Failed to hash {label}: {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 fn extract_tar_bz2_directory(archive_path: &Path, output_path: &Path) -> Result<()> {
     let file = fs::File::open(archive_path)
         .with_context(|| format!("Failed to open TTS archive: {}", archive_path.display()))?;
@@ -1264,15 +1462,24 @@ fn extract_tar_bz2_directory(archive_path: &Path, output_path: &Path) -> Result<
     extract_tar_directory(decoder, archive_path, output_path, "TTS")
 }
 
-fn extract_tar_xz_directory(archive_path: &Path, output_path: &Path) -> Result<()> {
-    match extract_tar_xz_directory_with_system_tar(archive_path, output_path) {
-        Ok(()) => return Ok(()),
-        Err(err) => {
-            log::warn!(
-                "Failed to extract Japanese morph dictionary with system tar; falling back to Rust extractor: {err}"
-            );
-        }
+fn install_zstd_japanese_morph_directory(archive_path: &Path, output_path: &Path) -> Result<()> {
+    recover_interrupted_directory_replacement(output_path)?;
+
+    let temp_dir = output_path.with_extension("extracting");
+    if temp_dir.is_dir() {
+        fs::remove_dir_all(&temp_dir).with_context(|| {
+            format!(
+                "Failed to remove temporary Japanese morph extraction dir: {}",
+                temp_dir.display()
+            )
+        })?;
     }
+    fs::create_dir_all(&temp_dir).with_context(|| {
+        format!(
+            "Failed to create temporary Japanese morph extraction dir: {}",
+            temp_dir.display()
+        )
+    })?;
 
     let file = fs::File::open(archive_path).with_context(|| {
         format!(
@@ -1280,24 +1487,133 @@ fn extract_tar_xz_directory(archive_path: &Path, output_path: &Path) -> Result<(
             archive_path.display()
         )
     })?;
-    let decoder = XzDecoder::new(file);
-    extract_tar_directory(decoder, archive_path, output_path, "model")
+    let decoder = zstd::Decoder::new(file).with_context(|| {
+        format!(
+            "Failed to decode Japanese morph dictionary archive: {}",
+            archive_path.display()
+        )
+    })?;
+    let mut archive = Archive::new(decoder);
+    unpack_tar_entries_within(&mut archive, &temp_dir, "Japanese morph dictionary").with_context(
+        || {
+            format!(
+                "Failed to extract Japanese morph dictionary archive: {}",
+                archive_path.display()
+            )
+        },
+    )?;
+
+    let extracted_dir = temp_dir.join(vibrato_unidic_dir_name());
+    if !extracted_dir.is_dir() {
+        anyhow::bail!(
+            "Japanese morph archive did not contain expected directory: {}",
+            extracted_dir.display()
+        );
+    }
+    materialize_rkyv_japanese_morph_dictionary(&extracted_dir)?;
+    let expanded_path = extracted_dir.join("system.dic");
+    verify_file_integrity(
+        &expanded_path,
+        vibrato_unidic_expanded_integrity(),
+        "expanded Japanese morph dictionary",
+    )?;
+    wait_for_rkyv_dictionary_mmap(&expanded_path)?;
+
+    replace_directory_with_staged(&extracted_dir, output_path)?;
+    fs::remove_dir_all(&temp_dir).ok();
+    fs::remove_file(archive_path).ok();
+    Ok(())
 }
 
-fn extract_tar_xz_directory_with_system_tar(archive_path: &Path, output_path: &Path) -> Result<()> {
-    extract_archive_directory(archive_path, output_path, "model", |temp_dir| {
-        let status = std::process::Command::new("tar")
-            .arg("-xf")
-            .arg(archive_path)
-            .arg("-C")
-            .arg(temp_dir)
-            .status()
-            .with_context(|| "Failed to start system tar for Japanese morph dictionary")?;
-        if !status.success() {
-            anyhow::bail!("system tar exited with status {status}");
-        }
-        Ok(())
+fn replacement_backup_path(output_path: &Path) -> PathBuf {
+    output_path.with_extension("replacing")
+}
+
+fn recover_interrupted_directory_replacement(output_path: &Path) -> Result<()> {
+    recover_interrupted_directory_replacement_with(output_path, |path| {
+        japanese_morph_model_installed_for_integrity(path, vibrato_unidic_expanded_integrity())
     })
+}
+
+fn recover_interrupted_directory_replacement_with(
+    output_path: &Path,
+    output_is_valid: impl FnOnce(&Path) -> bool,
+) -> Result<()> {
+    let backup_path = replacement_backup_path(output_path);
+    if !backup_path.is_dir() {
+        return Ok(());
+    }
+    if output_path.is_dir() {
+        if output_is_valid(output_path) {
+            fs::remove_dir_all(&backup_path).with_context(|| {
+                format!(
+                    "Failed to remove stale Japanese morph backup: {}",
+                    backup_path.display()
+                )
+            })?;
+        } else {
+            fs::remove_dir_all(output_path).with_context(|| {
+                format!(
+                    "Failed to remove incomplete Japanese morph dictionary: {}",
+                    output_path.display()
+                )
+            })?;
+            fs::rename(&backup_path, output_path).with_context(|| {
+                format!(
+                    "Failed to restore Japanese morph dictionary from {} to {}",
+                    backup_path.display(),
+                    output_path.display()
+                )
+            })?;
+        }
+    } else {
+        fs::rename(&backup_path, output_path).with_context(|| {
+            format!(
+                "Failed to restore Japanese morph dictionary from {} to {}",
+                backup_path.display(),
+                output_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn replace_directory_with_staged(staged_path: &Path, output_path: &Path) -> Result<()> {
+    let backup_path = replacement_backup_path(output_path);
+    let had_existing = output_path.is_dir();
+    if had_existing {
+        fs::rename(output_path, &backup_path).with_context(|| {
+            format!(
+                "Failed to preserve existing Japanese morph dictionary at {}",
+                output_path.display()
+            )
+        })?;
+    }
+
+    if let Err(err) = fs::rename(staged_path, output_path) {
+        if had_existing {
+            fs::rename(&backup_path, output_path).with_context(|| {
+                format!(
+                    "Failed to restore existing Japanese morph dictionary after install error: {err}"
+                )
+            })?;
+        }
+        return Err(err).with_context(|| {
+            format!(
+                "Failed to install Japanese morph dictionary from {} to {}",
+                staged_path.display(),
+                output_path.display()
+            )
+        });
+    }
+
+    if had_existing && let Err(err) = fs::remove_dir_all(&backup_path) {
+        log::warn!(
+            "Failed to remove replaced Japanese morph dictionary {}: {err}",
+            backup_path.display()
+        );
+    }
+    Ok(())
 }
 
 fn extract_tar_directory(
@@ -1438,8 +1754,8 @@ fn extract_archive_directory(
 }
 
 #[expect(clippy::cast_precision_loss)]
-fn emit_download_progress(
-    handle: &AppHandle,
+fn emit_download_progress<R: tauri::Runtime>(
+    handle: &AppHandle<R>,
     file_name: &str,
     file_index: usize,
     total_files: usize,
@@ -1472,14 +1788,19 @@ fn emit_download_progress(
 #[cfg(test)]
 mod tests {
     use super::{
-        CAT_TRANSLATE_0_8B_Q4_K_QUANT_LOCAL_SOURCE_DIR_NAME, DownloadTargetKind,
-        NamoTurnDetectorModel, contained_tar_entry_path, default_asr_model_dir_from_root,
-        japanese_morph_dictionary_compatible, japanese_morph_dictionary_paths_from_model_dir,
+        DownloadTarget, DownloadTargetKind, NamoTurnDetectorModel, cached_archive_available,
+        contained_tar_entry_path, default_asr_model_dir_from_root, download_file,
+        install_zstd_japanese_morph_directory, japanese_morph_dictionary_compatible,
+        japanese_morph_dictionary_paths_from_model_dir, japanese_morph_model_installed,
+        japanese_morph_model_installed_for_integrity, japanese_morph_model_present_for_integrity,
         local_translation_model_dir_from_root, local_translation_model_local_source_dir,
         local_translation_models_for_config, local_tts_voices_for_config,
         materialize_rkyv_japanese_morph_dictionary, model_status_from_root,
-        namo_turn_detector_models_for_config,
+        namo_turn_detector_models_for_config, push_japanese_morph_download_targets,
         push_local_translation_download_targets_with_source_resolver,
+        push_local_tts_download_targets, recover_interrupted_directory_replacement,
+        recover_interrupted_directory_replacement_with, replace_directory_with_staged,
+        replacement_backup_path, sha256_file, verify_file_integrity,
     };
     use crate::config::{
         AsrModel, AsrPrecision, LocalTranslationModel, LocalTtsVoice, NoiseCancellationModel,
@@ -1488,9 +1809,339 @@ mod tests {
     };
     use crate::model::catalog::{
         VIBRATO_MODEL_MAGIC, asr_model_archive_name, asr_model_required_file_names,
-        local_translation_model_required_file_names,
+        local_translation_model_required_file_names, local_tts_model_required_file_names,
+        vibrato_unidic_archive_integrity, vibrato_unidic_archive_name, vibrato_unidic_archive_url,
+        vibrato_unidic_expanded_integrity,
     };
-    use std::{fs, path::Path, time::SystemTime};
+    use std::{
+        fs,
+        path::Path,
+        time::{Duration, SystemTime},
+    };
+    use tauri::Manager as _;
+
+    #[test]
+    fn japanese_morph_download_uses_public_parapper_asr_release_asset() {
+        let root = unique_test_models_root("japanese-morph-public-release-target");
+        let config = parapper_config! {
+            turn_detector: TurnDetector::Namo,
+            ..ParapperConfig::default()
+        };
+        let mut targets = Vec::new();
+
+        push_japanese_morph_download_targets(&mut targets, &root, &config)
+            .expect("Japanese morph download target should be created");
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].url,
+            "https://github.com/Parakeet-Inc/Parapper-ASR/releases/download/morph-dictionary-unidic-cwj-3.1.1-v1/parapper-unidic-cwj-3_1_1-compact-raw-v1.tar.zst"
+        );
+        assert_eq!(
+            targets[0].file_name,
+            "parapper-unidic-cwj-3_1_1-compact-raw-v1.tar.zst"
+        );
+        assert_eq!(
+            targets[0].kind,
+            DownloadTargetKind::TarZstdJapaneseMorphDirectory
+        );
+        assert_eq!(
+            targets[0].integrity,
+            Some(crate::model::catalog::FileIntegrity {
+                size: 7_434_191,
+                sha256: "a1dd0e62ae87f4631ade3aa46cf00b7fdbed1827893dd1d1bde2765009e125ea",
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_compact_raw_payload_does_not_replace_existing_dictionary() {
+        let root = unique_test_models_root("japanese-morph-invalid-package");
+        let model_dir = root.join("unidic-cwj-3_1_1");
+        fs::create_dir_all(&model_dir).expect("failed to create existing dictionary dir");
+        fs::write(model_dir.join("system.dic"), b"known working dictionary")
+            .expect("failed to write existing dictionary");
+        fs::write(model_dir.join("keep.txt"), b"keep this installation")
+            .expect("failed to write existing installation sentinel");
+
+        let archive_path = root.join("invalid-compact-raw.tar.zst");
+        write_invalid_compact_raw_archive(&archive_path);
+
+        install_zstd_japanese_morph_directory(&archive_path, &model_dir)
+            .expect_err("non-published dictionary payload must be rejected");
+        assert_eq!(
+            fs::read(model_dir.join("system.dic"))
+                .expect("existing dictionary should still be readable"),
+            b"known working dictionary"
+        );
+        assert_eq!(
+            fs::read(model_dir.join("keep.txt"))
+                .expect("existing installation sentinel should still exist"),
+            b"keep this installation"
+        );
+        assert!(!root.join("unidic-cwj-3_1_1.replacing").exists());
+    }
+
+    #[test]
+    fn cached_archive_is_retained_on_install_failure_and_removed_only_on_integrity_failure() {
+        let root = unique_test_models_root("japanese-morph-cached-archive-policy");
+        fs::create_dir_all(&*root).expect("failed to create cached archive test dir");
+        let model_dir = root.join("unidic-cwj-3_1_1");
+        fs::create_dir_all(&model_dir).expect("failed to create existing dictionary dir");
+        fs::write(model_dir.join("keep.txt"), b"known working dictionary")
+            .expect("failed to write existing dictionary sentinel");
+        let archive_path = model_dir.with_extension("download");
+        write_invalid_compact_raw_archive(&archive_path);
+        let sha256 =
+            sha256_file(&archive_path, "test cached archive").expect("failed to hash test archive");
+        let target = DownloadTarget {
+            url: "https://example.invalid/dictionary.tar.zst".to_string(),
+            output_path: model_dir.clone(),
+            file_name: "dictionary.tar.zst".to_string(),
+            kind: DownloadTargetKind::TarZstdJapaneseMorphDirectory,
+            integrity: Some(crate::model::catalog::FileIntegrity {
+                size: archive_path
+                    .metadata()
+                    .expect("failed to inspect test archive")
+                    .len(),
+                sha256: Box::leak(sha256.into_boxed_str()),
+            }),
+        };
+        assert!(
+            cached_archive_available(&target, &archive_path)
+                .expect("valid cache inspection should succeed")
+        );
+        install_zstd_japanese_morph_directory(&archive_path, &model_dir)
+            .expect_err("inner dictionary contract should make installation fail");
+        assert!(
+            archive_path.is_file(),
+            "a hash-valid cache should survive a temporary installation failure"
+        );
+        assert_eq!(
+            fs::read(model_dir.join("keep.txt"))
+                .expect("existing dictionary should survive cached install failure"),
+            b"known working dictionary"
+        );
+
+        let mut corrupted = fs::read(&archive_path).expect("failed to read cached archive");
+        corrupted[0] ^= 0xff;
+        fs::write(&archive_path, corrupted).expect("failed to corrupt cached archive");
+        assert!(
+            !cached_archive_available(&target, &archive_path)
+                .expect("integrity mismatch should be handled as a cache miss")
+        );
+        assert!(
+            !archive_path.exists(),
+            "only an integrity-invalid cached archive should be discarded"
+        );
+    }
+
+    #[tokio::test]
+    async fn model_download_path_requests_only_configured_url_and_preserves_existing_dictionary() {
+        let root = unique_test_models_root("japanese-morph-http-download-contract");
+        fs::create_dir_all(&*root).expect("failed to create HTTP download test dir");
+        let source_archive = root.join("server-response.tar.zst");
+        write_invalid_compact_raw_archive(&source_archive);
+        let response_bytes =
+            fs::read(&source_archive).expect("failed to read HTTP response fixture");
+        let response_size =
+            u64::try_from(response_bytes.len()).expect("HTTP response size should fit u64");
+        fs::remove_file(&source_archive).expect("failed to remove HTTP response fixture");
+        let response_sha256 = {
+            let path = root.join("hash-input.tar.zst");
+            fs::write(&path, &response_bytes).expect("failed to write hash input");
+            let sha256 =
+                sha256_file(&path, "HTTP response fixture").expect("failed to hash HTTP response");
+            fs::remove_file(path).expect("failed to remove hash input");
+            sha256
+        };
+
+        let server =
+            tiny_http::Server::http(("127.0.0.1", 0)).expect("test server should bind locally");
+        let address = server
+            .server_addr()
+            .to_ip()
+            .expect("test server should use an IP address");
+        let server_thread = std::thread::spawn(move || {
+            let request = server
+                .recv_timeout(Duration::from_secs(2))
+                .expect("test server receive should succeed")
+                .expect("production download should issue one request");
+            let requested_path = request.url().to_string();
+            request
+                .respond(tiny_http::Response::from_data(response_bytes))
+                .expect("test server should respond");
+            let extra_request = server
+                .recv_timeout(Duration::from_millis(300))
+                .expect("extra request check should succeed")
+                .map(|request| request.url().to_string());
+            (requested_path, extra_request)
+        });
+
+        let model_dir = root.join("unidic-cwj-3_1_1");
+        fs::create_dir_all(&model_dir).expect("failed to create existing dictionary dir");
+        fs::write(model_dir.join("keep.txt"), b"known working dictionary")
+            .expect("failed to write existing dictionary sentinel");
+        let target = DownloadTarget {
+            url: format!("http://{address}/only-this-dictionary.tar.zst"),
+            output_path: model_dir.clone(),
+            file_name: "only-this-dictionary.tar.zst".to_string(),
+            kind: DownloadTargetKind::TarZstdJapaneseMorphDirectory,
+            integrity: Some(crate::model::catalog::FileIntegrity {
+                size: response_size,
+                sha256: Box::leak(response_sha256.into_boxed_str()),
+            }),
+        };
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("failed to build test app");
+
+        download_file(app.handle(), &target, 0, 1)
+            .await
+            .expect_err("inner dictionary identity should reject the HTTP fixture");
+        let (requested_path, extra_request) =
+            server_thread.join().expect("test server should stop");
+
+        assert_eq!(requested_path, "/only-this-dictionary.tar.zst");
+        assert_eq!(extra_request, None, "download must not try a fallback URL");
+        assert_eq!(
+            fs::read(model_dir.join("keep.txt"))
+                .expect("existing dictionary should survive failed HTTP install"),
+            b"known working dictionary"
+        );
+    }
+
+    #[test]
+    fn failed_final_directory_swap_restores_existing_dictionary() {
+        let root = unique_test_models_root("japanese-morph-swap-rollback");
+        let model_dir = root.join("unidic-cwj-3_1_1");
+        fs::create_dir_all(&model_dir).expect("failed to create existing dictionary dir");
+        fs::write(model_dir.join("keep.txt"), b"known working dictionary")
+            .expect("failed to write existing dictionary sentinel");
+        let missing_staged_dir = root.join("missing-staged-dictionary");
+
+        replace_directory_with_staged(&missing_staged_dir, &model_dir)
+            .expect_err("missing staged directory should make final rename fail");
+
+        assert_eq!(
+            fs::read(model_dir.join("keep.txt"))
+                .expect("existing dictionary should be restored after swap failure"),
+            b"known working dictionary"
+        );
+        assert!(
+            !replacement_backup_path(&model_dir).exists(),
+            "rollback should consume the temporary backup"
+        );
+    }
+
+    #[test]
+    fn interrupted_dictionary_swap_restores_backup_when_new_output_is_incomplete() {
+        for output_exists in [false, true] {
+            let root =
+                unique_test_models_root(&format!("japanese-morph-swap-recovery-{output_exists}"));
+            let model_dir = root.join("unidic-cwj-3_1_1");
+            let backup_dir = replacement_backup_path(&model_dir);
+            fs::create_dir_all(&backup_dir).expect("failed to create interrupted backup");
+            fs::write(backup_dir.join("state.txt"), b"old")
+                .expect("failed to write old backup state");
+            if output_exists {
+                fs::create_dir_all(&model_dir).expect("failed to create new install");
+                fs::write(model_dir.join("state.txt"), b"new")
+                    .expect("failed to write new install state");
+            }
+
+            recover_interrupted_directory_replacement(&model_dir)
+                .expect("interrupted replacement should recover deterministically");
+
+            assert_eq!(
+                fs::read(model_dir.join("state.txt"))
+                    .expect("recovered dictionary state should exist"),
+                b"old"
+            );
+            assert!(
+                !backup_dir.exists(),
+                "recovery should leave a single canonical dictionary directory"
+            );
+        }
+    }
+
+    #[test]
+    fn interrupted_dictionary_swap_discards_backup_only_after_new_output_is_valid() {
+        let root = unique_test_models_root("japanese-morph-swap-valid-output");
+        let model_dir = root.join("unidic-cwj-3_1_1");
+        let backup_dir = replacement_backup_path(&model_dir);
+        fs::create_dir_all(&backup_dir).expect("failed to create interrupted backup");
+        fs::write(backup_dir.join("state.txt"), b"old").expect("failed to write old backup");
+        fs::create_dir_all(&model_dir).expect("failed to create new install");
+        fs::write(model_dir.join("state.txt"), b"new").expect("failed to write new install");
+
+        recover_interrupted_directory_replacement_with(&model_dir, |path| {
+            fs::read(path.join("state.txt")).is_ok_and(|state| state == b"new")
+        })
+        .expect("valid new output should complete interrupted replacement");
+
+        assert_eq!(
+            fs::read(model_dir.join("state.txt")).expect("new dictionary should remain"),
+            b"new"
+        );
+        assert!(!backup_dir.exists());
+    }
+
+    #[tokio::test]
+    #[ignore = "downloads the published GitHub Release asset"]
+    async fn published_compact_raw_v1_asset_installs_and_mmap_loads() {
+        let root = unique_test_models_root("japanese-morph-published-package");
+        fs::create_dir_all(&*root).expect("failed to create published package test dir");
+        let archive_path = root.join(vibrato_unidic_archive_name());
+        let response = reqwest::get(vibrato_unidic_archive_url())
+            .await
+            .expect("published dictionary download should start")
+            .error_for_status()
+            .expect("published dictionary URL should return success");
+        assert_eq!(
+            response.content_length(),
+            Some(vibrato_unidic_archive_integrity().size)
+        );
+        let bytes = response
+            .bytes()
+            .await
+            .expect("published dictionary body should download");
+        fs::write(&archive_path, &bytes).expect("downloaded archive should be saved");
+
+        verify_file_integrity(
+            &archive_path,
+            vibrato_unidic_archive_integrity(),
+            "published Japanese morph archive",
+        )
+        .expect("published archive should match the pinned release identity");
+        let model_dir = root.join("unidic-cwj-3_1_1");
+        install_zstd_japanese_morph_directory(&archive_path, &model_dir)
+            .expect("published compact Raw dictionary should install");
+
+        let dictionary_path = model_dir.join("system.dic");
+        verify_file_integrity(
+            &dictionary_path,
+            vibrato_unidic_expanded_integrity(),
+            "installed Japanese morph dictionary",
+        )
+        .expect("installed dictionary should match the pinned expanded identity");
+        assert!(
+            ["AUTHORS", "BSD", "NOTICE", "manifest.json", "SHA256SUMS"]
+                .iter()
+                .all(|name| model_dir.join(name).is_file()),
+            "license, attribution, manifest, and checksums should remain beside the dictionary"
+        );
+        let dictionary = vibrato_rkyv::Dictionary::from_path(
+            &dictionary_path,
+            vibrato_rkyv::LoadMode::TrustCache,
+        )
+        .expect("installed dictionary should mmap-load through vibrato-rkyv");
+        drop(dictionary);
+        assert!(
+            japanese_morph_model_installed(&model_dir),
+            "the installed public release should satisfy production status checks"
+        );
+    }
 
     #[test]
     fn namo_models_follow_required_asr_models() {
@@ -1561,8 +2212,69 @@ mod tests {
     }
 
     #[test]
-    fn japanese_morph_status_is_installed_when_system_dictionary_is_vibrato_rkyv_model() {
+    fn explicit_japanese_morph_integrity_check_rejects_same_size_dictionary_corruption() {
         let root = unique_test_models_root("model-status-japanese-morph");
+        let model_dir = root.join("unidic-cwj-3_1_1");
+        let expected = write_installed_compact_raw_dictionary(&model_dir);
+        assert!(
+            japanese_morph_model_installed_for_integrity(&model_dir, expected),
+            "exact dictionary and manifest should be installed"
+        );
+
+        let dictionary_path = model_dir.join("system.dic");
+        let mut corrupted =
+            fs::read(&dictionary_path).expect("failed to read dictionary for corruption test");
+        let last = corrupted
+            .last_mut()
+            .expect("test dictionary should not be empty");
+        *last ^= 0xff;
+        fs::write(&dictionary_path, corrupted)
+            .expect("failed to write same-size corrupted dictionary");
+
+        assert!(
+            !japanese_morph_model_installed_for_integrity(&model_dir, expected),
+            "same-size corruption must not be accepted from manifest and magic alone"
+        );
+    }
+
+    #[test]
+    fn japanese_morph_status_uses_verified_manifest_and_file_size() {
+        let root = unique_test_models_root("model-status-japanese-morph-fast-check");
+        let model_dir = root.join("unidic-cwj-3_1_1");
+        let expected = write_installed_compact_raw_dictionary(&model_dir);
+
+        let dictionary_path = model_dir.join("system.dic");
+        let mut changed =
+            fs::read(&dictionary_path).expect("failed to read dictionary for status test");
+        changed[0] ^= 0xff;
+        fs::write(&dictionary_path, &changed)
+            .expect("failed to write same-size dictionary for status test");
+
+        assert!(
+            japanese_morph_model_present_for_integrity(&model_dir, expected),
+            "routine status checks should trust the verified manifest and exact file size"
+        );
+        assert!(
+            !japanese_morph_model_installed_for_integrity(&model_dir, expected),
+            "the explicit integrity check must still detect same-size corruption"
+        );
+
+        fs::write(&dictionary_path, &changed[..changed.len() - 1])
+            .expect("failed to truncate dictionary for status test");
+        assert!(
+            !japanese_morph_model_present_for_integrity(&model_dir, expected),
+            "routine status checks must reject a dictionary with the wrong size"
+        );
+    }
+
+    #[test]
+    fn magic_only_legacy_dictionary_without_compact_raw_marker_schedules_upgrade() {
+        let root = unique_test_models_root("model-status-japanese-morph-legacy");
+        let model_dir = root.join("unidic-cwj-3_1_1");
+        let dictionary_path = model_dir.join("system.dic");
+        fs::create_dir_all(&model_dir).expect("failed to create dictionary parent");
+        fs::write(&dictionary_path, VIBRATO_MODEL_MAGIC)
+            .expect("failed to write legacy dictionary marker");
         let config = parapper_config! {
             turn_detector: TurnDetector::Namo,
             ..ParapperConfig::default()
@@ -1577,23 +2289,13 @@ mod tests {
             Some(false)
         );
 
-        let dictionary_path = root.join("unidic-cwj-3_1_1").join("system.dic");
-        fs::create_dir_all(
-            dictionary_path
-                .parent()
-                .expect("dictionary path should have parent"),
-        )
-        .expect("failed to create dictionary parent");
-        fs::write(&dictionary_path, VIBRATO_MODEL_MAGIC)
-            .expect("failed to write dictionary marker");
-
-        let status = model_status_from_root(&root, &config);
+        let mut targets = Vec::new();
+        push_japanese_morph_download_targets(&mut targets, &root, &config)
+            .expect("legacy dictionary should schedule a compact Raw upgrade");
+        assert_eq!(targets.len(), 1);
         assert_eq!(
-            status
-                .japanese_morph
-                .as_ref()
-                .map(|status| status.installed),
-            Some(true)
+            targets[0].kind,
+            DownloadTargetKind::TarZstdJapaneseMorphDirectory
         );
     }
 
@@ -1645,8 +2347,8 @@ mod tests {
             .expect("zstd dictionary should materialize during model installation");
 
         assert!(
-            !compressed_path.exists(),
-            "compressed dictionary should be removed so startup cannot pick it first"
+            compressed_path.is_file(),
+            "release checksum inputs should remain beside the expanded dictionary"
         );
         assert!(
             japanese_morph_dictionary_compatible(&rkyv_path)
@@ -1654,7 +2356,7 @@ mod tests {
             "installed dictionary must be a compatible Vibrato rkyv dictionary"
         );
         let dictionary =
-            vibrato_rkyv::Dictionary::from_path(&rkyv_path, vibrato_rkyv::LoadMode::TrustCache)
+            vibrato_rkyv::Dictionary::from_path(&rkyv_path, vibrato_rkyv::LoadMode::Validate)
                 .expect("installed dictionary should mmap-load through vibrato-rkyv");
         let tokenizer = vibrato_rkyv::Tokenizer::new(dictionary);
         let mut worker = tokenizer.new_worker();
@@ -1807,6 +2509,68 @@ mod tests {
             .expect("failed to write zstd dictionary marker");
         let compressed = encoder.finish().expect("failed to finish zstd marker");
         fs::write(path, compressed).expect("failed to write dictionary marker");
+    }
+
+    fn write_invalid_compact_raw_archive(path: &Path) {
+        let archive_file = fs::File::create(path).expect("failed to create test archive");
+        let encoder =
+            zstd::Encoder::new(archive_file, 0).expect("failed to create test zstd encoder");
+        let mut archive = tar::Builder::new(encoder);
+        let invalid_dictionary = b"not the published compact Raw dictionary";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(
+            u64::try_from(invalid_dictionary.len()).expect("test dictionary size should fit u64"),
+        );
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive
+            .append_data(
+                &mut header,
+                "unidic-cwj-3_1_1/system.dic.zst",
+                invalid_dictionary.as_slice(),
+            )
+            .expect("failed to add invalid dictionary to test archive");
+        let encoder = archive
+            .into_inner()
+            .expect("failed to finish test tar archive");
+        encoder
+            .finish()
+            .expect("failed to finish test zstd archive");
+    }
+
+    fn write_installed_compact_raw_dictionary(
+        model_dir: &Path,
+    ) -> crate::model::catalog::FileIntegrity {
+        fs::create_dir_all(model_dir).expect("failed to create compact Raw dictionary dir");
+        let dictionary_path = model_dir.join("system.dic");
+        let mut dictionary = VIBRATO_MODEL_MAGIC.to_vec();
+        dictionary.extend_from_slice(b"compact Raw integrity fixture");
+        fs::write(&dictionary_path, &dictionary).expect("failed to write compact Raw dictionary");
+        let sha256 = sha256_file(&dictionary_path, "test compact Raw dictionary")
+            .expect("failed to hash compact Raw dictionary");
+        let sha256 = Box::leak(sha256.into_boxed_str());
+        let expected = crate::model::catalog::FileIntegrity {
+            size: u64::try_from(dictionary.len()).expect("test dictionary size should fit u64"),
+            sha256,
+        };
+        fs::write(
+            model_dir.join("manifest.json"),
+            format!(
+                r#"{{
+                "schema_version": 1,
+                "dictionary_id": "unidic-cwj-3_1_1",
+                "representation": "compact-raw",
+                "feature_encoding": "[PP][S][F]",
+                "expanded_dictionary": {{
+                    "size": {},
+                    "sha256": "{}"
+                }}
+            }}"#,
+                expected.size, expected.sha256
+            ),
+        )
+        .expect("failed to write compact Raw install manifest");
+        expected
     }
 
     #[test]
@@ -2013,7 +2777,10 @@ mod tests {
             model_status_from_root(std::path::Path::new("models"), &ParapperConfig::default());
         assert!(disabled.local_translation.is_none());
 
-        for local_model in [LocalTranslationModel::Lfm2Q4] {
+        for local_model in [
+            LocalTranslationModel::Lfm2Q4,
+            LocalTranslationModel::CatTranslate0_8BQ4KQuant,
+        ] {
             let root = root.join(format!("{local_model:?}"));
             let config = parapper_config! {
                 translation_enabled: true,
@@ -2140,6 +2907,132 @@ mod tests {
     }
 
     #[test]
+    fn cat_translate_download_targets_use_pinned_hugging_face_files_with_published_integrity() {
+        let root = unique_test_models_root("model-status-cat-translation-targets");
+        let models_root = root.join("models");
+        let config = parapper_config! {
+            translation_enabled: true,
+            translation_mappings: vec![TranslationMapping {
+                id: "translate-ja-en-cat".to_string(),
+                source_asr_model: None,
+                backend: TranslationBackend::Local,
+                local_model: LocalTranslationModel::CatTranslate0_8BQ4KQuant,
+                source_lang: TranslationLanguage::Ja,
+                target_lang: TranslationLanguage::En,
+            }],
+            ..ParapperConfig::default()
+        };
+        let mut targets = Vec::new();
+
+        push_local_translation_download_targets_with_source_resolver(
+            &mut targets,
+            &models_root,
+            &config,
+            |_| panic!("published CAT translation model must not use a local export source"),
+        )
+        .expect("published CAT translation model should use Hugging Face");
+
+        let required_files = local_translation_model_required_file_names(
+            LocalTranslationModel::CatTranslate0_8BQ4KQuant,
+        );
+        assert_eq!(targets.len(), required_files.len());
+        assert!(targets.iter().all(|target| {
+            target.url.starts_with(
+                "https://huggingface.co/nadare/CAT-Translate-0.8b-onnx-q4-k-quant/resolve/a6369bfcaa1f7c9a8df7294c6b2011286e5dc843/",
+            ) && target.kind == DownloadTargetKind::File
+                && target.integrity.is_some()
+        }));
+        assert_eq!(
+            targets
+                .iter()
+                .find(|target| target.file_name == "model_q4.onnx.data")
+                .and_then(|target| target.integrity),
+            Some(crate::model::catalog::FileIntegrity {
+                size: 596_894_720,
+                sha256: "66839e48f81021eb3f6cf888b57411021914555f705024b15bd76a15e0956480",
+            })
+        );
+    }
+
+    fn quantized_supertonic3_config() -> ParapperConfig {
+        parapper_config! {
+            speech_mappings: vec![SpeechMapping {
+                id: "speech-supertonic3-q4".to_string(),
+                source_kind: SpeechSourceKind::Recognition,
+                source_asr_model: None,
+                target_lang: None,
+                backend: SpeechBackend::LocalTts,
+                talker: String::new(),
+                local_tts_voice: Some(LocalTtsVoice::Supertonic3OnnxQuantized),
+                local_tts_language: Some("ja".to_string()),
+                local_tts_speaker_id: Some(0),
+                output_device_id: None,
+                output_device_host: None,
+                output_device_name: None,
+                muted: false,
+                volume: 1.0,
+            }],
+            ..ParapperConfig::default()
+        }
+    }
+
+    #[test]
+    fn quantized_supertonic3_download_targets_use_the_published_commit_and_integrity() {
+        let root = unique_test_models_root("supertonic3-q4-targets");
+        let config = quantized_supertonic3_config();
+        let mut targets = Vec::new();
+
+        push_local_tts_download_targets(&mut targets, &root, &config)
+            .expect("published Supertonic 3 Q4 targets should be created");
+
+        assert_eq!(
+            targets.len(),
+            local_tts_model_required_file_names(LocalTtsVoice::Supertonic3OnnxQuantized).len()
+        );
+        assert!(targets.iter().all(|target| {
+            target.url.starts_with(
+                "https://huggingface.co/nadare/supertonic-3-onnx-q4/resolve/0831a17d4f7de14ade46364ec447d50e24ff1f82/",
+            ) && target.kind == DownloadTargetKind::File
+                && target.integrity.is_some()
+        }));
+        assert_eq!(
+            targets
+                .iter()
+                .find(|target| target.file_name == "onnx/vector_estimator.onnx")
+                .and_then(|target| target.integrity),
+            Some(crate::model::catalog::FileIntegrity {
+                size: 51_663_166,
+                sha256: "1564c34bdb897c0006349213655979f9a7c573f27effe7ea1417f984d2315b04",
+            })
+        );
+    }
+
+    #[test]
+    fn corrupt_quantized_supertonic3_file_is_replaced_from_the_same_distribution() {
+        let root = unique_test_models_root("supertonic3-q4-corrupt");
+        let model_dir =
+            super::local_tts_model_dir_from_root(&root, LocalTtsVoice::Supertonic3OnnxQuantized);
+        fs::create_dir_all(model_dir.join("onnx")).expect("failed to create model dir");
+        fs::write(model_dir.join("onnx/vector_estimator.onnx"), b"corrupt")
+            .expect("failed to write corrupt model fixture");
+        let config = quantized_supertonic3_config();
+        let mut targets = Vec::new();
+
+        push_local_tts_download_targets(&mut targets, &root, &config)
+            .expect("corrupt published file should schedule a replacement");
+
+        assert!(!model_dir.join("onnx/vector_estimator.onnx").exists());
+        assert!(targets.iter().any(|target| {
+            target.file_name == "onnx/vector_estimator.onnx"
+                && target.integrity
+                    == Some(crate::model::catalog::FileIntegrity {
+                        size: 51_663_166,
+                        sha256: "1564c34bdb897c0006349213655979f9a7c573f27effe7ea1417f984d2315b04",
+                    })
+        }));
+    }
+
+    #[test]
     fn listener_model_selection_does_not_change_internal_translation_model_requirements() {
         let config = parapper_config! {
             translation_enabled: false,
@@ -2156,17 +3049,56 @@ mod tests {
     }
 
     #[test]
-    fn cat_translate_local_source_uses_k_quant_without_embedding_quantization() {
-        let source_dir = local_translation_model_local_source_dir(
+    fn corrupt_cat_translate_file_is_replaced_from_the_published_distribution() {
+        let root = unique_test_models_root("model-status-cat-translation-corrupt-file");
+        let models_root = root.join("models");
+        let model_dir = local_translation_model_dir_from_root(
+            &models_root,
             LocalTranslationModel::CatTranslate0_8BQ4KQuant,
-        )
-        .expect("CAT translation model should have a local diagnostic source");
+        );
+        fs::create_dir_all(&model_dir).expect("failed to create CAT model dir");
+        fs::write(model_dir.join("model_q4.onnx"), b"not the published model")
+            .expect("failed to write corrupt CAT model");
+        let config = parapper_config! {
+            translation_enabled: true,
+            translation_mappings: vec![TranslationMapping {
+                id: "translate-ja-en-cat".to_string(),
+                source_asr_model: None,
+                backend: TranslationBackend::Local,
+                local_model: LocalTranslationModel::CatTranslate0_8BQ4KQuant,
+                source_lang: TranslationLanguage::Ja,
+                target_lang: TranslationLanguage::En,
+            }],
+            ..ParapperConfig::default()
+        };
+        let mut targets = Vec::new();
 
-        assert!(source_dir.ends_with(CAT_TRANSLATE_0_8B_Q4_K_QUANT_LOCAL_SOURCE_DIR_NAME));
-        assert!(
-            !source_dir
-                .to_string_lossy()
-                .contains("gather-emb-diagnostic")
+        push_local_translation_download_targets_with_source_resolver(
+            &mut targets,
+            &models_root,
+            &config,
+            |_| None,
+        )
+        .expect("corrupt CAT file should schedule a verified replacement");
+
+        assert!(!model_dir.join("model_q4.onnx").exists());
+        assert!(targets.iter().any(|target| {
+            target.file_name == "model_q4.onnx"
+                && target.integrity
+                    == Some(crate::model::catalog::FileIntegrity {
+                        size: 211_164,
+                        sha256: "af6fac6bb8df46ce7cffecde2fca833a92b64d4e46c5d873abb7fc3d60423fc3",
+                    })
+        }));
+    }
+
+    #[test]
+    fn published_cat_translate_does_not_use_a_local_export_source() {
+        assert_eq!(
+            local_translation_model_local_source_dir(
+                LocalTranslationModel::CatTranslate0_8BQ4KQuant
+            ),
+            None
         );
     }
 

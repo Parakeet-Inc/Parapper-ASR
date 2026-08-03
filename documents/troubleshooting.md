@@ -4,7 +4,7 @@
 
 1. 接続設定でWebSocket modeを選び、入力ソースもWebSocketにします。
 2. ParapperでStartを押し、状態が`WaitingForClient`になったことを確認します。
-3. `ws://<address>:<port>/ws/recognition`へ接続します。旧`/ws/stt`は存在しません。
+3. `ws://<address>:<port>/ws/recognition`へ接続します。ほかのpathへは接続できません。
 4. LAN bindではBearer API keyが必須です。認証失敗はWebSocket messageではなくHTTP `401`になります。
 5. desktop認識が動作中なら`recognition_busy`です。先に停止してください。
 
@@ -23,10 +23,10 @@
 
 ## 翻訳HTTP listenerを開始できない
 
-- modelが導入済みか確認してください。missing modelはlistener statusのErrorになります。
+- MTタブで選んだサーバーモデルが導入済みか確認してください。未導入の場合は同じ画面の「モデルをダウンロード」を押します。
 - 指定portが他processに使われていないか確認してください。別portへ自動fallbackしません。
 - Stop後は同じportへ再度Startできます。Stopping中は完了を待ってください。
-- Parapper起動だけではlistenerは開始されません。
+- Parapper起動や音声認識のStartだけではlistenerは開始されません。MTタブ内の「起動」を押します。
 
 ## YNCへ届かない
 

@@ -254,7 +254,7 @@ fn turn_runtime_grammar_boundary_normal_end_low_confidence_keeps_turn_open() {
 }
 
 #[test]
-fn turn_runtime_morph_terminal_normal_end_finalizes_without_namo_decision() {
+fn turn_runtime_morph_terminal_normal_end_keeps_turn_open_without_namo_decision() {
     let mut builder = RecognitionSessionTestBuilder::new()
         .turn_detector(TurnDetector::Morph)
         .interim_display(true)
@@ -291,9 +291,9 @@ fn turn_runtime_morph_terminal_normal_end_finalizes_without_namo_decision() {
     );
     let outputs = outputs.lock().expect("outputs should be readable");
     assert_eq!(outputs.len(), 1);
-    assert_eq!(outputs[0].text, "東京駅。");
-    assert!(outputs[0].is_final);
-    assert!(runtime.turn_store.open_turn_id.is_none());
+    assert_eq!(outputs[0].text, "東京駅...");
+    assert!(!outputs[0].is_final);
+    assert_eq!(runtime.turn_store.open_turn_id, Some(1));
 }
 
 #[test]

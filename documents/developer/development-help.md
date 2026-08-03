@@ -1,23 +1,26 @@
 # 開発補助
 
-<!-- cspell:words corpus dataset FLEURS ja_jp jvs parapper ReazonSpeech reqwest Silero sherpa OSCQuery CTC UniDic vibrato rkyv -->
+<!-- cspell:words corpus dataset ENJP FLEURS getvoicelist ja_jp jvs parapper ReazonSpeech reqwest rustup Silero sherpa OSCQuery CTC UniDic vibrato rkyv Nemotron cargo-about -->
 
 Parapper の開発手順、再現テスト、モック、lint、配布、モデル仕様をまとめます。
 アプリ全体像は [project-overview.md](project-overview.md) を参照します。
 
-## 開発
+## 開発環境
 
-依存関係を入れたあと、リポジトリ root で実行します。
+基準となるtoolchainは、Node.js 22.18以上、pnpm 9、Rust 1.90です。Node.jsの下限はcspell 10の実行条件です。Rustのversionはリポジトリ直下の [`rust-toolchain.toml`](../../rust-toolchain.toml) と `Cargo.toml` を正とします。OSごとのsystem dependencyは [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) を導入してください。
+
+`pnpm build`はRust依存licenseも生成するため、CIと同じ`cargo-about`を先に導入します。以下はリポジトリrootで実行します。
 
 ```powershell
-proto use
-pnpm i
+rustup toolchain install 1.90.0 --component rustfmt,clippy
+cargo install cargo-about --version 0.6.6 --locked
+pnpm install --frozen-lockfile
 pnpm build
 cargo test -p parapper
 cargo check -p parapper
 ```
 
-開発起動は以下を実行します。
+フロントエンドだけを起動する場合は`pnpm dev`、Tauriアプリを開発起動する場合は次を実行します。
 
 ```powershell
 pnpm tauri dev
@@ -112,18 +115,40 @@ workspace の `[lints.clippy]` で `pedantic = "warn"` を有効化している�
 
 ## ビルドと配布
 
-ローカルで MSI を作る場合は以下を実行します。
+公開workflowが生成する配布物はWindows x64 MSIです。ローカルでMSIを作る前に、CIと同じsherpa-onnx 1.13.3のruntime DLLを配置します。
 
 ```powershell
+$sherpaDir = "sherpa-onnx-v1.13.3-win-x64-shared-MT-Release-lib"
+$runtimeRoot = "target/sherpa-onnx-prebuilt"
+$archivePath = Join-Path $env:TEMP "parapper-sherpa-onnx.tar.bz2"
+New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+curl.exe -L -f -o $archivePath "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/$sherpaDir.tar.bz2"
+tar.exe -xjf $archivePath -C $runtimeRoot
 pnpm build:msi
 ```
 
-GitHub Actions の `Build` workflow は Windows MSI を作成します。`main` への push、pull request、手動実行では MSI を Actions artifact として保存します。`v*` タグを push した場合は GitHub Releases を作成し、生成した MSI を添付します。
+`target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.3-win-x64-shared-MT-Release-lib/lib`が存在しないままbundleすると、実行に必要なDLLがMSIへ含まれません。
+
+GitHub Actions の `Build` workflow は、`main` へのpush、pull request、手動実行ではMSIをActions artifactとして保存します。`v*` tagをpushした場合はGitHub Releaseを作成し、生成したMSIを添付します。
 
 ```powershell
-git tag v0.1.0
-git push origin v0.1.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
+
+macOS向けのコードと`.app` bundle設定はありますが、公開workflowはmacOS artifactを生成しません。Apple Siliconでは、sherpa-onnx 1.13.3のarm64 dylibを取得してから次の順でsource buildします。
+
+```sh
+export SHERPA_PREBUILT_DIR="sherpa-onnx-v1.13.3-osx-arm64-shared-lib"
+mkdir -p target/sherpa-onnx-prebuilt
+curl -L --fail -o /tmp/parapper-sherpa-onnx.tar.bz2 \
+  "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/${SHERPA_PREBUILT_DIR}.tar.bz2"
+tar -xjf /tmp/parapper-sherpa-onnx.tar.bz2 -C target/sherpa-onnx-prebuilt
+./scripts/prepare-macos-runtime.sh
+pnpm tauri build --config src-tauri/tauri.macos.conf.json
+```
+
+`SHERPA_PREBUILT_DIR`は[`scripts/prepare-macos-runtime.sh`](../../scripts/prepare-macos-runtime.sh)に1.13.3の配置先を伝えます。最後のコマンドは[`src-tauri/tauri.macos.conf.json`](../../src-tauri/tauri.macos.conf.json)に従って`.app`を生成します。署名とnotarizationはこの手順に含みません。YNC本体・pluginとVRChat OSCQueryの連携はmacOSでは無効で、翻訳と読み上げにはローカルbackendを使用します。
 
 ## モデル仕様
 
@@ -134,11 +159,17 @@ git push origin v0.1.0
 - ASR: NeMo Parakeet TDT CTC 0.6B Ja 35000 int8 / sherpa-onnx
 - ASR: NeMo Parakeet TDT 0.6B v2 int8 / sherpa-onnx
 - ASR: NeMo Parakeet TDT 0.6B v3 int8 / sherpa-onnx
+- interim ASR: Nemotron Speech Streaming 0.6B English 160 ms / 560 ms int8 / sherpa-onnx
+- interim ASR: Nemotron 3.5 ASR Streaming 0.6B Multilingual 160 ms / 560 ms int8 / sherpa-onnx
 - Turn Detector: Namo Turn Detector v1 (Japanese / English / Multilingual) / ort
 - Japanese morph dictionary: UniDic CWJ 3.1.1 を vibrato rkyv 形式へ変換して grammar boundary 判定に使う
+- local translation: LFM2-350M-ENJP-MT ONNX Community Q4 / CAT-Translate 0.8B ONNX Q4 block16 / ort
+- noise cancellation: UL-UNAS / ort
+- local TTS: Piper voices / Supertonic 2 / Supertonic 3 / Supertonic3 (quantized) / sherpa-onnx または ort
 
 ReazonSpeech K2 v2 は `int8`, `int8-fp32`, `float32` を選択できます。デフォルトは `int8-fp32` です。
 NeMo Parakeet TDT / TDT CTC は `int8` のみを使用します。
+Nemotronは途中表示専用で、確定用の`ASRモデル`とは別に選択します。
 Turn Detector は `simple`, `morph`, `namo` から選択できます。`simple` は調整可能な無音時間で完了を判定します。`morph` は grammar boundary のみで判定します。`namo` は grammar boundary を優先し、`NormalEnd` や候補なしのときだけ Namo に最終判断させます。
 
 ## ライセンス生成

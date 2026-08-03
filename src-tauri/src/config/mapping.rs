@@ -95,8 +95,6 @@ pub enum LocalTranslationModel {
         alias = "lfm2_q4_k_quant"
     )]
     Lfm2Q4,
-    // CAT-Translate is kept only to migrate existing config. It is not exposed
-    // as an available model while its distribution is disabled.
     #[serde(
         rename = "cat_translate_0_8b_q4_k_quant",
         alias = "cat_translate_0_8b_q4",
@@ -113,7 +111,7 @@ impl Default for LocalTranslationModel {
 
 impl LocalTranslationModel {
     pub fn is_available(self) -> bool {
-        matches!(self, Self::Lfm2Q4)
+        matches!(self, Self::Lfm2Q4 | Self::CatTranslate0_8BQ4KQuant)
     }
 
     pub fn onnx_file_name(self) -> &'static str {
@@ -235,6 +233,8 @@ pub enum LocalTtsVoice {
     Supertonic2Onnx,
     #[serde(rename = "supertonic_3_onnx")]
     Supertonic3Onnx,
+    #[serde(rename = "supertonic_3_onnx_quantized")]
+    Supertonic3OnnxQuantized,
 }
 
 impl Default for LocalTtsVoice {
@@ -247,7 +247,9 @@ impl LocalTtsVoice {
     pub fn family(self) -> LocalTtsFamily {
         match self {
             Self::Kristin | Self::John | Self::Norman => LocalTtsFamily::Vits,
-            Self::Supertonic2Onnx | Self::Supertonic3Onnx => LocalTtsFamily::Supertonic,
+            Self::Supertonic2Onnx | Self::Supertonic3Onnx | Self::Supertonic3OnnxQuantized => {
+                LocalTtsFamily::Supertonic
+            }
         }
     }
 
@@ -258,6 +260,7 @@ impl LocalTtsVoice {
             Self::Norman => "vits-piper-en_US-norman-medium",
             Self::Supertonic2Onnx => "supertonic-2-onnx",
             Self::Supertonic3Onnx => "supertonic-3-onnx",
+            Self::Supertonic3OnnxQuantized => "supertonic-3-onnx-quantized",
         }
     }
 
@@ -266,14 +269,18 @@ impl LocalTtsVoice {
             Self::Kristin => "en_US-kristin-medium.onnx",
             Self::John => "en_US-john-medium.onnx",
             Self::Norman => "en_US-norman-medium.onnx",
-            Self::Supertonic2Onnx | Self::Supertonic3Onnx => "onnx/duration_predictor.onnx",
+            Self::Supertonic2Onnx | Self::Supertonic3Onnx | Self::Supertonic3OnnxQuantized => {
+                "onnx/duration_predictor.onnx"
+            }
         }
     }
 
     pub fn supported_language_codes(self) -> Option<&'static [&'static str]> {
         match self {
             Self::Supertonic2Onnx => Some(SUPERTONIC2_LANGUAGE_CODES),
-            Self::Supertonic3Onnx => Some(SUPERTONIC3_LANGUAGE_CODES),
+            Self::Supertonic3Onnx | Self::Supertonic3OnnxQuantized => {
+                Some(SUPERTONIC3_LANGUAGE_CODES)
+            }
             _ => None,
         }
     }
@@ -291,6 +298,7 @@ pub const ALL_LOCAL_TTS_VOICES: &[LocalTtsVoice] = &[
     LocalTtsVoice::Norman,
     LocalTtsVoice::Supertonic2Onnx,
     LocalTtsVoice::Supertonic3Onnx,
+    LocalTtsVoice::Supertonic3OnnxQuantized,
 ];
 
 pub const SUPERTONIC2_LANGUAGE_CODES: &[&str] = &["en", "ko", "es", "pt", "fr"];
@@ -339,6 +347,7 @@ where
         "vits_piper_en_US_norman_medium" => Some(LocalTtsVoice::Norman),
         "supertonic_2_onnx" => Some(LocalTtsVoice::Supertonic2Onnx),
         "supertonic_3_onnx" => Some(LocalTtsVoice::Supertonic3Onnx),
+        "supertonic_3_onnx_quantized" => Some(LocalTtsVoice::Supertonic3OnnxQuantized),
         _ => None,
     }))
 }

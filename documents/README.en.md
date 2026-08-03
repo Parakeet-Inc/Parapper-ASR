@@ -1,8 +1,8 @@
-English | [日本語](../README.md)
+[日本語](../README.md) | English | [Documentation index](./README.md)
 
 # Parapper
 
-<!-- cspell:words parapper Silero ReazonSpeech sherpa OSCQuery UNAS Piper Supertonic CTC SpeechBrain VoxLingua Vibrato UniDic Nemotron ENJP OpenMDW ECAPA TDNN Paravo Zundamon VSeeFace VRSNS -->
+<!-- cspell:words parapper Silero ReazonSpeech sherpa OSCQuery UNAS Piper Supertonic CTC SpeechBrain VoxLingua Vibrato UniDic Nemotron ENJP OpenMDW ECAPA TDNN Paravo Zundamon VSeeFace VRSNS espeak -->
 
 Parapper is a desktop application that bundles voice AI running in real time on CPU and connects to a variety of other applications.
 
@@ -24,7 +24,7 @@ Parapper aims to be easy to use in situations where it runs alongside other soft
 
 - **Runs on CPU only**: Speech recognition, translation, and text-to-speech all work without a GPU, so it never competes for graphics performance with streaming software, games, or VRChat on the same PC.
 - **Lightweight**: Memory and CPU usage are kept modest, so it stays out of the way of other software even when running in the background.
-- **Works offline**: Once the models are downloaded, everything from recognition to translation and speech runs without a network connection — unaffected by browser state or network conditions.
+- **Works offline**: Once the models are downloaded, recognition and workflows that use local translation and local TTS run without a network connection.
 - **Fast response**: The delay from the end of an utterance to the subtitle is short, making it easy to keep up the tempo of conversations and streams.
 - **Subtitles flow while you speak**: Assign a streaming ASR model (Nemotron) for interim display, and captions update continuously while you are speaking, without waiting for silence.
 - **Flexible turn detection**: In addition to silence detection (VAD), Turn Detectors can decide utterance completion from Japanese grammatical boundaries (Morph) or with an AI model (Namo), so subtitles are less likely to be cut off mid-sentence even if you pause briefly while speaking.
@@ -37,7 +37,7 @@ Parapper aims to be easy to use in situations where it runs alongside other soft
 - **NC (noise cancellation)**: Suppresses noise from your microphone environment so recognition works on clean audio.
 - **VAD / Turn Detector**: Detects whether you are speaking and decides where utterances end.
 - **ASR (speech recognition)**: Transcribes your speech from the microphone in real time. A dedicated streaming ASR model can be combined for interim display.
-- **MT (translation)**: Translates recognized sentences into another language. Alongside the YNC NEO translation plugin, you can use Parapper's built-in local translation models (Japanese⇔English). Local translation can also be exposed to other apps as an OpenAI-compatible localhost API.
+- **MT (translation)**: Translates recognized sentences between Japanese and English. Each mapping can use either the YNC NEO translation plugin or a local model. Local translation can also be exposed to other apps through YNC Custom JSON and OpenAI-compatible localhost endpoints.
 - **TTS (text-to-speech)**: Reads out recognition and translation results.
 - **More**: Save and switch per-use-case setting presets, keep recognition history, and review captured audio with the logging features.
 
@@ -50,21 +50,21 @@ When you pick a preset on first launch, the required models are downloaded autom
 - **VAD**: Speech segment detection
 - **Turn Detector**: Utterance-completion models for Japanese / English / multilingual (optional)
 - **Japanese morphological dictionary**: Japanese grammar boundary detection for Morph / Namo
-- **Local translation**: Japanese⇔English translation model (LFM2-350M-ENJP-MT ONNX Community Q4) (optional)
+- **Local translation**: Japanese⇔English models (LFM2-350M-ENJP-MT ONNX Community Q4 / CAT-Translate 0.8B ONNX Q4 block16) (optional)
 - **Noise cancellation**: Lightweight NC model (optional)
 - **Local TTS**: Multilingual speech synthesis models including Japanese and English (optional)
 
-For model names, supported languages, and sizes, see [documents/how-to-use.md](./how-to-use.md) (Japanese).
+For model names and supported languages, see [how-to-use.md](./how-to-use.md) (Japanese).
 
 ## Installation
 
 ### Windows
 
-Download and run the latest `.msi` installer from the [Releases](https://github.com/Parakeet-Inc/Parapper-ASR/releases) page.
+Download and run the latest Windows x64 `.msi` installer from the [Releases](https://github.com/Parakeet-Inc/Parapper-ASR/releases) page.
 
-### Mac
+### macOS
 
-Download and extract the latest `.zip` file from the [Releases](https://github.com/Parakeet-Inc/Parapper-ASR/releases) page, then run the app.
+The current release workflow does not publish a prebuilt macOS archive. macOS users must build the app from source; see the [development guide](./developer/development-help.md) (Japanese) for the supported toolchain and build boundary.
 
 > YNC NEO integration (subtitle sending, translation plugin, speech plugin) is Windows-only. On macOS, use local translation and local TTS for translation and speech output.
 
@@ -73,17 +73,17 @@ Download and extract the latest `.zip` file from the [Releases](https://github.c
 1. Launch the app. The onboarding screen opens on first launch.
 2. Choose the display language in `UIの使用言語 / UI language`.
 3. Pick your first workflow in `Config preset` and press "Apply and download models".
-   - The ASR, VAD, Turn Detector, noise cancellation, and TTS models required by the preset are downloaded.
+   - Parapper downloads every asset required by the selected preset. Depending on its settings, this can include ASR, interim ASR, VAD, Turn Detector, the Japanese morphological dictionary, noise cancellation, local translation, and local TTS models.
    - Note: using the Japanese model (ReazonSpeech K2 v2) at `int8-fp32` downloads about 170 MB including the VAD model. This may take a while depending on your connection.
 4. Select the input device on the main screen and check the input level.
 5. Open the settings panel as needed and adjust `Connect` / `NC` / `VAD` / `ASR` / `MT` / `TTS` / `Other` / `License`.
 6. Press "Start" to begin recognition.
 
-For details on the Turn Detector, YNC NEO, and VRChat integration, see [documents/how-to-use.md](./how-to-use.md) (Japanese).
+For details on the Turn Detector, local translation server, YNC NEO, and VRChat integration, see [how-to-use.md](./how-to-use.md) (Japanese).
 
 ## For developers
 
-For build instructions, distribution steps, and model details, see [documents/developer/development-help.md](./developer/development-help.md) (Japanese).
+For build instructions, distribution steps, and model details, see the [development guide](./developer/development-help.md) (Japanese).
 
 For external integrations, see the [developer documentation](./developer/README.md), [Streaming Recognition Protocol v1](./developer/streaming-recognition-protocol-v1.md), and [security notes](./developer/security.md).
 
@@ -117,7 +117,9 @@ Combine them — "subtitles by Parapper, voice by Paravo" — to build a real-ti
 - [Vibrato UniDic CWJ 3.1.1 dictionary](https://github.com/daac-tools/vibrato/releases/tag/v0.5.0): see archive license files
 - [UL-UNAS](https://github.com/Xiaobin-Rong/ul-unas): MIT
 - [LFM2-350M-ENJP-MT ONNX (ONNX Community conversion)](https://huggingface.co/onnx-community/LFM2-350M-ENJP-MT-ONNX): LFM Open License v1.0 (base model: `LiquidAI/LFM2-350M-ENJP-MT`)
+- [CAT-Translate 0.8B ONNX Q4 block16](https://huggingface.co/nadare/CAT-Translate-0.8b-onnx-q4-k-quant): MIT (base model: `cyberagent/CAT-Translate-0.8b`)
 - [Piper voices](https://huggingface.co/rhasspy/piper-voices): MIT
 - [espeak-ng-data](https://github.com/espeak-ng/espeak-ng/tree/master/espeak-ng-data): GPL-3.0-or-later
 - [Supertonic 2](https://huggingface.co/Supertone/supertonic-2): OpenRAIL-M
 - [Supertonic 3](https://huggingface.co/Supertone/supertonic-3): OpenRAIL-M
+- [Supertonic 3 ONNX Q4](https://huggingface.co/nadare/supertonic-3-onnx-q4): OpenRAIL-M (unofficial quantized derivative)

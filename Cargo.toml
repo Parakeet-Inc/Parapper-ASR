@@ -4,11 +4,12 @@ members = [
   "src-tauri",
   "diagnostics",
   "scripts",
+  "scripts/morph-dictionary",
 ]
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.97"
 
 [workspace.dependencies]
 tauri-build = { version = "=2.5.1", features = [] }

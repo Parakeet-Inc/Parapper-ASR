@@ -7,6 +7,7 @@ import type {
   AudioDeviceInfo,
   AsrModel,
   ConfigPreset,
+  LocalTranslationModel,
   ModelDownloadProgress,
   ModelStatus,
   ParapperConfig,
@@ -49,6 +50,9 @@ export type SettingsPanelProps = {
   ) => void;
   onApplyAsrModel: (model: AsrModel) => void;
   onDownloadSelectedModels: () => void;
+  onDownloadLocalTranslationModel: (
+    model: LocalTranslationModel,
+  ) => Promise<boolean>;
   onResetConfig: () => Promise<unknown>;
   onSaveConfigPreset: (name: string) => Promise<ConfigPreset[]>;
   onDeleteConfigPreset: (name: string) => Promise<ConfigPreset[]>;
@@ -80,6 +84,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onUpdateConfig,
   onApplyAsrModel,
   onDownloadSelectedModels,
+  onDownloadLocalTranslationModel,
   onResetConfig,
   onSaveConfigPreset,
   onDeleteConfigPreset,
@@ -248,6 +253,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   config={config}
                   runtimeLocked={running}
                   onUpdateConfig={onUpdateConfig}
+                  onDownloadServerModel={onDownloadLocalTranslationModel}
                 />
               </Tabs.Panel>
 

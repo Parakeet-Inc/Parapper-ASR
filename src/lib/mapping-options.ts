@@ -47,11 +47,10 @@ export const localTranslationModelOptions: {
     value: "lfm2_q4",
     label: "LFM2-350M-ENJP-MT-ONNX / ONNX Community Q4",
   },
-  // CAT-Translateは配布を一時停止しているため、選択肢から外しています。
-  // {
-  //   value: "cat_translate_0_8b_q4_k_quant",
-  //   label: "cat-translate-0.8b ONNX Q4 k_quant",
-  // },
+  {
+    value: "cat_translate_0_8b_q4_k_quant",
+    label: "CAT-Translate 0.8B ONNX Q4 block16",
+  },
 ];
 
 export const makeId = (prefix: string) =>

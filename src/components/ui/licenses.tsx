@@ -67,12 +67,11 @@ const modelLicenses = [
     license: "LFM Open License v1.0",
     url: "https://huggingface.co/onnx-community/LFM2-350M-ENJP-MT-ONNX",
   },
-  // CAT-Translateは配布を一時停止しているため、ライセンス一覧からも非表示にしています。
-  // {
-  //   name: "CAT-Translate-0.8b",
-  //   license: "MIT",
-  //   url: "https://huggingface.co/cyberagent/CAT-Translate-0.8b",
-  // },
+  {
+    name: "CAT-Translate 0.8B ONNX Q4 block16",
+    license: "MIT",
+    url: "https://huggingface.co/nadare/CAT-Translate-0.8b-onnx-q4-k-quant",
+  },
   {
     name: "Vibrato UniDic CWJ 3.1.1 dictionary",
     license: "See archive license files",
@@ -107,6 +106,11 @@ const modelLicenses = [
     name: "Supertonic 3 ONNX",
     license: "OpenRAIL-M",
     url: "https://huggingface.co/Supertone/supertonic-3",
+  },
+  {
+    name: "Supertonic3 (quantized)",
+    license: "OpenRAIL-M",
+    url: "https://huggingface.co/nadare/supertonic-3-onnx-q4",
   },
   {
     name: "UL-UNAS",

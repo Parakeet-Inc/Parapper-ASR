@@ -1096,9 +1096,23 @@ mod tests {
             ))
             .unwrap();
 
+        let mut before_pong = Vec::new();
+        let pong = loop {
+            let message = read_json(&mut socket);
+            if message["type"] == "pong" {
+                break message;
+            }
+            before_pong.push(message);
+        };
         assert_eq!(
-            read_json(&mut socket),
+            pong,
             json!({"version": 1, "type": "pong", "request_id": "during-drain"})
+        );
+        assert!(
+            before_pong
+                .iter()
+                .all(|message| message["type"] != "session.done"),
+            "pong must be answered while the stop is still draining, got {before_pong:?}"
         );
     }
 

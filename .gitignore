@@ -16,6 +16,13 @@ downloads/
 models/
 artifacts/macos-build/
 artifacts/macos-signing/
+artifacts/local-translation/
+# Upload-ready CAT model folders are generated here and must not enter Git.
+artifacts/local-translation/hf-upload/
+# Dictionary Release inputs and generated assets are verified locally and
+# uploaded separately; keep the binary payloads out of normal Git history.
+artifacts/morph-dictionary-source/
+artifacts/morph-dictionary-release/
 scripts/sign-macos-local.sh
 .claude/settings.local.json
 eggs/
@@ -128,6 +135,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.cat-onnx-venv/
 env/
 venv/
 ENV/

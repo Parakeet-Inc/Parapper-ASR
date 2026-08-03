@@ -46,6 +46,7 @@ export const App: React.FC = () => {
     setTranslatedTexts,
     refreshAudioDevices,
     downloadSelectedModels,
+    downloadLocalTranslationModel,
   } = useAppState({
     config,
     configRef,
@@ -218,6 +219,7 @@ export const App: React.FC = () => {
           onUpdateConfig={updateConfig}
           onApplyAsrModel={applyAsrModel}
           onDownloadSelectedModels={() => void downloadSelectedModels()}
+          onDownloadLocalTranslationModel={downloadLocalTranslationModel}
           onResetConfig={resetConfigInner}
           onSaveConfigPreset={saveConfigPreset}
           onDeleteConfigPreset={deleteConfigPreset}

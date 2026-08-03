@@ -21,10 +21,7 @@ pub(super) enum LocalTtsEngine {
 impl LocalTtsEngine {
     fn new(handle: &AppHandle, voice: LocalTtsVoice) -> anyhow::Result<Self> {
         let model_dir = local_tts_model_dir(handle, voice)?;
-        if matches!(
-            voice,
-            LocalTtsVoice::Supertonic2Onnx | LocalTtsVoice::Supertonic3Onnx
-        ) {
+        if voice.family() == crate::config::LocalTtsFamily::Supertonic {
             let supported_languages = voice
                 .supported_language_codes()
                 .ok_or_else(|| anyhow::anyhow!("Supertonic TTS languages are not configured"))?;

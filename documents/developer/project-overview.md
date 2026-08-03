@@ -28,7 +28,9 @@ UI は設定と実行状態の表示に集中し、認識後の配送やキュ�
     -> delivery
        ├─ UI への認識結果 event
        ├─ YNC text input
+       ├─ 開発者向け HTTP event
        ├─ translation
+       │   ├─ YNC plugin または local model
        │   ├─ 翻訳結果 event
        │   └─ 翻訳結果の読み上げを synthesis へ依頼
        └─ 認識結果の読み上げを synthesis へ依頼
@@ -43,24 +45,25 @@ UI は設定と実行状態の表示に集中し、認識後の配送やキュ�
 
 ### アプリ全体
 
-| フロントエンド    | ユーザーから見た役割                                 | バックエンド側の対応                                              |
-| ----------------- | ---------------------------------------------------- | ----------------------------------------------------------------- |
-| `src/app.tsx`     | 画面全体の構成、表示言語、モデル状態に応じた開始可否 | `commands::get_config_presets`、設定とモデル状態を扱う hook       |
-| `StatusBadges`    | 実行状態、接続状態、モデル状態の表示                 | `parapper://status`、`parapper://connection-state`、モデル状態    |
-| `OnboardingModal` | 初回プリセット選択とモデルダウンロード               | `config_preset`、command 経由の `model::ensure_models_downloaded` |
+| フロントエンド    | ユーザーから見た役割                                 | バックエンド側の対応                                                 |
+| ----------------- | ---------------------------------------------------- | -------------------------------------------------------------------- |
+| `src/app.tsx`     | 画面全体の構成、表示言語、モデル状態に応じた開始可否 | `commands::get_config_presets`、設定とモデル状態を扱う hook          |
+| `StatusBadges`    | 実行状態、接続状態、モデル状態の表示                 | `parapper://status`、`parapper://connection-state`、モデル状態       |
+| `OnboardingModal` | 初回プリセット選択とモデルダウンロード               | `config/preset.rs`、command 経由の `model::ensure_models_downloaded` |
 
 ### 設定パネル
 
-| UI tab / component          | 設定または操作                                                              | バックエンドの責務                                                       |
-| --------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `ConnectionSettings`        | YNC text input port、plugin HTTP port、モデルのダウンロード状態             | `connect::ync::discovery`, `model/`, `commands.rs`                       |
-| `NoiseCancellationSettings` | ノイズ除去モデルと有効/無効                                                 | `config.rs`, `audio::noise_cancellation`                                 |
-| `VadSettings`               | VAD 閾値、Turn Detector の途中経過表示 / 完了判定タイミング                 | `config.rs`, `recognition::segmentation`, `recognition::turn`            |
-| `AsrSettings`               | ASR model、多言語 ASR、Namo TD、full ASR の再実行                           | `config.rs`, `recognition::transcription`, `recognition::turn`, `model/` |
-| `TranslationSettings`       | 翻訳の有効/無効、タイミング、source model から target language への mapping | `config.rs`, `delivery::common::mapping`, `translation/`                 |
-| `SpeechSettings`            | 読み上げ mapping、YNC talker、local TTS voice、出力デバイス、音量           | `config.rs`, `synthesis/request.rs`, `synthesis/local/`, `playback/`     |
-| `OtherSettings`             | preset、log 上限、reset                                                     | `commands.rs`, `config_preset.rs`, `config.rs`                           |
-| `LicenseSettings`           | license 表示                                                                | フロントエンド側の表示データと bundled license metadata                  |
+| UI tab / component          | 設定または操作                                                    | バックエンドの責務                                                     |
+| --------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `ConnectionSettings`        | YNC text input / plugin port、開発者向けHTTP・WebSocket接続       | `connect::ync::discovery`, `streaming_recognition/`, `commands.rs`     |
+| `ModelAssetsSettings`       | 必要なモデルの状態表示とダウンロード                              | `model/`, `commands.rs`                                                |
+| `NoiseCancellationSettings` | ノイズ除去モデルと有効/無効                                       | `config/`, `audio::noise_cancellation`                                 |
+| `VadSettings`               | VAD 閾値、Turn Detector の途中経過表示 / 完了判定タイミング       | `config/`, `recognition::segmentation`, `recognition::turn`            |
+| `AsrSettings`               | 確定用 / 途中表示用 ASR model、多言語 ASR、full ASR の再実行      | `config/`, `recognition::transcription`, `recognition::turn`, `model/` |
+| `TranslationSettings`       | YNC / local翻訳mapping、local翻訳HTTP listener                    | `config/`, `delivery::common::mapping`, `translation/`, `state.rs`     |
+| `SpeechSettings`            | 読み上げ mapping、YNC talker、local TTS voice、出力デバイス、音量 | `config/`, `synthesis/request.rs`, `synthesis/local/`, `playback/`     |
+| `OtherSettings`             | preset、log 上限、reset                                           | `commands.rs`, `config/preset.rs`, `config/settings.rs`                |
+| `LicenseSettings`           | license 表示                                                      | フロントエンド側の表示データと bundled license metadata                |
 
 ### 実行パネル
 
@@ -100,7 +103,9 @@ start_recognition command
 delivery::dispatch_recognized_text
   -> translation::submit_recognized_text
   -> synthesis::submit_recognized_text
+  -> delivery::sinks::ui_event
   -> connect::YncTextInputTransport
+  -> delivery::sinks::developer_http
 ```
 
 `delivery` は配送先への fan-out を持ちますが、翻訳キュー、読み上げキュー、PCM 再生は持ちません。
@@ -109,7 +114,8 @@ delivery::dispatch_recognized_text
 
 ```text
 translation
-  -> YNC translate client
+  ├─ YNC translate provider
+  └─ local translation provider
   -> parapper://translated-text
   -> synthesis for translated speech
 
@@ -127,25 +133,28 @@ YNC speech は外部プラグイン側にキューがあるため、Parapper 側
 
 | イベント                             | 発行元                                 | UI の受け取り先             | 目的                                                                                        |
 | ------------------------------------ | -------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------- |
+| `parapper://status`                  | `commands.rs` / WebSocket backend      | runtime state               | idle / waiting / listening / draining / stopped / error                                     |
 | `parapper://input-level`             | `audio/input.rs`                       | `RuntimePanel`              | 入力レベル表示                                                                              |
 | `parapper://vad-state`               | `recognition/control/input.rs`         | runtime state               | speech/silence state                                                                        |
 | `parapper://recognized-text`         | `delivery/sinks/ui_event.rs`           | `RecognitionLog`            | ASR text upsert。payload は `RecognitionSourceMeta` で turn / segment / revision を識別する |
 | `parapper://translated-text`         | `translation/event.rs`                 | `TranslationSidePanel`      | translated text upsert                                                                      |
 | `parapper://speech-request`          | `synthesis/manager.rs`                 | runtime state               | speech accepted/failure、delay warning                                                      |
 | `parapper://connection-state`        | delivery/connect checks                | `StatusBadges`              | 外部接続の availability                                                                     |
+| `parapper://osc-mute-state`          | `delivery/sinks/vrchat_mute.rs`        | runtime state               | YNC送信前に確認したVRChat mute状態                                                          |
 | `parapper://model-download-progress` | `model/manager.rs`                     | onboarding/settings         | モデルダウンロード進捗                                                                      |
 | `parapper://asr-missing`             | `recognition/control/runtime_event.rs` | `RecognitionLog` warning    | `kind` で ASR / SLI / TD の missing model を区別する                                        |
 | `parapper://error`                   | `error_event.rs`                       | notifications/runtime state | structured warning/error                                                                    |
 
 ### コマンド
 
-| コマンド分類       | 例                                                                | バックエンドの責務                             |
-| ------------------ | ----------------------------------------------------------------- | ---------------------------------------------- |
-| 設定               | `get_config`, `save_config`, `reset_config`, preset commands      | `config.rs`, `config_preset.rs`, `commands.rs` |
-| 実行状態           | `start_recognition`, `stop_recognition`, `get_recognition_status` | `state.rs`, `recognition/`                     |
-| モデル             | `get_model_status`, `download_models`, `has_any_model_installed`  | `model/`                                       |
-| 音声ファイル / log | `save_recognition_csv`, `save_asr_input_wav`                      | `commands.rs`, `audio/`                        |
-| YNC plugin         | `fetch_neo_voice_list`, `neo_speech_stop`, `neo_speech_test`      | `connect::ync`, `synthesis` config values      |
+| コマンド分類       | 例                                                                  | バックエンドの責務                        |
+| ------------------ | ------------------------------------------------------------------- | ----------------------------------------- |
+| 設定               | `get_config`, `save_config`, `reset_config`, preset commands        | `config/`, `commands.rs`                  |
+| 実行状態           | `start_recognition`, `stop_recognition`, `get_recognition_status`   | `state.rs`, `recognition/`                |
+| モデル             | `get_model_status`, `download_models`, local model commands         | `model/`                                  |
+| 翻訳HTTP listener  | `start_translation_http_listener`, `stop_translation_http_listener` | `state.rs`, `translation/local/server.rs` |
+| 音声ファイル / log | `save_recognition_csv`, `save_asr_input_wav`                        | `commands.rs`, `audio/`                   |
+| YNC plugin         | `fetch_neo_voice_list`, `neo_speech_stop`, `neo_speech_test`        | `connect::ync`, `synthesis` config values |
 
 Commands は UI と backend の薄い境界です。
 認識、翻訳、読み上げ、外部連携の業務方針は `commands.rs` ではなく、それぞれの責務を持つ module に置きます。

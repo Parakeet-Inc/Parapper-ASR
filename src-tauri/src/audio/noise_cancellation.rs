@@ -49,7 +49,7 @@ impl UlUnasNoiseCancellationEngine {
             ));
         }
 
-        let session = Session::builder()
+        let mut builder = Session::builder()
             .map_err(|err| anyhow!("Failed to create UL-UNAS session builder: {err}"))?
             .with_intra_threads(1)
             .map_err(|err| anyhow!("Failed to configure UL-UNAS session: {err}"))?
@@ -60,14 +60,13 @@ impl UlUnasNoiseCancellationEngine {
             .with_intra_op_spinning(false)
             .map_err(|err| anyhow!("Failed to configure UL-UNAS intra-op spinning: {err}"))?
             .with_inter_op_spinning(false)
-            .map_err(|err| anyhow!("Failed to configure UL-UNAS inter-op spinning: {err}"))?
-            .commit_from_file(&model_path)
-            .map_err(|err| {
-                anyhow!(
-                    "Failed to load UL-UNAS model {}: {err}",
-                    model_path.display()
-                )
-            })?;
+            .map_err(|err| anyhow!("Failed to configure UL-UNAS inter-op spinning: {err}"))?;
+        let session = builder.commit_from_file(&model_path).map_err(|err| {
+            anyhow!(
+                "Failed to load UL-UNAS model {}: {err}",
+                model_path.display()
+            )
+        })?;
         let mut planner = RealFftPlanner::<f32>::new();
 
         Ok(Self {

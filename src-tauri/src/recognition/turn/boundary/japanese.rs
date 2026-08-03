@@ -138,11 +138,7 @@ fn japanese_morph_boundary_class(
             return is_terminal_token.then_some(GrammarBoundaryClass::Reject);
         }
         if has_cform(feature, "連体形") {
-            return if is_terminal_token || next.is_some_and(token_can_continue_after_predicate) {
-                is_terminal_token.then_some(GrammarBoundaryClass::Reject)
-            } else {
-                Some(GrammarBoundaryClass::PredicateEnd)
-            };
+            return is_terminal_token.then_some(GrammarBoundaryClass::Reject);
         }
         if has_any_cform(feature, &["終止形", "命令形", "意志推量形"]) {
             return if is_terminal_token || !next.is_some_and(token_can_continue_after_predicate) {
@@ -162,11 +158,7 @@ fn japanese_morph_boundary_class(
         return is_terminal_token.then_some(GrammarBoundaryClass::NormalEnd);
     }
     if has_pos1(feature, "感動詞") {
-        return if matches!(token.surface.as_str(), "はい" | "うん" | "ええ" | "いいえ") {
-            Some(GrammarBoundaryClass::StrongEnd)
-        } else {
-            is_terminal_token.then_some(GrammarBoundaryClass::NormalEnd)
-        };
+        return is_terminal_token.then_some(GrammarBoundaryClass::NormalEnd);
     }
     if has_any_pos1(feature, &["接頭辞", "連体詞"]) {
         return is_terminal_token.then_some(GrammarBoundaryClass::Reject);
@@ -186,11 +178,17 @@ fn token_can_continue_after_predicate(token: &JapaneseMorphToken) -> bool {
 }
 
 fn has_pos(feature: &str, pos1: &str, pos2: &str) -> bool {
+    if let Some(codes) = numeric_morph_feature(feature) {
+        return pos1_code(pos1) == Some(codes.pos1) && pos2_code(pos1, pos2) == Some(codes.pos2);
+    }
     feature_pos1(feature).is_some_and(|field| field == pos1)
         && feature_pos2(feature).is_some_and(|field| field == pos2)
 }
 
 pub(super) fn has_pos1(feature: &str, pos1: &str) -> bool {
+    if let Some(codes) = numeric_morph_feature(feature) {
+        return pos1_code(pos1) == Some(codes.pos1);
+    }
     feature_pos1(feature).is_some_and(|field| field == pos1)
 }
 
@@ -203,6 +201,9 @@ fn has_any_pos2(feature: &str, pos1: &str, pos2_values: &[&str]) -> bool {
 }
 
 fn has_cform(feature: &str, cform: &str) -> bool {
+    if let Some(codes) = numeric_morph_feature(feature) {
+        return cform_code(cform) == Some(codes.cform);
+    }
     feature.contains(cform)
 }
 
@@ -211,7 +212,75 @@ fn has_any_cform(feature: &str, cforms: &[&str]) -> bool {
 }
 
 pub(super) fn is_nominal_suffix(feature: &str) -> bool {
+    if let Some(codes) = numeric_morph_feature(feature) {
+        return codes.pos1 == 8 && codes.pos2 == 9;
+    }
     feature_pos2(feature).is_some_and(|field| field.starts_with("名詞的") || field.contains("名詞"))
+}
+
+#[derive(Clone, Copy)]
+struct NumericMorphFeature {
+    pos1: u8,
+    pos2: u8,
+    cform: u8,
+}
+
+fn numeric_morph_feature(feature: &str) -> Option<NumericMorphFeature> {
+    let bytes = feature.as_bytes();
+    if bytes.len() != 4 || !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    Some(NumericMorphFeature {
+        pos1: (bytes[0] - b'0') * 10 + (bytes[1] - b'0'),
+        pos2: bytes[2] - b'0',
+        cform: bytes[3] - b'0',
+    })
+}
+
+fn pos1_code(pos1: &str) -> Option<u8> {
+    match pos1 {
+        "補助記号" => Some(1),
+        "助詞" => Some(2),
+        "動詞" => Some(3),
+        "形容詞" => Some(4),
+        "助動詞" => Some(5),
+        "名詞" => Some(6),
+        "代名詞" => Some(7),
+        "接尾辞" => Some(8),
+        "形状詞" => Some(9),
+        "感動詞" => Some(10),
+        "接頭辞" => Some(11),
+        "連体詞" => Some(12),
+        _ => None,
+    }
+}
+
+fn pos2_code(pos1: &str, pos2: &str) -> Option<u8> {
+    match (pos1, pos2) {
+        ("補助記号", "句点") => Some(1),
+        ("補助記号", "読点") => Some(2),
+        ("助詞", "終助詞") => Some(3),
+        ("助詞", "格助詞") => Some(4),
+        ("助詞", "係助詞") => Some(5),
+        ("助詞", "副助詞") => Some(6),
+        ("助詞", "準体助詞") => Some(7),
+        ("助詞", "接続助詞") => Some(8),
+        ("接尾辞", pos2) if pos2.starts_with("名詞的") || pos2.contains("名詞") => Some(9),
+        _ => None,
+    }
+}
+
+fn cform_code(cform: &str) -> Option<u8> {
+    match cform {
+        "未然形" => Some(1),
+        "連用形" => Some(2),
+        "仮定形" => Some(3),
+        "連体形" => Some(4),
+        "終止形" => Some(5),
+        "命令形" => Some(6),
+        "意志推量形" => Some(7),
+        _ => None,
+    }
 }
 
 fn feature_pos1(feature: &str) -> Option<&str> {

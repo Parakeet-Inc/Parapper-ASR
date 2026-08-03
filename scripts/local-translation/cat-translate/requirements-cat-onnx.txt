@@ -1,0 +1,11 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+onnx==1.22.0
+onnx-ir==0.2.1
+onnxruntime==1.27.0
+onnxruntime-genai==0.14.1
+transformers==4.57.6
+huggingface-hub==0.36.2
+torch==2.12.1+cpu
+tokenizers==0.22.2
+sentencepiece==0.2.1

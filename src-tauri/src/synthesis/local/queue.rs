@@ -407,6 +407,18 @@ mod tests {
     }
 
     #[test]
+    fn fp32_and_quantized_supertonic3_use_separate_engine_queues() {
+        let fp32 = local_tts_queue_key(&local_tts_request_with_voice(
+            LocalTtsVoice::Supertonic3Onnx,
+        ));
+        let quantized = local_tts_queue_key(&local_tts_request_with_voice(
+            LocalTtsVoice::Supertonic3OnnxQuantized,
+        ));
+
+        assert_ne!(fp32, quantized);
+    }
+
+    #[test]
     fn local_tts_heap_releases_requests_by_source_sequence_order() {
         let mut heap = BinaryHeap::new();
         heap.push(local_tts_item("turn-1-10-0|en_US", 10, 0));

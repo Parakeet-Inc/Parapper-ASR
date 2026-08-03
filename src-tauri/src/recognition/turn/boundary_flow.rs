@@ -63,7 +63,7 @@ impl RecognitionSession {
                         let text = slice_chars(combined_text, 0..candidate.char_end);
                         self.namo_final_decision_for_text(turn_id, &text)
                     } else {
-                        true
+                        false
                     }
                 } else {
                     false

@@ -19,7 +19,7 @@ jobs:
 
     env:
       CARGO_TERM_COLOR: always
-      RUST_VERSION: 1.90.0
+      RUST_VERSION: 1.97.1
       TARGET_TRIPLE: x86_64-pc-windows-msvc
       SHERPA_ONNX_VERSION: 1.13.3
       SHERPA_PREBUILT_DIR: sherpa-onnx-v1.13.3-win-x64-shared-MT-Release-lib
@@ -98,13 +98,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Rust check
-        run: cargo check -p parapper
+        run: cargo check -p parapper -p parapper-morph-dictionary
 
       - name: Rust clippy
-        run: cargo clippy -p parapper --all-targets
+        run: cargo clippy -p parapper -p parapper-morph-dictionary --all-targets
 
       - name: Rust tests
-        run: cargo test -p parapper
+        run: cargo test -p parapper -p parapper-morph-dictionary
 
       - name: Frontend lint
         run: pnpm exec eslint ./src

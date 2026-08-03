@@ -24,6 +24,7 @@ import type {
   AudioDeviceInfo,
   ConnectionStateEvent,
   InputLevelEvent,
+  LocalTranslationModel,
   ModelDownloadProgress,
   ModelStatus,
   OscMuteStateEvent,
@@ -445,6 +446,32 @@ export const useAppState = ({
     }
   };
 
+  const downloadLocalTranslationModel = async (
+    localTranslationModel: LocalTranslationModel,
+  ) => {
+    setModel((current) => ({
+      ...current,
+      downloading: true,
+      progress: null,
+    }));
+    try {
+      const installed = await invoke<boolean>(
+        "download_local_translation_model",
+        {
+          model: localTranslationModel,
+        },
+      );
+      const status = await invoke<ModelStatus>("get_model_status");
+      setModel((current) => ({ ...current, status }));
+      return installed;
+    } catch (error) {
+      notifyParapperIssue(normalizeParapperErrorPayload(error));
+      return false;
+    } finally {
+      setModel((current) => ({ ...current, downloading: false }));
+    }
+  };
+
   return {
     runtime,
     setRuntime,
@@ -462,6 +489,7 @@ export const useAppState = ({
     setTranslatedTexts,
     refreshAudioDevices,
     downloadSelectedModels,
+    downloadLocalTranslationModel,
   };
 };
 

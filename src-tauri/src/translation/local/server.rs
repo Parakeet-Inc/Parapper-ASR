@@ -560,17 +560,58 @@ fn openai_source_text(request: &OpenAiChatCompletionRequest) -> Option<String> {
 fn infer_target_lang_from_messages(messages: &[OpenAiMessage]) -> Option<TranslationLanguage> {
     messages
         .iter()
+        .rev()
+        .filter(|message| matches!(message.role.as_str(), "system" | "developer"))
         .map(|message| message_content_text(&message.content))
-        .find_map(|text| infer_target_lang_from_text(&text))
+        .find_map(|text| infer_target_lang_from_instruction(&text))
+        .or_else(|| {
+            messages
+                .iter()
+                .rev()
+                .find(|message| message.role == "user")
+                .map(|message| message_content_text(&message.content))
+                .and_then(|text| translation_prompt_instruction(&text).map(str::to_string))
+                .and_then(|instruction| infer_target_lang_from_instruction(&instruction))
+        })
 }
 
-fn infer_target_lang_from_text(text: &str) -> Option<TranslationLanguage> {
+fn infer_target_lang_from_instruction(text: &str) -> Option<TranslationLanguage> {
     let lower = text.to_ascii_lowercase();
-    if text.contains("英語") || lower.contains("english") || lower.contains(" en ") {
+    if ["into english", "to english", "target language: english"]
+        .iter()
+        .any(|pattern| lower.contains(pattern))
+        || ["英語に翻訳", "英語へ翻訳", "英訳"]
+            .iter()
+            .any(|pattern| text.contains(pattern))
+    {
         return Some(TranslationLanguage::En);
     }
-    if text.contains("日本語") || lower.contains("japanese") || lower.contains(" ja ") {
+    if ["into japanese", "to japanese", "target language: japanese"]
+        .iter()
+        .any(|pattern| lower.contains(pattern))
+        || ["日本語に翻訳", "日本語へ翻訳", "和訳"]
+            .iter()
+            .any(|pattern| text.contains(pattern))
+    {
         return Some(TranslationLanguage::Ja);
+    }
+
+    let language = lower.trim().trim_matches(['.', ':']);
+    match language {
+        "english" | "en" => Some(TranslationLanguage::En),
+        "japanese" | "ja" => Some(TranslationLanguage::Ja),
+        _ => None,
+    }
+}
+
+fn translation_prompt_instruction(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    for separator in ["\n\n", "```"] {
+        if let Some((instruction, candidate)) = trimmed.rsplit_once(separator) {
+            if !instruction.trim().is_empty() && !strip_code_fence(candidate.trim()).is_empty() {
+                return Some(instruction.trim());
+            }
+        }
     }
     None
 }
@@ -825,6 +866,43 @@ mod tests {
         assert_eq!(
             translator.calls(),
             vec!["Lfm2Q4:ja:en:こんにちは".to_string()]
+        );
+    }
+
+    #[test]
+    fn local_server_openai_source_text_language_name_does_not_override_inferred_target() {
+        let translator = Arc::new(FakeTranslator::new());
+        let state = test_state(Arc::clone(&translator));
+
+        let response = response_value(
+            r#"{"messages":[{"role":"user","content":"私は日本語を勉強しています。"}]}"#,
+            &state,
+        );
+
+        assert_eq!(
+            response.choices[0].message.content,
+            "en:私は日本語を勉強しています。"
+        );
+        assert_eq!(
+            translator.calls(),
+            vec!["Lfm2Q4:ja:en:私は日本語を勉強しています。".to_string()]
+        );
+    }
+
+    #[test]
+    fn local_server_openai_directional_instruction_uses_language_after_to_as_target() {
+        let translator = Arc::new(FakeTranslator::new());
+        let state = test_state(Arc::clone(&translator));
+
+        let response = response_value(
+            r#"{"messages":[{"role":"system","content":"Translate English to Japanese."},{"role":"user","content":"Good morning."}]}"#,
+            &state,
+        );
+
+        assert_eq!(response.choices[0].message.content, "ja:Good morning.");
+        assert_eq!(
+            translator.calls(),
+            vec!["Lfm2Q4:en:ja:Good morning.".to_string()]
         );
     }
 

@@ -11,14 +11,15 @@ export type DeveloperConnectionMode = "http" | "web_socket";
 export type SpeechSourceKind = "recognition" | "translation";
 export type SpeechBackend = "ync" | "local_tts";
 export type TranslationBackend = "ync" | "local";
-export type LocalTranslationModel = "lfm2_q4";
+export type LocalTranslationModel = "lfm2_q4" | "cat_translate_0_8b_q4_k_quant";
 export type TranslationLanguage = "en" | "ja";
 export type LocalTtsVoice =
   | "vits_piper_en_US_kristin_medium"
   | "vits_piper_en_US_john_medium"
   | "vits_piper_en_US_norman_medium"
   | "supertonic_2_onnx"
-  | "supertonic_3_onnx";
+  | "supertonic_3_onnx"
+  | "supertonic_3_onnx_quantized";
 export type AsrModel =
   | "reazonspeech_k2_v2"
   | "nemo_parakeet_tdt_ctc_0_6b_ja_35000_int8"

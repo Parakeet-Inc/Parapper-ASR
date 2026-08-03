@@ -127,11 +127,21 @@ const localTtsVoiceOptions: { value: LocalTtsVoice; label: string }[] = [
     value: "supertonic_3_onnx",
     label: "Supertonic 3 ONNX",
   },
+  {
+    value: "supertonic_3_onnx_quantized",
+    label: "Supertonic3 (quantized)",
+  },
 ];
 
 const defaultLocalTtsVoice: LocalTtsVoice = "vits_piper_en_US_kristin_medium";
 const supertonic2TtsVoice: LocalTtsVoice = "supertonic_2_onnx";
 const supertonic3TtsVoice: LocalTtsVoice = "supertonic_3_onnx";
+const supertonic3QuantizedTtsVoice: LocalTtsVoice =
+  "supertonic_3_onnx_quantized";
+const supertonic3TtsVoices = new Set<LocalTtsVoice>([
+  supertonic3TtsVoice,
+  supertonic3QuantizedTtsVoice,
+]);
 const supertonic2LanguageOptions = [
   { value: "en", label: "English" },
   { value: "ko", label: "Korean" },
@@ -173,14 +183,14 @@ const ttsVoiceLanguageOptions = (voice: LocalTtsVoice) => {
   if (voice === supertonic2TtsVoice) {
     return supertonic2LanguageOptions;
   }
-  if (voice === supertonic3TtsVoice) {
+  if (supertonic3TtsVoices.has(voice)) {
     return supertonic3LanguageOptions;
   }
   return null;
 };
 
 const ttsVoiceSpeakerOptions = (voice: LocalTtsVoice) => {
-  if (voice === supertonic2TtsVoice || voice === supertonic3TtsVoice) {
+  if (voice === supertonic2TtsVoice || supertonic3TtsVoices.has(voice)) {
     return supertonicSpeakerOptions;
   }
   return null;

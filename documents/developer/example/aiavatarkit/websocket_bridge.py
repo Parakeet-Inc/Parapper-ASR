@@ -1,28 +1,36 @@
-"""WebSocket input: stream microphone audio to Parapper, then call AIAvatarKit."""
+"""Use AIAvatarKit v0.8.19's native Parapper detector with a microphone."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import threading
 import uuid
 
 import httpx
 import sounddevice as sd
-import websockets
+from aiavatar.sts.vad.parapper_stream import ParapperStreamSpeechDetector
 
 from aiavatar_chat import AIAvatarConversation
 
-PARAPPER_URL = os.getenv("PARAPPER_URL", "ws://127.0.0.1:18082/ws/recognition")
+
+PARAPPER_URL = os.getenv(
+    "PARAPPER_URL",
+    "ws://127.0.0.1:18082/ws/recognition",
+)
 PARAPPER_API_KEY = os.getenv("PARAPPER_API_KEY")
 
 SAMPLE_RATE = 16_000
 SAMPLES_PER_FRAME = 512  # 32 ms / 1024 bytes
 
 
+class ParapperConnectionError(RuntimeError):
+    """Raised when the configured Parapper WebSocket cannot be started."""
+
+
 def put_latest(queue: asyncio.Queue[bytes], pcm: bytes) -> None:
     """Keep microphone latency bounded if the event loop briefly falls behind."""
+
     if queue.full():
         try:
             queue.get_nowait()
@@ -34,56 +42,94 @@ def put_latest(queue: asyncio.Queue[bytes], pcm: bytes) -> None:
 async def run() -> None:
     loop = asyncio.get_running_loop()
     audio_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=64)
-    recognition_session_id = f"mic-{uuid.uuid4().hex[:12]}"
-    headers = (
-        {"Authorization": f"Bearer {PARAPPER_API_KEY}"} if PARAPPER_API_KEY else None
+    stop_event = asyncio.Event()
+    session_id = f"mic-{uuid.uuid4().hex[:12]}"
+    detector = ParapperStreamSpeechDetector(
+        url=PARAPPER_URL,
+        api_key=PARAPPER_API_KEY,
+        sample_rate=SAMPLE_RATE,
+        channels=1,
+        debug=True,
     )
+    conversation = AIAvatarConversation()
+    chat_tasks: set[asyncio.Task[None]] = set()
+    detector_connected = False
+
+    def report_chat_result(task: asyncio.Task[None]) -> None:
+        chat_tasks.discard(task)
+        if task.cancelled():
+            return
+        if error := task.exception():
+            print(f"\nAIAvatarKit request failed: {error}", flush=True)
 
     def audio_callback(indata, _frames, _time_info, status) -> None:
         if status:
             print(f"microphone warning: {status}")
         loop.call_soon_threadsafe(put_latest, audio_queue, bytes(indata))
 
-    async with websockets.connect(PARAPPER_URL, extra_headers=headers) as websocket:
-        await websocket.send(
-            json.dumps(
-                {
-                    "version": 1,
-                    "type": "session.start",
-                    "session_id": recognition_session_id,
-                    "audio": {
-                        "encoding": "pcm_s16le",
-                        "sample_rate": SAMPLE_RATE,
-                        "channels": 1,
-                    },
-                }
+    def wait_for_enter() -> None:
+        input("Press Enter to stop\n")
+        loop.call_soon_threadsafe(stop_event.set)
+
+    async with httpx.AsyncClient() as http_client:
+
+        @detector.on_recording_started
+        async def on_recording_started(_session_id: str) -> None:
+            print("\n[speech.started]", flush=True)
+
+        @detector.on_speech_detecting
+        async def on_partial(text: str, _session: object) -> None:
+            # Preview only. Never start an LLM request for partial text.
+            print(f"\r[partial] {text}", end="", flush=True)
+
+        @detector.on_speech_detected
+        async def on_final(
+            _audio: bytes,
+            text: str,
+            _metadata: dict,
+            _duration: float,
+            _session_id: str,
+        ) -> None:
+            final_text = text.strip()
+            print(f"\n[final] {final_text}", flush=True)
+            if not final_text:
+                return
+            # Only immutable final text enters AIAvatarKit /chat.
+            task = asyncio.create_task(
+                conversation.send_final(http_client, final_text)
             )
-        )
+            chat_tasks.add(task)
+            task.add_done_callback(report_chat_result)
 
-        ready = json.loads(await websocket.recv())
-        if ready.get("type") != "session.ready":
-            raise RuntimeError(f"expected session.ready, got {ready}")
-
-        sending_audio = True
-
-        async def send_audio() -> None:
-            while sending_audio:
-                pcm = await audio_queue.get()
-                await websocket.send(pcm)
-
-        sender = asyncio.create_task(send_audio())
-        stop_event = asyncio.Event()
-
-        def wait_for_enter() -> None:
-            input("Press Enter to stop\n")
-            loop.call_soon_threadsafe(stop_event.set)
-
-        threading.Thread(target=wait_for_enter, daemon=True).start()
-        stop_request: asyncio.Task[bool] | None = asyncio.create_task(stop_event.wait())
-        chat_tasks: list[asyncio.Task[None]] = []
-        conversation = AIAvatarConversation()
+        @detector.on_speech_recognition_error
+        async def on_recognition_error(
+            error: Exception,
+            _session_id: str,
+        ) -> None:
+            print(f"\nParapper recognition failed: {error}", flush=True)
 
         try:
+            # Establish the WebSocket before opening the microphone. This also
+            # prevents finalize_session() from awaiting the same failed ready
+            # task after an initial connection failure.
+            try:
+                await detector.process_samples(
+                    b"\x00\x00" * SAMPLES_PER_FRAME,
+                    session_id,
+                )
+            except Exception as error:
+                raise ParapperConnectionError(
+                    f"Parapperに接続できません: {PARAPPER_URL}\n"
+                    "Parapperの接続タブで開発者向け接続をONにし、"
+                    "接続modeをWebSocket、入力ソースをWebSocketに設定して"
+                    "Startを押してください。表示がWaitingForClientになってから"
+                    "このexampleを実行し、portも接続先URLと一致させてください。\n"
+                    f"詳細: {error}"
+                ) from error
+
+            detector_connected = True
+            print(f"Connected to Parapper: {PARAPPER_URL}", flush=True)
+            threading.Thread(target=wait_for_enter, daemon=True).start()
             with sd.RawInputStream(
                 samplerate=SAMPLE_RATE,
                 channels=1,
@@ -91,68 +137,31 @@ async def run() -> None:
                 blocksize=SAMPLES_PER_FRAME,
                 callback=audio_callback,
             ):
-                async with httpx.AsyncClient() as http_client:
-                    while True:
-                        receive = asyncio.create_task(websocket.recv())
-                        waiters: set[asyncio.Task] = {receive}
-                        if stop_request is not None:
-                            waiters.add(stop_request)
-                        done, _ = await asyncio.wait(
-                            waiters,
-                            return_when=asyncio.FIRST_COMPLETED,
+                while not stop_event.is_set():
+                    try:
+                        pcm = await asyncio.wait_for(
+                            audio_queue.get(),
+                            timeout=0.1,
                         )
-                        if stop_request is not None and stop_request in done:
-                            sending_audio = False
-                            sender.cancel()
-                            await asyncio.gather(sender, return_exceptions=True)
-                            await websocket.send(
-                                json.dumps(
-                                    {
-                                        "version": 1,
-                                        "type": "session.stop",
-                                        "session_id": recognition_session_id,
-                                    }
-                                )
-                            )
-                            stop_request = None
-
-                        if receive not in done:
-                            receive.cancel()
-                            await asyncio.gather(receive, return_exceptions=True)
-                            continue
-
-                        message = json.loads(receive.result())
-                        kind = message.get("type")
-                        if kind == "turn.partial":
-                            # Preview only. Never start an LLM request for partial text.
-                            print(f"\r[partial] {message['text']}", end="", flush=True)
-                        elif kind == "turn.final":
-                            text = message["text"].strip()
-                            print(f"\n[final] {text}")
-                            if text:
-                                # Only immutable final text enters AIAvatarKit /chat.
-                                task = asyncio.create_task(
-                                    conversation.send_final(http_client, text)
-                                )
-                                chat_tasks.append(task)
-                        elif kind == "error":
-                            raise RuntimeError(
-                                f"Parapper error {message.get('code')}: "
-                                f"{message.get('message')}"
-                            )
-                        elif kind == "session.done":
-                            if chat_tasks:
-                                await asyncio.gather(*chat_tasks)
-                            return
+                    except TimeoutError:
+                        continue
+                    await detector.process_samples(pcm, session_id)
         finally:
-            sending_audio = False
-            sender.cancel()
-            tasks: list[asyncio.Task] = [sender]
-            if stop_request is not None:
-                stop_request.cancel()
-                tasks.append(stop_request)
-            await asyncio.gather(*tasks, return_exceptions=True)
+            if detector_connected:
+                # session.stop is sent and turn.final/session.done are drained here.
+                await detector.finalize_session(session_id)
+                if chat_tasks:
+                    await asyncio.gather(*chat_tasks)
+
+
+def main() -> int:
+    try:
+        asyncio.run(run())
+    except ParapperConnectionError as error:
+        print(f"\n{error}", flush=True)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    raise SystemExit(main())

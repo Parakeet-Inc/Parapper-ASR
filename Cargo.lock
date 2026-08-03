@@ -882,6 +882,12 @@ dependencies = [
 
 [[package]]
 name = "crawdad"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87fbd1ecd2ed790e11c8fbe034f9b3e7687404818d1bdfd8218d26ec645ec7c5"
+
+[[package]]
+name = "crawdad"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9742b11612a5e342c05ae62386a7a486c8fcf60bf835914a469d44c545c3b7fe"
@@ -982,6 +988,18 @@ checksum = "13b588ba4ac1a99f7f2964d24b3d896ddc6bf847ee3855dbd4366f058cfcd331"
 dependencies = [
  "quote",
  "syn 2.0.111",
+]
+
+[[package]]
+name = "csv"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52cd9d68cf7efc6ddfaaee42e7288d3a99d613d4b50f76ce9827ae0c6e14f938"
+dependencies = [
+ "csv-core",
+ "itoa",
+ "ryu",
+ "serde_core",
 ]
 
 [[package]]
@@ -2657,17 +2675,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1670343e58806300d87950e3401e820b519b9384281bbabfb15e3636689ffd69"
 
 [[package]]
-name = "lzma-sys"
-version = "0.1.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fda04ab3764e6cde78b9974eec4f779acaba7c4e84b36eca3cf77c581b85d27"
-dependencies = [
- "cc",
- "libc",
- "pkg-config",
-]
-
-[[package]]
 name = "mac"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3501,7 +3508,7 @@ dependencies = [
 
 [[package]]
 name = "parapper"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -3523,6 +3530,7 @@ dependencies = [
  "rubato",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sherpa-onnx",
  "sherpa-onnx-sys",
  "tar",
@@ -3537,7 +3545,6 @@ dependencies = [
  "unicode-normalization",
  "uuid",
  "vibrato-rkyv",
- "xz2",
  "zstd",
 ]
 
@@ -3557,6 +3564,22 @@ dependencies = [
  "serde_json",
  "sherpa-onnx",
  "unicode-normalization",
+]
+
+[[package]]
+name = "parapper-morph-dictionary"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "csv",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "vibrato",
+ "vibrato-rkyv",
+ "zstd",
 ]
 
 [[package]]
@@ -4670,10 +4693,6 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scripts"
 version = "0.1.0"
-dependencies = [
- "anyhow",
- "toml 0.9.8",
-]
 
 [[package]]
 name = "seahash"
@@ -6342,6 +6361,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vibrato"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b02279291f68f435d84407eae0a99a8ac3dea4c2ff1f9efc86ab2431d13606bd"
+dependencies = [
+ "bincode",
+ "crawdad 0.3.0",
+ "csv-core",
+ "hashbrown 0.12.3",
+ "regex",
+ "rucrf",
+]
+
+[[package]]
 name = "vibrato-rkyv"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6349,7 +6382,7 @@ checksum = "55826c7ab91e64944a7412a356d1ccacd39bf8cada88a3eb3e018ab468b1733e"
 dependencies = [
  "bincode",
  "bumpalo",
- "crawdad",
+ "crawdad 0.4.0",
  "crawdad-rkyv",
  "csv-core",
  "digest-io",
@@ -7269,15 +7302,6 @@ checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
  "rustix",
-]
-
-[[package]]
-name = "xz2"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "388c44dc09d76f1536602ead6d325eb532f5c122f17782bd57fb47baeeb767e2"
-dependencies = [
- "lzma-sys",
 ]
 
 [[package]]

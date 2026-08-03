@@ -50,11 +50,11 @@ ASR がまだ走っている場合は完了判断を待つ。確定に使える 
 
 完了方式は設定により異なる。
 
-| Turn Detector | 完了判定                                                                                                                                              |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Simple`      | 必要なら full-turn rerecognition を行い、その結果で Turn を完了する。再認識しない設定では文法判定なしで完了する。                                     |
-| `Morph`       | full-turn rerecognition と grammar boundary だけを使う。`StrongEnd` / `PredicateEnd` / `NormalEnd` は文法で完了し、Namo は使わない。                  |
-| `Namo`        | full-turn rerecognition と grammar boundary を使う。`StrongEnd` / `PredicateEnd` は文法で完了し、`NormalEnd` と境界候補なしは Namo に最終判断させる。 |
+| Turn Detector | 完了判定                                                                                                                                                        |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Simple`      | 必要なら full-turn rerecognition を行い、その結果で Turn を完了する。再認識しない設定では文法判定なしで完了する。                                               |
+| `Morph`       | full-turn rerecognition と grammar boundary だけを使う。`StrongEnd` / `PredicateEnd` は文法で完了する。`NormalEnd` は早期確定せず Turn を open のまま保持する。 |
+| `Namo`        | full-turn rerecognition と grammar boundary を使う。`StrongEnd` / `PredicateEnd` は文法で完了し、`NormalEnd` と境界候補なしは Namo に最終判断させる。           |
 
 ## 文法境界の分類
 
@@ -69,7 +69,8 @@ ASR がまだ走っている場合は完了判断を待つ。確定に使える 
 - `。`, `！`, `？`, `.`, `!`, `?`
 - 句点扱いの補助記号
 - 終助詞
-- 単独応答としての `はい`, `うん`, `ええ`, `いいえ`
+
+`はい`, `うん`, `ええ`, `いいえ` は単独応答であっても特別扱いせず、感動詞として `NormalEnd` に分類する。
 
 ### PredicateEnd
 
@@ -80,20 +81,21 @@ ASR がまだ走っている場合は完了判断を待つ。確定に使える 
 - 動詞・形容詞・助動詞の終止形
 - 命令形
 - 意志推量形
-- 後続 token が述語の継続として扱えない場合の一部の連体形
 
 completion ASR の途中にある `PredicateEnd` は、後続が接続表現かどうかに関係なく Turn 分割には使わない。判定対象は末尾候補だけである。
 
+連体形は後続 token による特別判定を行わず、completion ASR の末尾にある場合は `Reject` とする。
+
 ### NormalEnd
 
-弱い文末候補。completion ASR の末尾が `NormalEnd` の場合、`Namo` では Namo に最終判断を渡し、`Morph` では文法だけで Turn を完了する。
+弱い文末候補。completion ASR の末尾が `NormalEnd` の場合、`Namo` では Namo に最終判断を渡す。`Morph` では早めに字幕を確定しないため、Turn を open のまま保持する。
 
 代表例:
 
 - 末尾の名詞・代名詞
 - 末尾の名詞的な接尾辞
 - 末尾の形状詞
-- 特別扱いされない感動詞
+- 感動詞。単独応答の `はい`, `うん`, `ええ`, `いいえ` も含む
 
 ### ClauseWeak
 
@@ -132,7 +134,7 @@ completion ASR の途中に `StrongEnd` / `PredicateEnd` / `NormalEnd` が見つ
 | ------------------- | -------------- | -------------- |
 | `StrongEnd`         | Turn 完了      | Turn 完了      |
 | `PredicateEnd`      | Turn 完了      | Turn 完了      |
-| `NormalEnd`         | Namo 判定      | Turn 完了      |
+| `NormalEnd`         | Namo 判定      | Turn open 継続 |
 | `ClauseWeak`        | Turn open 継続 | Turn open 継続 |
 | `Reject`            | Turn open 継続 | Turn open 継続 |
 | 境界候補なし        | Namo 判定      | Turn open 継続 |
@@ -207,7 +209,7 @@ flowchart TD
   predicate["PredicateEnd<br/>Namo なしで Turn 完了"]
   normal{"NormalEnd<br/>Turn Detector は Namo か"}
   normal_namo["Namo 判定へ"]
-  normal_morph["Morph<br/>Turn 完了"]
+  normal_morph["Morph<br/>Turn open 継続"]
   weak["ClauseWeak / Reject<br/>Turn を open のまま保持"]
   no_candidate{"candidate なし"}
   namo["Namo Turn Detector"]
@@ -245,7 +247,7 @@ flowchart TD
   normal -- Yes --> normal_namo
   normal -- No --> normal_morph
   normal_namo --> namo
-  normal_morph --> complete
+  normal_morph --> continue_open
   weak --> continue_open
   namo --> namo_end
   namo_end -- Yes --> complete
@@ -268,7 +270,7 @@ flowchart TD
 | completion ASR 途中に `PredicateEnd` があり後続がある                                | 分割せず Turn 継続                           |
 | completion ASR 途中に `NormalEnd` があり後続がある                                   | Namo に渡さず Turn 継続                      |
 | completion ASR 末尾が `NormalEnd` かつ `Namo`                                        | Namo で End / Continue 判定                  |
-| completion ASR 末尾が `NormalEnd` かつ `Morph`                                       | Turn 完了                                    |
+| completion ASR 末尾が `NormalEnd` かつ `Morph`                                       | Turn open 継続                               |
 | Namo Continue 後に発話が続く                                                         | 同じ Turn に連結                             |
 | Namo Continue 後に activity がない                                                   | `turn_check_silence_ms * 2` で timeout final |
 

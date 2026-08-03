@@ -19,11 +19,30 @@ use regex::Regex;
 use serde::Deserialize;
 use unicode_normalization::UnicodeNormalization;
 
+use crate::model::onnx_runtime::init_onnx_runtime;
+
 const TOTAL_STEP: usize = 5;
 const SPEED: f32 = 1.05;
 const SILENCE_SECONDS: f32 = 0.3;
 const MAX_CHUNK_LENGTH: usize = 300;
 const MAX_KO_CHUNK_LENGTH: usize = 120;
+const SUPERTONIC_INTER_THREADS: usize = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SupertonicComponent {
+    DurationPredictor,
+    TextEncoder,
+    VectorEstimator,
+    Vocoder,
+}
+
+const fn component_intra_threads(component: SupertonicComponent) -> usize {
+    match component {
+        SupertonicComponent::DurationPredictor | SupertonicComponent::TextEncoder => 1,
+        SupertonicComponent::VectorEstimator => 4,
+        SupertonicComponent::Vocoder => 2,
+    }
+}
 
 pub(in crate::synthesis) struct SupertonicOnnxTtsEngine {
     config: SupertonicConfig,
@@ -84,6 +103,7 @@ impl SupertonicOnnxTtsEngine {
         speaker_id: Option<i32>,
         supported_languages: &'static [&'static str],
     ) -> Result<Self> {
+        init_onnx_runtime()?;
         let onnx_dir = model_dir.join("onnx");
         let config = load_config(&onnx_dir)?;
         let text_processor = UnicodeProcessor::new(&onnx_dir.join("unicode_indexer.json"))?;
@@ -95,10 +115,19 @@ impl SupertonicOnnxTtsEngine {
         Ok(Self {
             config,
             text_processor,
-            duration_predictor: load_session(&onnx_dir.join("duration_predictor.onnx"))?,
-            text_encoder: load_session(&onnx_dir.join("text_encoder.onnx"))?,
-            vector_estimator: load_session(&onnx_dir.join("vector_estimator.onnx"))?,
-            vocoder: load_session(&onnx_dir.join("vocoder.onnx"))?,
+            duration_predictor: load_session(
+                &onnx_dir.join("duration_predictor.onnx"),
+                SupertonicComponent::DurationPredictor,
+            )?,
+            text_encoder: load_session(
+                &onnx_dir.join("text_encoder.onnx"),
+                SupertonicComponent::TextEncoder,
+            )?,
+            vector_estimator: load_session(
+                &onnx_dir.join("vector_estimator.onnx"),
+                SupertonicComponent::VectorEstimator,
+            )?,
+            vocoder: load_session(&onnx_dir.join("vocoder.onnx"), SupertonicComponent::Vocoder)?,
             voice_styles_dir: model_dir.join("voice_styles"),
             speaker_id,
             style,
@@ -280,8 +309,17 @@ fn load_config(onnx_dir: &Path) -> Result<SupertonicConfig> {
     serde_json::from_reader(reader).with_context(|| format!("Failed to parse {}", path.display()))
 }
 
-fn load_session(path: &Path) -> Result<Session> {
-    Session::builder()?
+fn load_session(path: &Path, component: SupertonicComponent) -> Result<Session> {
+    let builder = Session::builder()?;
+    let builder = builder
+        .with_intra_threads(component_intra_threads(component))
+        .map_err(|error| anyhow!("Failed to configure Supertonic intra-op threads: {error}"))?
+        .with_inter_threads(SUPERTONIC_INTER_THREADS)
+        .map_err(|error| anyhow!("Failed to configure Supertonic inter-op threads: {error}"))?;
+    let mut builder = builder
+        .with_parallel_execution(false)
+        .map_err(|error| anyhow!("Failed to configure Supertonic execution mode: {error}"))?;
+    builder
         .commit_from_file(path)
         .with_context(|| format!("Failed to load ONNX model {}", path.display()))
 }
@@ -509,4 +547,56 @@ fn sentence_end_regex() -> &'static Regex {
         Regex::new(r#"[.!?;:,'"“”‘’)）\]}…。｣』】〉》›»]$"#)
             .expect("sentence end regex must compile")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{
+        SUPERTONIC_INTER_THREADS, SupertonicComponent, SupertonicOnnxTtsEngine,
+        component_intra_threads,
+    };
+    use crate::{config::SUPERTONIC3_LANGUAGE_CODES, model::onnx_runtime::init_onnx_runtime};
+
+    #[test]
+    fn supertonic_component_sessions_use_the_adopted_intra_thread_counts() {
+        assert_eq!(
+            component_intra_threads(SupertonicComponent::DurationPredictor),
+            1
+        );
+        assert_eq!(component_intra_threads(SupertonicComponent::TextEncoder), 1);
+        assert_eq!(
+            component_intra_threads(SupertonicComponent::VectorEstimator),
+            4
+        );
+        assert_eq!(component_intra_threads(SupertonicComponent::Vocoder), 2);
+        assert_eq!(SUPERTONIC_INTER_THREADS, 1);
+    }
+
+    #[test]
+    #[ignore = "requires PARAPPER_SUPERTONIC3_Q4_MODEL_DIR and the packaged ONNX Runtime"]
+    fn smoke_supertonic3_q4_distribution_generates_consecutive_japanese_and_english_audio() {
+        init_onnx_runtime().expect("failed to initialize packaged ONNX Runtime");
+        let model_dir = std::env::var_os("PARAPPER_SUPERTONIC3_Q4_MODEL_DIR")
+            .map(PathBuf::from)
+            .expect("PARAPPER_SUPERTONIC3_Q4_MODEL_DIR must point to the distribution root");
+        let mut engine =
+            SupertonicOnnxTtsEngine::new(&model_dir, Some(0), SUPERTONIC3_LANGUAGE_CODES)
+                .expect("failed to load Supertonic 3 Q4 distribution");
+
+        for (text, language, speaker_id) in [
+            ("量子化モデルの読み上げを確認します。", "ja", 0),
+            ("This is a second consecutive synthesis request.", "en", 5),
+        ] {
+            let samples = engine
+                .synthesize(text, Some(speaker_id), Some(language))
+                .expect("Supertonic 3 Q4 synthesis failed");
+            assert!(!samples.is_empty(), "synthesis returned no audio samples");
+            assert!(
+                samples.iter().all(|sample| sample.is_finite()),
+                "synthesis returned a non-finite audio sample"
+            );
+        }
+    }
 }

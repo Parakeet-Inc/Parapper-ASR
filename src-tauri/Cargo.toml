@@ -1,6 +1,6 @@
 [package]
 name = "parapper"
-version = "0.3.0"
+version = "0.4.0"
 description = "YukariNet and Yukari Connect NEO ASR bridge"
 authors = ["Parakeet"]
 license = "MIT"
@@ -54,6 +54,7 @@ reqwest = { workspace = true }
 rubato = "1.0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 sherpa-onnx = { version = "=1.13.3", default-features = false, features = ["shared"] }
 sherpa-onnx-sys = { version = "=1.13.3", default-features = false, features = ["shared"] }
 tauri = { workspace = true }
@@ -65,7 +66,6 @@ tiny_http = "0.12"
 unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
 vibrato-rkyv = { version = "0.7.8", default-features = false, features = ["legacy"] }
-xz2 = "0.1.7"
 zstd = "0.13"
 # Keep tokenizers pinned with ort's current dependency graph to avoid native
 # feature drift while loading Namo tokenizer.json files.

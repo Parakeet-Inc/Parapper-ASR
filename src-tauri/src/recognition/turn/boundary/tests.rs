@@ -1,7 +1,10 @@
 use super::{
     audio_window::{BoundaryAudioWindow, audio_window_for_boundary},
     candidates_for_transcript,
-    japanese::{JapaneseMorphToken, has_pos1, is_nominal_suffix, japanese_morph_candidates},
+    japanese::{
+        JapaneseMorphAnalyzer, JapaneseMorphToken, has_pos1, is_nominal_suffix,
+        japanese_morph_candidates,
+    },
     sample_end_for_char_end, seconds_to_sample, slice_chars,
 };
 use crate::{
@@ -241,6 +244,54 @@ fn japanese_morph_terminal_predicate_at_text_end_is_predicate_end() {
 }
 
 #[test]
+fn japanese_morph_nonterminal_attributive_form_does_not_create_a_boundary_from_its_next_token() {
+    let transcript = token_aligned_transcript("行くの");
+    let morph_tokens = vec![
+        JapaneseMorphToken {
+            surface: "行く".to_string(),
+            char_range: 0..2,
+            feature: "動詞,一般,*,*,五段-カ行,連体形-一般".to_string(),
+        },
+        JapaneseMorphToken {
+            surface: "の".to_string(),
+            char_range: 2..3,
+            feature: "助詞,準体助詞,*,*,*,*".to_string(),
+        },
+    ];
+
+    let candidates =
+        japanese_morph_candidates(&transcript, 32_000, &vads(&[true, true]), &morph_tokens);
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].char_end, 3);
+    assert_eq!(candidates[0].class, GrammarBoundaryClass::Reject);
+}
+
+#[test]
+fn japanese_morph_standalone_responses_are_normal_end_not_strong_end() {
+    for surface in ["はい", "うん", "ええ", "いいえ"] {
+        for feature in ["感動詞,一般,*,*,*,*", "1000"] {
+            let transcript = token_aligned_transcript(surface);
+            let morph_tokens = vec![JapaneseMorphToken {
+                surface: surface.to_string(),
+                char_range: 0..surface.chars().count(),
+                feature: feature.to_string(),
+            }];
+
+            let candidates =
+                japanese_morph_candidates(&transcript, 32_000, &vads(&[true]), &morph_tokens);
+
+            assert_eq!(candidates.len(), 1, "{surface} with {feature}");
+            assert_eq!(
+                candidates[0].class,
+                GrammarBoundaryClass::NormalEnd,
+                "{surface} with {feature}"
+            );
+        }
+    }
+}
+
+#[test]
 fn japanese_morph_terminal_nominal_particle_and_comma_classes_are_distinct() {
     let cases = [
         (
@@ -284,49 +335,64 @@ fn japanese_morph_terminal_nominal_particle_and_comma_classes_are_distinct() {
 #[test]
 fn japanese_morph_boundary_classes_use_token_aligned_transcript_timestamps() {
     let cases = [
-        ("ね", "助詞,終助詞,*,*,*", GrammarBoundaryClass::StrongEnd),
+        (
+            "ね",
+            "助詞,終助詞,*,*,*",
+            "0230",
+            GrammarBoundaryClass::StrongEnd,
+        ),
         (
             "行く",
             "動詞,一般,*,*,五段-カ行,終止形-一般",
+            "0305",
             GrammarBoundaryClass::PredicateEnd,
         ),
         (
             "東京駅",
             "名詞,固有名詞,地名,*,*",
+            "0600",
             GrammarBoundaryClass::NormalEnd,
         ),
-        ("を", "助詞,格助詞,*,*,*", GrammarBoundaryClass::Reject),
+        (
+            "を",
+            "助詞,格助詞,*,*,*",
+            "0240",
+            GrammarBoundaryClass::Reject,
+        ),
         (
             "、",
             "補助記号,読点,*,*,*",
+            "0120",
             GrammarBoundaryClass::ClauseWeak,
         ),
     ];
 
-    for (surface, feature, expected_class) in cases {
-        let transcript = token_aligned_transcript(surface);
-        let morph_tokens = vec![JapaneseMorphToken {
-            surface: surface.to_string(),
-            char_range: 0..surface.chars().count(),
-            feature: feature.to_string(),
-        }];
+    for (surface, legacy_feature, compact_feature, expected_class) in cases {
+        for feature in [legacy_feature, compact_feature] {
+            let transcript = token_aligned_transcript(surface);
+            let morph_tokens = vec![JapaneseMorphToken {
+                surface: surface.to_string(),
+                char_range: 0..surface.chars().count(),
+                feature: feature.to_string(),
+            }];
 
-        let candidates =
-            japanese_morph_candidates(&transcript, 16_000, &vads(&[true]), &morph_tokens);
+            let candidates =
+                japanese_morph_candidates(&transcript, 16_000, &vads(&[true]), &morph_tokens);
 
-        assert_eq!(
-            candidates.len(),
-            1,
-            "{surface} should produce exactly one boundary candidate"
-        );
-        let candidate = &candidates[0];
-        assert_eq!(candidate.class, expected_class, "{surface}");
-        assert_eq!(candidate.char_end, surface.chars().count(), "{surface}");
-        assert_eq!(
-            candidate.sample_end,
-            surface.chars().count() * 1_600,
-            "{surface} should derive sample_end from token timestamps"
-        );
+            assert_eq!(
+                candidates.len(),
+                1,
+                "{surface} with {feature} should produce exactly one boundary candidate"
+            );
+            let candidate = &candidates[0];
+            assert_eq!(candidate.class, expected_class, "{surface} with {feature}");
+            assert_eq!(candidate.char_end, surface.chars().count(), "{surface}");
+            assert_eq!(
+                candidate.sample_end,
+                surface.chars().count() * 1_600,
+                "{surface} should derive sample_end from token timestamps"
+            );
+        }
     }
 }
 
@@ -336,6 +402,9 @@ fn unidic_pos1_matching_does_not_use_substring_fallback() {
     assert!(has_pos1("助動詞,*,*,*,助動詞-デス,終止形-一般", "助動詞"));
     assert!(!has_pos1("助動詞,*,*,*,助動詞-デス,終止形-一般", "動詞"));
     assert!(!has_pos1("感動詞,一般,*,*,*,*", "動詞"));
+    assert!(has_pos1("0305", "動詞"));
+    assert!(has_pos1("0505", "助動詞"));
+    assert!(!has_pos1("0505", "動詞"));
 }
 
 #[test]
@@ -343,6 +412,40 @@ fn unidic_suffix_normal_end_requires_nominal_pos2() {
     assert!(is_nominal_suffix("接尾辞,名詞的,一般,*,*,*"));
     assert!(is_nominal_suffix("接尾辞-名詞的,一般,*,*,*"));
     assert!(!is_nominal_suffix("接尾辞,形容詞的,*,*,*,*"));
+    assert!(is_nominal_suffix("0890"));
+    assert!(!is_nominal_suffix("0800"));
+}
+
+#[test]
+#[ignore = "requires PARAPPER_MORPH_DICTIONARY_PATH pointing to an installed production dictionary"]
+fn manually_installed_morph_dictionary_mmap_loads_and_emits_only_compact_features() {
+    let path = std::env::var_os("PARAPPER_MORPH_DICTIONARY_PATH")
+        .expect("PARAPPER_MORPH_DICTIONARY_PATH must point to system.dic");
+    let analyzer = JapaneseMorphAnalyzer::from_dictionary_path(std::path::Path::new(&path))
+        .expect("installed dictionary should mmap-load through the production analyzer");
+
+    for text in [
+        "今日は良い天気ですね。",
+        "東京駅へ行きます",
+        "行けると思うけど、まだ分かりません",
+        "これはABC123です！",
+    ] {
+        let tokens = analyzer.analyze(text);
+        assert_eq!(
+            tokens
+                .iter()
+                .map(|token| token.surface.as_str())
+                .collect::<String>(),
+            text,
+            "the installed dictionary must preserve the complete token path for {text}"
+        );
+        assert!(
+            tokens.iter().all(|token| {
+                token.feature.len() == 4 && token.feature.as_bytes().iter().all(u8::is_ascii_digit)
+            }),
+            "the installed dictionary must be the four-digit compact artifact for {text}: {tokens:?}"
+        );
+    }
 }
 
 #[test]

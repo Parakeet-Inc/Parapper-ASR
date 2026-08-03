@@ -18,10 +18,6 @@ import { useTranslation } from "react-i18next";
 import { MappingList } from "./mapping-list";
 import { useAsrModelOptions } from "../../hooks/use-asr-model-options";
 import {
-  normalizeParapperErrorPayload,
-  notifyParapperIssue,
-} from "../../lib/error";
-import {
   localTranslationModelOptions,
   makeId,
   modelOptionsWithAny,
@@ -47,6 +43,7 @@ type TranslationSettingsProps = {
     key: K,
     value: ParapperConfig[K],
   ) => void;
+  onDownloadServerModel: (model: LocalTranslationModel) => Promise<boolean>;
 };
 
 const sendTimingOptions = (t: (key: string) => string) => [
@@ -59,6 +56,7 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
   config,
   runtimeLocked,
   onUpdateConfig,
+  onDownloadServerModel,
 }) => {
   const { t } = useTranslation();
   const { asrModelSelectOptions } = useAsrModelOptions(config.asr_model);
@@ -107,16 +105,16 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
     };
   }, [config.translation_local_server_model]);
 
-  const downloadServerModel = () => {
+  const downloadServerModel = async () => {
     setDownloadingServerModel(true);
-    void invoke<boolean>("download_local_translation_model", {
-      model: config.translation_local_server_model,
-    })
-      .then(setServerModelInstalled)
-      .catch((error) =>
-        notifyParapperIssue(normalizeParapperErrorPayload(error)),
-      )
-      .finally(() => setDownloadingServerModel(false));
+    try {
+      const installed = await onDownloadServerModel(
+        config.translation_local_server_model,
+      );
+      setServerModelInstalled(installed);
+    } finally {
+      setDownloadingServerModel(false);
+    }
   };
 
   return (
@@ -209,7 +207,7 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
                 variant="filled"
                 loading={downloadingServerModel}
                 disabled={runtimeLocked}
-                onClick={downloadServerModel}
+                onClick={() => void downloadServerModel()}
               >
                 {t("translationSettings.localServer.downloadModel")}
               </Button>
