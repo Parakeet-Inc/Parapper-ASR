@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "policy": "fixed_for_v0_5",
+  "rust": {
+    "toolchain": "1.97.1",
+    "ort": {
+      "version": "2.0.0-rc.12",
+      "checksum": "d7de3af33d24a745ffb8fab904b13478438d1cd52868e6f17735ef6e1f8bf133"
+    },
+    "ort_sys": {
+      "version": "2.0.0-rc.12",
+      "checksum": "d7b497d21a8b6fbb4b5a544f8fadb77e801a09ae0add9e411d31c6f89e3c1e90"
+    }
+  },
+  "native_onnx_runtime": {
+    "version": "1.24.4",
+    "provider": "cpu",
+    "source": "Microsoft ONNX Runtime v1.24.4 official release assets",
+    "windows_x64": {
+      "archive_url": "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip",
+      "archive_size": 74442783,
+      "archive_sha256": "d2319fddfb6ea4db99ccc4b60c85c517bcd855721f5daa6a06d40d7cb2ee2357",
+      "library": "onnxruntime.dll",
+      "library_size": 14203464,
+      "library_sha256": "b95efb2113b603bbbf3f191061c5516a871ed546893c820e4f3b7b6c358dbf2a",
+      "providers_shared_library": "onnxruntime_providers_shared.dll",
+      "providers_shared_library_size": 22088,
+      "providers_shared_library_sha256": "f2540b89707b47895c2a732bfd04e34a695c580d22301ef44c0f01f09b001673"
+    },
+    "macos_arm64": {
+      "archive_url": "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-osx-arm64-1.24.4.tgz",
+      "archive_size": 30937282,
+      "archive_sha256": "93787795f47e1eee369182e43ed51b9e5da0878ab0346aecf4258979b8bba989"
+    },
+    "windows_library": "onnxruntime.dll",
+    "macos_libraries": [
+      "libonnxruntime.dylib",
+      "libonnxruntime.1.24.4.dylib"
+    ]
+  }
+}

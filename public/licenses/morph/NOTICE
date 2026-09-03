@@ -1,0 +1,18 @@
+This package contains a compact derivative of UniDic for Contemporary
+Written Japanese 3.1.1.
+
+Original source archive:
+https://clrd.ninjal.ac.jp/unidic_archive/cwj/3.1.1/unidic-cwj-3.1.1-full.zip
+
+Original source SHA-256:
+361fc8d5c16a4aa33717db6bfb5241a71e5dc26026befc737bc2bc6f0fa4b919
+
+The Parapper build keeps each lexicon entry's surface, left ID, right ID,
+and word cost. Connection costs are stored in the compact format generated
+by Vibrato's v0.5.0 mecab_smalldic procedure. UniDic feature columns are
+reduced to the four ASCII digits used by Morph boundary detection. The
+four-digit feature encoding is not reversible to the original feature text.
+Unlike Vibrato's precompiled release asset, this build does not apply the
+BCCWJ CORE-trained connection-ID mapping.
+
+The accompanying BSD file contains the UniDic copyright notice and license.

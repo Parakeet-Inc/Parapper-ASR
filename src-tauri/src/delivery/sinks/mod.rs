@@ -1,5 +1,6 @@
 pub(crate) mod developer_http;
 mod recognized_text;
+pub(crate) mod text_event_http;
 pub(crate) mod ui_event;
 pub(crate) mod vrchat_mute;
 pub(crate) mod ync_text;

@@ -59,5 +59,25 @@ export default tseslint.config(
         rules: {
             '@typescript-eslint/no-unused-vars': 'off',
         },
-    }
+    },
+    {
+        files: [
+            './src/app.tsx',
+            './src/application/**/*.{ts,tsx}',
+            './src/components/**/*.{ts,tsx}',
+            './src/hooks/**/*.{ts,tsx}',
+            './src/lib/**/*.{ts,tsx}',
+            './src/ui/**/*.{ts,tsx}',
+            './src/platform/memory/**/*.{ts,tsx}',
+            './src/entrypoints/web-preview.tsx',
+        ],
+        rules: {
+            'no-restricted-imports': [
+                'error',
+                {
+                    patterns: ['@tauri-apps/*'],
+                },
+            ],
+        },
+    },
 )

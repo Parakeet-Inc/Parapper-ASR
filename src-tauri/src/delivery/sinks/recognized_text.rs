@@ -2,13 +2,18 @@ use std::{cell::RefCell, thread::JoinHandle};
 
 use tauri::AppHandle;
 
-use crate::{config::ParapperConfig, delivery::RecognizedTextOutput, synthesis, translation};
+use crate::{
+    config::{DeliveryRouteSnapshot, ParapperConfig},
+    delivery::RecognizedTextOutput,
+    synthesis, translation,
+};
 
 use super::{developer_http, ui_event, ync_text};
 
 pub(crate) struct DispatchContext<'a> {
     pub(crate) handle: &'a AppHandle,
     pub(crate) config: &'a ParapperConfig,
+    pub(crate) route: &'a DeliveryRouteSnapshot,
     pub(crate) recognized_text_id: &'a str,
     pub(crate) recognized_at_millis: u64,
     pub(crate) audio_seconds: f64,
@@ -29,12 +34,14 @@ impl<'a> DispatchContext<'a> {
     pub(crate) fn from_metadata(
         handle: &'a AppHandle,
         config: &'a ParapperConfig,
+        route: &'a DeliveryRouteSnapshot,
         metadata: &DispatchMetadata<'a>,
         mute_check: Option<JoinHandle<bool>>,
     ) -> Self {
         Self {
             handle,
             config,
+            route,
             recognized_text_id: metadata.recognized_text_id,
             recognized_at_millis: metadata.recognized_at_millis,
             audio_seconds: metadata.audio_seconds,
@@ -92,9 +99,41 @@ impl RecognizedTextSink for SynthesisSink {
 }
 
 fn submit_recognized_text_to_translation(ctx: &DispatchContext<'_>, output: &RecognizedTextOutput) {
-    translation::submit_recognized_text(ctx.handle, ctx.config, ctx.recognized_text_id, output);
+    let config = filtered_config(ctx.config, ctx.route);
+    translation::submit_recognized_text(
+        ctx.handle,
+        &config,
+        ctx.route,
+        ctx.recognized_text_id,
+        output,
+    );
 }
 
 fn submit_recognized_text_to_synthesis(ctx: &DispatchContext<'_>, output: &RecognizedTextOutput) {
-    synthesis::submit_recognized_text(ctx.handle, ctx.config, ctx.recognized_text_id, output);
+    let config = filtered_config(ctx.config, ctx.route);
+    synthesis::submit_recognized_text(
+        ctx.handle,
+        &config,
+        ctx.route,
+        ctx.recognized_text_id,
+        output,
+    );
+}
+
+pub(crate) fn filtered_config(
+    config: &ParapperConfig,
+    route: &DeliveryRouteSnapshot,
+) -> ParapperConfig {
+    let mut scoped = config.clone();
+    scoped.translation.mappings.retain(|mapping| {
+        route
+            .translation_mapping_ids
+            .iter()
+            .any(|id| id == &mapping.id)
+    });
+    scoped
+        .speech
+        .mappings
+        .retain(|mapping| route.speech_mapping_ids.iter().any(|id| id == &mapping.id));
+    scoped
 }

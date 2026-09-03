@@ -46,7 +46,7 @@ Copy-Item .env.example .env
 - `PARAPPER_ASR_MODEL_DIR`: 任意。`verify_jvs_asr` で使う ReazonSpeech ASR model directory を明示したい場合だけ指定する。
 - `PARAPPER_VAD_MODEL`: 任意。`verify_jvs_asr` で使う Silero VAD ONNX file を明示したい場合だけ指定する。
 
-`src-tauri/src/recognition/control/tests` 配下の診断テストは、プロセス環境変数を優先し、未設定なら root `.env` または `src-tauri/.env` を読みます。`src-tauri/tests/jvs_asr.rs` と `verify_jvs_asr` は `real-asr-tests` feature が必要です。`verify_jvs_asr` はプロセス環境変数の `JVS_ROOT` を読むか、CLI の `--jvs-root PATH` で指定します。
+`src-tauri/src/recognition/tests` 配下の診断テストは、プロセス環境変数を優先し、未設定なら root `.env` または `src-tauri/.env` を読みます。`src-tauri/tests/jvs_asr.rs` と `verify_jvs_asr` は `real-asr-tests` feature が必要です。`verify_jvs_asr` はプロセス環境変数の `JVS_ROOT` を読むか、CLI の `--jvs-root PATH` で指定します。
 
 ```powershell
 $env:JVS_ROOT = ".\datasets\jvs\jvs_ver1"
@@ -81,9 +81,9 @@ cargo run -p parapper-diagnostics --bin replay_mock_recognition -- --port 18080 
 
 - YNC プラグイン HTTP の送信形式、フォールバック禁止、遅い読み上げレスポンスの切り分け: [src-tauri/src/connect/ync/tests.rs](../../src-tauri/src/connect/ync/tests.rs)
 - 認識結果から NEO/翻訳/読み上げへ配送する条件、連続発話、Namo 中途確定の回帰: [src-tauri/src/delivery/tests.rs](../../src-tauri/src/delivery/tests.rs)
-- ASR 入力や request/result workflow: [src-tauri/src/recognition/transcription](../../src-tauri/src/recognition/transcription)
-- VAD/Turn Detector の区切り、完了、再開時のイベント順序: [src-tauri/src/recognition/segmentation/segment/builder/tests.rs](../../src-tauri/src/recognition/segmentation/segment/builder/tests.rs)
-- Turn の continue/final/timeout と grammar boundary: [src-tauri/src/recognition/turn](../../src-tauri/src/recognition/turn)
+- ASR入力、request/result workflow、streaming lifecycle: [crates/parapper-stt-engine/src](../../crates/parapper-stt-engine/src)
+- VAD/Turn Detectorの区切り、完了、再開時のevent順序: [core_regression_tests](../../crates/parapper-stt-engine/src/core_regression_tests)
+- desktopのmodel構築、worker、shutdown、Tauri event接続: [src-tauri/src/recognition](../../src-tauri/src/recognition)
 
 ## 整形 / 静的解析
 
@@ -115,19 +115,19 @@ workspace の `[lints.clippy]` で `pedantic = "warn"` を有効化している�
 
 ## ビルドと配布
 
-公開workflowが生成する配布物はWindows x64 MSIです。ローカルでMSIを作る前に、CIと同じsherpa-onnx 1.13.3のruntime DLLを配置します。
+公開workflowが生成する配布物はWindows x64 MSIです。ローカルでMSIを作る前に、CIと同じMicrosoft公式ONNX Runtime 1.24.4のDLLを配置します。
 
 ```powershell
-$sherpaDir = "sherpa-onnx-v1.13.3-win-x64-shared-MT-Release-lib"
-$runtimeRoot = "target/sherpa-onnx-prebuilt"
-$archivePath = Join-Path $env:TEMP "parapper-sherpa-onnx.tar.bz2"
+$runtimeDir = "onnxruntime-win-x64-1.24.4"
+$runtimeRoot = "target/onnxruntime-prebuilt"
+$archivePath = Join-Path $env:TEMP "parapper-onnxruntime.zip"
 New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
-curl.exe -L -f -o $archivePath "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/$sherpaDir.tar.bz2"
-tar.exe -xjf $archivePath -C $runtimeRoot
+curl.exe -L -f -o $archivePath "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/$runtimeDir.zip"
+Expand-Archive -LiteralPath $archivePath -DestinationPath $runtimeRoot -Force
 pnpm build:msi
 ```
 
-`target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.3-win-x64-shared-MT-Release-lib/lib`が存在しないままbundleすると、実行に必要なDLLがMSIへ含まれません。
+`target/onnxruntime-prebuilt/onnxruntime-win-x64-1.24.4/lib`が存在しないままbundleすると、実行に必要なDLLがMSIへ含まれません。公開workflowでは公式release assetのsizeとSHA-256に加え、`onnxruntime.dll`と`onnxruntime_providers_shared.dll`も個別に検証します。
 
 GitHub Actions の `Build` workflow は、`main` へのpush、pull request、手動実行ではMSIをActions artifactとして保存します。`v*` tagをpushした場合はGitHub Releaseを作成し、生成したMSIを添付します。
 
@@ -136,36 +136,36 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-macOS向けのコードと`.app` bundle設定はありますが、公開workflowはmacOS artifactを生成しません。Apple Siliconでは、sherpa-onnx 1.13.3のarm64 dylibを取得してから次の順でsource buildします。
+macOS向けのコードと`.app` bundle設定はありますが、公開workflowはmacOS artifactを生成しません。Apple Siliconでは、Microsoft公式ONNX Runtime 1.24.4のarm64 dylibを取得してから次の順でsource buildします。
 
 ```sh
-export SHERPA_PREBUILT_DIR="sherpa-onnx-v1.13.3-osx-arm64-shared-lib"
-mkdir -p target/sherpa-onnx-prebuilt
-curl -L --fail -o /tmp/parapper-sherpa-onnx.tar.bz2 \
-  "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/${SHERPA_PREBUILT_DIR}.tar.bz2"
-tar -xjf /tmp/parapper-sherpa-onnx.tar.bz2 -C target/sherpa-onnx-prebuilt
+export ONNXRUNTIME_PREBUILT_DIR="onnxruntime-osx-arm64-1.24.4"
+mkdir -p target/onnxruntime-prebuilt
+curl -L --fail -o /tmp/parapper-onnxruntime.tgz \
+  "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/${ONNXRUNTIME_PREBUILT_DIR}.tgz"
+tar -xzf /tmp/parapper-onnxruntime.tgz -C target/onnxruntime-prebuilt
 ./scripts/prepare-macos-runtime.sh
 pnpm tauri build --config src-tauri/tauri.macos.conf.json
 ```
 
-`SHERPA_PREBUILT_DIR`は[`scripts/prepare-macos-runtime.sh`](../../scripts/prepare-macos-runtime.sh)に1.13.3の配置先を伝えます。最後のコマンドは[`src-tauri/tauri.macos.conf.json`](../../src-tauri/tauri.macos.conf.json)に従って`.app`を生成します。署名とnotarizationはこの手順に含みません。YNC本体・pluginとVRChat OSCQueryの連携はmacOSでは無効で、翻訳と読み上げにはローカルbackendを使用します。
+`ONNXRUNTIME_PREBUILT_DIR`は[`scripts/prepare-macos-runtime.sh`](../../scripts/prepare-macos-runtime.sh)に公式packageの配置先を伝えます。最後のコマンドは[`src-tauri/tauri.macos.conf.json`](../../src-tauri/tauri.macos.conf.json)に従って`.app`を生成します。署名とnotarizationはこの手順に含みません。YNC本体・pluginとVRChat OSCQueryの連携はmacOSでは無効で、翻訳と読み上げにはローカルbackendを使用します。
 
 ## モデル仕様
 
 モデルはアプリの初回ダウンロード機能で、Tauri の app data 配下に保存します。
 
-- VAD: Silero VAD ONNX / ort
-- ASR: ReazonSpeech K2 v2 / sherpa-onnx
-- ASR: NeMo Parakeet TDT CTC 0.6B Ja 35000 int8 / sherpa-onnx
-- ASR: NeMo Parakeet TDT 0.6B v2 int8 / sherpa-onnx
-- ASR: NeMo Parakeet TDT 0.6B v3 int8 / sherpa-onnx
-- interim ASR: Nemotron Speech Streaming 0.6B English 160 ms / 560 ms int8 / sherpa-onnx
-- interim ASR: Nemotron 3.5 ASR Streaming 0.6B Multilingual 160 ms / 560 ms int8 / sherpa-onnx
-- Turn Detector: Namo Turn Detector v1 (Japanese / English / Multilingual) / ort
+- VAD: Silero VAD ONNX / ONNX Runtime
+- ASR: ReazonSpeech K2 v2 / ONNX Runtime
+- ASR: NeMo Parakeet TDT CTC 0.6B Ja 35000 int8 / ONNX Runtime
+- ASR: NeMo Parakeet TDT 0.6B v2 int8 / ONNX Runtime
+- ASR: NeMo Parakeet TDT 0.6B v3 int8 / ONNX Runtime
+- interim ASR: Nemotron Speech Streaming 0.6B English 160 ms / 560 ms int8 / ONNX Runtime
+- interim ASR: Nemotron 3.5 ASR Streaming 0.6B Multilingual 160 ms / 560 ms int8 / ONNX Runtime
+- Turn Detector: Namo Turn Detector v1 (Japanese / English / Multilingual) / ONNX Runtime
 - Japanese morph dictionary: UniDic CWJ 3.1.1 を vibrato rkyv 形式へ変換して grammar boundary 判定に使う
 - local translation: LFM2-350M-ENJP-MT ONNX Community Q4 / CAT-Translate 0.8B ONNX Q4 block16 / ort
 - noise cancellation: UL-UNAS / ort
-- local TTS: Piper voices / Supertonic 2 / Supertonic 3 / Supertonic3 (quantized) / sherpa-onnx または ort
+- local TTS: Supertonic 2 / Supertonic 3 / Supertonic3 (quantized) / ONNX Runtime
 
 ReazonSpeech K2 v2 は `int8`, `int8-fp32`, `float32` を選択できます。デフォルトは `int8-fp32` です。
 NeMo Parakeet TDT / TDT CTC は `int8` のみを使用します。

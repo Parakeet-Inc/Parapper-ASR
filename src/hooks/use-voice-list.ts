@@ -1,11 +1,13 @@
 import { notifications } from "@mantine/notifications";
-import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { notificationColor } from "../lib/theme";
 
-export const useVoiceList = (port: number) => {
+export const useVoiceList = (
+  port: number,
+  fetchVoices: (port: number) => Promise<string[]>,
+) => {
   const { t } = useTranslation();
   const [voiceList, setVoiceList] = useState<string[]>([]);
   const [refreshingVoiceList, setRefreshingVoiceList] = useState(false);
@@ -13,9 +15,7 @@ export const useVoiceList = (port: number) => {
   const refreshVoiceList = useCallback(async () => {
     setRefreshingVoiceList(true);
     try {
-      const loadedVoiceList = await invoke<string[]>("fetch_neo_voice_list", {
-        port,
-      });
+      const loadedVoiceList = await fetchVoices(port);
       setVoiceList(loadedVoiceList);
     } catch (error) {
       notifications.show({
@@ -26,7 +26,7 @@ export const useVoiceList = (port: number) => {
     } finally {
       setRefreshingVoiceList(false);
     }
-  }, [port, t]);
+  }, [fetchVoices, port, t]);
 
   return { voiceList, refreshingVoiceList, refreshVoiceList };
 };

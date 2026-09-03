@@ -21,6 +21,7 @@ use crate::connect::test_support::{
 
 fn source_meta(source_id: &str, turn_id: u64, output_sequence: u64) -> RecognitionSourceMeta {
     RecognitionSourceMeta {
+        identity: parapper_stt_engine::SourceIdentitySnapshot::legacy_single_source(),
         turn_session_id: source_hash(source_id),
         turn_id,
         turn_revision: 0,
@@ -1157,7 +1158,7 @@ fn consecutive_speech_requests_are_received_by_mock_in_queue_order() {
                 port,
                 id: "speech-consecutive-1".to_string(),
                 source_event_id: "speech-consecutive-1".to_string(),
-                source_meta: source_meta("speech-consecutive-1", 1, 1),
+                source_meta: source_meta("speech-consecutive", 1, 1),
                 source_kind: SpeechSourceKind::Recognition,
                 target_lang: None,
                 text: "first".to_string(),
@@ -1174,7 +1175,7 @@ fn consecutive_speech_requests_are_received_by_mock_in_queue_order() {
                 port,
                 id: "speech-consecutive-2".to_string(),
                 source_event_id: "speech-consecutive-2".to_string(),
-                source_meta: source_meta("speech-consecutive-2", 2, 2),
+                source_meta: source_meta("speech-consecutive", 2, 2),
                 source_kind: SpeechSourceKind::Recognition,
                 target_lang: None,
                 text: "second".to_string(),
@@ -1191,7 +1192,7 @@ fn consecutive_speech_requests_are_received_by_mock_in_queue_order() {
                 port,
                 id: "speech-consecutive-3".to_string(),
                 source_event_id: "speech-consecutive-3".to_string(),
-                source_meta: source_meta("speech-consecutive-3", 3, 3),
+                source_meta: source_meta("speech-consecutive", 3, 3),
                 source_kind: SpeechSourceKind::Recognition,
                 target_lang: None,
                 text: "third".to_string(),
@@ -1208,7 +1209,7 @@ fn consecutive_speech_requests_are_received_by_mock_in_queue_order() {
                 port,
                 id: "speech-consecutive-4".to_string(),
                 source_event_id: "speech-consecutive-4".to_string(),
-                source_meta: source_meta("speech-consecutive-4", 4, 4),
+                source_meta: source_meta("speech-consecutive", 4, 4),
                 source_kind: SpeechSourceKind::Recognition,
                 target_lang: None,
                 text: "fourth".to_string(),

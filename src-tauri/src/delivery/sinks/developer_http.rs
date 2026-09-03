@@ -45,6 +45,9 @@ impl RecognizedTextSink for DeveloperHttpSink {
     fn deliver(&self, ctx: &DispatchContext<'_>, output: &RecognizedTextOutput) {
         if !ctx.config.streaming_recognition.enabled
             || ctx.config.streaming_recognition.mode != DeveloperConnectionMode::Http
+            || !ctx
+                .config
+                .developer_http_enabled_for_source(output.meta.source().identity.source_id.as_str())
         {
             return;
         }
@@ -145,30 +148,38 @@ fn run_delivery_queue(receiver: mpsc::Receiver<DeveloperHttpRequest>) {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::mpsc, thread, time::Duration};
+
     use serde_json::json;
 
-    use super::DeveloperRecognitionEvent;
+    use crate::connect::test_support::{TimedMockHttpServer, json_response};
 
-    #[test]
-    fn developer_http_turn_event_preserves_version_identity_ordering_and_final_metadata() {
-        let event = DeveloperRecognitionEvent {
+    use super::{DeveloperHttpRequest, DeveloperRecognitionEvent, run_delivery_queue};
+
+    fn event(id: &str, text: &str) -> DeveloperRecognitionEvent {
+        DeveloperRecognitionEvent {
             version: 1,
             event_type: "turn.final",
-            id: "turn-3".to_string(),
-            text: "こんにちは。".to_string(),
+            id: id.to_owned(),
+            text: text.to_owned(),
             turn_session_id: 7,
             turn_id: 3,
             revision: 2,
             output_sequence: 4,
             segment_id: 8,
             previous_segment_id: Some(7),
-            source_asr_model: "reazonspeech_k2_v2".to_string(),
-            source_language: "japanese".to_string(),
+            source_asr_model: "reazonspeech_k2_v2".to_owned(),
+            source_language: "japanese".to_owned(),
             detected_language: None,
             recognized_at_ms: 1_000,
             elapsed_ms: 96,
             audio_duration_ms: Some(1_280),
-        };
+        }
+    }
+
+    #[test]
+    fn developer_http_turn_event_preserves_version_identity_ordering_and_final_metadata() {
+        let event = event("turn-3", "こんにちは。");
 
         assert_eq!(
             serde_json::to_value(event).unwrap(),
@@ -191,5 +202,54 @@ mod tests {
                 "audio_duration_ms": 1_280,
             })
         );
+    }
+
+    #[test]
+    fn developer_http_worker_posts_each_enabled_profile_event_once_to_the_configured_url() {
+        let server = TimedMockHttpServer::start_until_idle(Duration::from_millis(100), |_, _| {
+            json_response("{}")
+        });
+        let url = format!("http://127.0.0.1:{}/events", server.port());
+        let (sender, receiver) = mpsc::channel();
+        let worker = thread::spawn(move || run_delivery_queue(receiver));
+
+        for (id, text) in [
+            ("profile-a-turn", "Aの発話。"),
+            ("profile-b-turn", "Bの発話。"),
+        ] {
+            sender
+                .send(DeveloperHttpRequest {
+                    url: url.clone(),
+                    body: event(id, text),
+                })
+                .expect("Developer HTTP request should queue");
+        }
+        drop(sender);
+        worker.join().expect("Developer HTTP worker should stop");
+
+        let requests = [server.recv_request(), server.recv_request()];
+        assert_eq!(
+            requests.map(|request| {
+                let body = request
+                    .raw
+                    .split("\r\n\r\n")
+                    .nth(1)
+                    .expect("Developer HTTP request should have a body");
+                let value: serde_json::Value =
+                    serde_json::from_str(body).expect("request body should be JSON");
+                (value["id"].clone(), value["text"].clone())
+            }),
+            [
+                (json!("profile-a-turn"), json!("Aの発話。")),
+                (json!("profile-b-turn"), json!("Bの発話。")),
+            ]
+        );
+        assert!(
+            server
+                .try_recv_request(Duration::from_millis(150))
+                .is_none(),
+            "each profile event must be posted exactly once"
+        );
+        server.join();
     }
 }

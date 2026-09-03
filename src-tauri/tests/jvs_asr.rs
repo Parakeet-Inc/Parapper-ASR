@@ -1,4 +1,4 @@
-//! JVS + sherpa-onnx の ASR engine 精度を検証する ignored test。
+//! JVS + direct ONNX Runtime ASR engineの精度を検証するignored test。
 //!
 //! ここでは `verify_jvs_asr` 診断コマンドを起動し、ReazonSpeech 単体の認識精度と
 //! 連結 wav の ASR 結果を確認する。`TurnRuntime` の segment / interim / final /

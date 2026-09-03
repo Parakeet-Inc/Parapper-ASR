@@ -89,11 +89,14 @@ delivery::dispatch_recognized_text
 translation::submit_recognized_text
   -> request.rs が TranslationRequest を作る
   -> queue.rs が古い interim request を除去する
-  -> manager.rs worker
-  -> clients/ync_translate.rs POST /
-  -> event.rs が parapper://translated-text を emit する
+  -> pipeline.rs worker
+  -> provider.rs が local MT または YNC POST / を選ぶ
+  -> pipeline.rs が parapper://translated-text を emit する
   -> final translated text は読み上げを synthesis へ enqueue できる
 ```
+
+OpenAI互換/ゆかコネNEOから受けるローカル翻訳listenerは、独立した
+`translation/http_server.rs`に閉じています。
 
 重要な方針:
 
@@ -104,15 +107,13 @@ translation::submit_recognized_text
 ### 読み上げ合成
 
 ```text
-synthesis::submit_recognized_text または translation::event
+synthesis::submit_recognized_text または translation::pipeline
   -> request.rs が QueuedSpeechRequest を作る
   -> queue.rs が古い speech request を除去する
-  -> manager.rs が backend を振り分ける
-     ├─ clients/ync_speech.rs POST /              (外部 plugin queue)
-     └─ local/
-        ├─ queue.rs voice 別の生成キュー
-        ├─ engine.rs Sherpa / Supertonic adapter
-        └─ playback.rs -> playback::PlaybackManager
+  -> dispatch.rs が backend を振り分ける
+     ├─ YNC plugin POST /                          (外部 plugin queue)
+     └─ local.rs voice別生成queue -> PlaybackManager
+          └─ parapper-models::tts::LocalTtsEngine
 ```
 
 重要な方針:
@@ -124,7 +125,7 @@ synthesis::submit_recognized_text または translation::event
 ### 再生
 
 ```text
-synthesis/local/playback.rs
+synthesis/local.rs
   -> TtsArtifact
   -> PlaybackManager
   -> PlaybackQueue
@@ -140,7 +141,7 @@ synthesis/local/playback.rs
 | --- | --- | --- |
 | YNC text input | `delivery/sinks/ync_text.rs` -> `connect::YncTextInputTransport` | `POST /api/input`、JSON bodyは`Text` / `fixedText` / `textID`、送信後は待たない |
 | YNC translate | `translation/provider.rs` -> `connect::YncPluginClient` | plugin HTTP `POST /` |
-| YNC speech | `synthesis/clients/ync_speech.rs` -> `connect::YncPluginClient` | plugin HTTP `POST /`、長めの timeout |
+| YNC speech | `synthesis/dispatch.rs` -> `connect::YncPluginClient` | plugin HTTP `POST /`、長めの timeout |
 | YNC voice list / stop | `commands.rs` -> `connect::YncPluginClient` | ユーザー操作 command |
 | VRChat mute | `delivery/sinks/vrchat_mute.rs` -> `connect::osc` | YNC text delivery の前に確認 |
 | Windows registry | `connect::registry` / `connect::ync::discovery` | YNC ports を読む |
@@ -153,12 +154,12 @@ YNC plugin の port discovery は `HKCU\Software\YukarinetteConnectorNeo\TransSe
 
 | 関心ごと | 推奨するテスト場所 |
 | --- | --- |
-| Segment の挙動 | `recognition/segmentation/segment/builder/tests.rs` |
-| Turn / transcription / control の横断挙動 | `recognition/control/tests`, `recognition/transcription`, `recognition/turn` |
+| Segment / Turn / transcription の挙動 | `parapper-stt-engine/src/core_regression_tests` |
+| recognition host adapter | `recognition/tests`, `recognition/{asr_worker,input,output_sink}.rs` |
 | Delivery mapping/timing | `delivery/tests.rs` |
 | 翻訳キュー / stale policy | `translation/queue.rs` tests, `pipeline_tests.rs` |
 | YNC request/response payload | mock HTTP server を使う `connect/ync/tests.rs` |
-| 読み上げキュー / 順序 / local TTS | `synthesis/queue.rs`, `synthesis/local/queue.rs` tests |
+| 読み上げキュー / 順序 / local TTS | `synthesis/{queue,local}.rs` tests |
 | delivery -> translation -> synthesis の横断 | `pipeline_tests.rs` |
 | UI type/build regression | `pnpm build` |
 

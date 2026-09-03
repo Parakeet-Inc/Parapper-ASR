@@ -19,6 +19,7 @@ pub(crate) fn dispatch_recognized_text(
     config: &ParapperConfig,
     mute_check: Option<JoinHandle<bool>>,
     output: &RecognizedTextOutput,
+    route: &crate::config::DeliveryRouteSnapshot,
 ) {
     let elapsed_millis = output.elapsed_millis;
     #[expect(clippy::cast_precision_loss)]
@@ -42,7 +43,12 @@ pub(crate) fn dispatch_recognized_text(
         elapsed_millis,
         is_final_for_ync_delivery: is_final,
     };
-    let ctx = DispatchContext::from_metadata(handle, config, &metadata, mute_check);
+    let ctx = DispatchContext::from_metadata(handle, config, route, &metadata, mute_check);
+    let event = crate::delivery::router::TextEvent::recognition(output, ctx.route.clone());
+    let route_failures = crate::delivery::router::enqueue_text_event(&event);
+    for failure in route_failures {
+        log::warn!("recognized text delivery route rejected event: {failure:?}");
+    }
     for sink in registered_recognized_text_sinks() {
         log::trace!("Delivering recognized text to {}", sink.name());
         sink.deliver(&ctx, output);
@@ -72,6 +78,7 @@ mod tests {
             meta: RecognizedTextMeta::replace_turn(
                 "turn-1".to_string(),
                 RecognitionSourceMeta {
+                    identity: parapper_stt_engine::SourceIdentitySnapshot::legacy_single_source(),
                     turn_session_id: 1,
                     turn_id: 1,
                     turn_revision: 0,

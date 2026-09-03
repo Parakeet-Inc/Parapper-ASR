@@ -5,7 +5,6 @@ import {
   asrModelOption,
   asrPrecisionOptions,
   completionAsrModelOptions,
-  interimOnlyAsrModelOptions,
 } from "../lib/constants";
 import type { AsrModel } from "../lib/types";
 
@@ -15,14 +14,6 @@ export const useAsrModelOptions = (selectedModel: AsrModel | null) => {
   const asrModelSelectOptions = useMemo(
     () =>
       completionAsrModelOptions.map(({ labelKey, value }) => ({
-        label: t(labelKey),
-        value,
-      })),
-    [t],
-  );
-  const interimOnlyAsrModelSelectOptions = useMemo(
-    () =>
-      interimOnlyAsrModelOptions.map(({ labelKey, value }) => ({
         label: t(labelKey),
         value,
       })),
@@ -40,7 +31,6 @@ export const useAsrModelOptions = (selectedModel: AsrModel | null) => {
 
   return {
     asrModelSelectOptions,
-    interimOnlyAsrModelSelectOptions,
     selectedAsrPrecisionOptions,
   };
 };

@@ -1,19 +1,22 @@
 {
   "name": "parapper",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "tauri": "tauri",
     "dev": "vite --host 127.0.0.1 --port 5174 --strictPort",
+    "dev:web-preview": "vite --config vite.web-preview.config.ts --host 127.0.0.1 --port 5175 --strictPort",
     "build": "pnpm generate-license && tsc -b && vite build",
+    "build:web-preview": "tsc -b && vite build --config vite.web-preview.config.ts",
     "build:msi": "pnpm tauri build --target x86_64-pc-windows-msvc --bundles msi",
     "generate-license": "cargo run -p scripts --bin generate_license",
     "preview": "vite preview",
     "format": "prettier --write \"./src/**/*.{ts,tsx,js,json}\" \"./*.json\"",
     "lint": "eslint ./src",
     "spell": "cspell .",
+    "test:frontend": "vitest run",
     "rust:fmt": "cargo fmt -p parapper -- --check",
     "rust:lint": "cargo clippy --all-targets --all-features -p parapper -- -D warnings"
   },
@@ -48,6 +51,7 @@
     "typescript": "5.9.3",
     "typescript-eslint": "^8.59.0",
     "unplugin-icons": "^23.0.1",
-    "vite": "4.5.14"
+    "vite": "4.5.14",
+    "vitest": "0.34.6"
   }
 }

@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "oracle_priority": {
+    "nvidia_families": [
+      "pinned_nvidia_python",
+      "rust_decoder",
+      "current_sherpa_compatibility_baseline"
+    ],
+    "reazonspeech": [
+      "pinned_reazonspeech_artifact_contract",
+      "current_sherpa_compatibility_baseline"
+    ]
+  },
+  "nemo": {
+    "repository": "https://github.com/NVIDIA/NeMo",
+    "commit": "b331a34885986ec879ca7acb62d955e7af71c015",
+    "commit_date": "2026-08-10T22:29:48Z",
+    "license": "Apache-2.0",
+    "python": "3.11",
+    "source_files": [
+      "nemo/collections/asr/parts/submodules/ctc_beam_decoding.py",
+      "nemo/collections/asr/parts/submodules/rnnt_greedy_decoding.py",
+      "nemo/collections/asr/parts/submodules/tdt_beam_decoding.py"
+    ]
+  },
+  "models": [
+    {
+      "app_model": "reazonspeech_k2_v2",
+      "family": "reazonspeech_k2_v2",
+      "languages": ["ja"],
+      "precisions": ["int8", "int8_float32", "float32"],
+      "oracle": "reazonspeech_contract",
+      "reference": {
+        "repository": "reazon-research/reazonspeech-k2-v2",
+        "revision": "291488c8151be24d7da4bf7af26e533fad96e407",
+        "filename": null,
+        "license": "Apache-2.0"
+      },
+      "production_artifact": {
+        "kind": "huggingface_snapshot",
+        "repository": "reazon-research/reazonspeech-k2-v2",
+        "revision": "291488c8151be24d7da4bf7af26e533fad96e407",
+        "asset": null,
+        "sha256": null
+      }
+    },
+    {
+      "app_model": "nemo_parakeet_tdt_ctc_0_6b_ja_35000_int8",
+      "family": "nvidia_ctc_ja",
+      "languages": ["ja"],
+      "precisions": ["int8"],
+      "oracle": "pinned_nvidia_python",
+      "reference": {
+        "repository": "nvidia/parakeet-tdt_ctc-0.6b-ja",
+        "revision": "44edb27eea9317daf89333e75eb830db4b1cc298",
+        "filename": "parakeet-tdt_ctc-0.6b-ja.nemo",
+        "license": "CC-BY-4.0"
+      },
+      "production_artifact": {
+        "kind": "huggingface_snapshot",
+        "repository": "csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8",
+        "revision": "bef18eb066808c90bd0f5df5be685767b0732de8",
+        "asset": null,
+        "sha256": null
+      }
+    },
+    {
+      "app_model": "nemo_parakeet_tdt_0_6b_v2_int8",
+      "family": "nvidia_tdt_v2_en",
+      "languages": ["en"],
+      "precisions": ["int8"],
+      "oracle": "pinned_nvidia_python",
+      "reference": {
+        "repository": "nvidia/parakeet-tdt-0.6b-v2",
+        "revision": "ae9ad07059c7c739ffaf932226a8fe64ae2620b0",
+        "filename": "parakeet-tdt-0.6b-v2.nemo",
+        "license": "CC-BY-4.0"
+      },
+      "production_artifact": {
+        "kind": "huggingface_snapshot",
+        "repository": "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
+        "revision": "1ab9323565ddb038682214b292f588070a538ce2",
+        "asset": null,
+        "sha256": null
+      }
+    },
+    {
+      "app_model": "nemo_parakeet_tdt_0_6b_v3_int8",
+      "family": "nvidia_tdt_v3_multilingual",
+      "languages": [
+        "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk"
+      ],
+      "precisions": ["int8"],
+      "oracle": "pinned_nvidia_python",
+      "reference": {
+        "repository": "nvidia/parakeet-tdt-0.6b-v3",
+        "revision": "541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
+        "filename": "parakeet-tdt-0.6b-v3.nemo",
+        "license": "CC-BY-4.0"
+      },
+      "production_artifact": {
+        "kind": "huggingface_snapshot",
+        "repository": "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+        "revision": "2bda32ec70b097a55adaa07d9a7173915b43cc78",
+        "asset": null,
+        "sha256": null
+      }
+    },
+    {
+      "app_model": "nemotron_speech_streaming_en_0_6b_160ms_int8",
+      "family": "nvidia_nemotron_en",
+      "languages": ["en"],
+      "precisions": ["int8"],
+      "oracle": "pinned_nvidia_python",
+      "reference": {
+        "repository": "nvidia/nemotron-speech-streaming-en-0.6b",
+        "revision": "ebe59e5a817142986528bbbee5dba8db7b38ed50",
+        "filename": "nemotron-speech-streaming-en-0.6b.nemo",
+        "license": "NVIDIA Open Model License"
+      },
+      "production_artifact": {
+        "kind": "github_release_asset",
+        "repository": "k2-fsa/sherpa-onnx",
+        "revision": "asr-models",
+        "asset": "sherpa-onnx-nemotron-speech-streaming-en-0.6b-160ms-int8-2026-04-25.tar.bz2",
+        "sha256": "0ae73a41cd51599dc7cac9ac083d9d35de53d762ca45923505fde47a3751814b"
+      }
+    },
+    {
+      "app_model": "nemotron_speech_streaming_en_0_6b_560ms_int8",
+      "family": "nvidia_nemotron_en",
+      "languages": ["en"],
+      "precisions": ["int8"],
+      "oracle": "pinned_nvidia_python",
+      "reference": {
+        "repository": "nvidia/nemotron-speech-streaming-en-0.6b",
+        "revision": "ebe59e5a817142986528bbbee5dba8db7b38ed50",
+        "filename": "nemotron-speech-streaming-en-0.6b.nemo",
+        "license": "NVIDIA Open Model License"
+      },
+      "production_artifact": {
+        "kind": "github_release_asset",
+        "repository": "k2-fsa/sherpa-onnx",
+        "revision": "asr-models",
+        "asset": "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2",
+        "sha256": "78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358"
+      }
+    },
+    {
+      "app_model": "nemotron_3_5_asr_streaming_0_6b_160ms_int8",
+      "family": "nvidia_nemotron_3_5",
+      "languages": ["ar", "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hi", "hr", "hu", "it", "ja", "ko", "nl", "nb", "pl", "pt", "ro", "ru", "sk", "sv", "tr", "uk", "vi", "zh"],
+      "precisions": ["int8"],
+      "oracle": "pinned_nvidia_python",
+      "reference": {
+        "repository": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+        "revision": "1c8deaecc64b91f034d73e08dd8b64625eb3395d",
+        "filename": "nemotron-3.5-asr-streaming-0.6b.nemo",
+        "license": "OpenMDW-1.1"
+      },
+      "production_artifact": {
+        "kind": "github_release_asset",
+        "repository": "k2-fsa/sherpa-onnx",
+        "revision": "asr-models",
+        "asset": "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-160ms-int8-2026-06-11.tar.bz2",
+        "sha256": "a81909a1780d84cff16d73c15e13e67d9d81d8839faf14870d507d8499f7a61a"
+      }
+    },
+    {
+      "app_model": "nemotron_3_5_asr_streaming_0_6b_560ms_int8",
+      "family": "nvidia_nemotron_3_5",
+      "languages": ["ar", "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hi", "hr", "hu", "it", "ja", "ko", "nl", "nb", "pl", "pt", "ro", "ru", "sk", "sv", "tr", "uk", "vi", "zh"],
+      "precisions": ["int8"],
+      "oracle": "pinned_nvidia_python",
+      "reference": {
+        "repository": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+        "revision": "1c8deaecc64b91f034d73e08dd8b64625eb3395d",
+        "filename": "nemotron-3.5-asr-streaming-0.6b.nemo",
+        "license": "OpenMDW-1.1"
+      },
+      "production_artifact": {
+        "kind": "github_release_asset",
+        "repository": "k2-fsa/sherpa-onnx",
+        "revision": "asr-models",
+        "asset": "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11.tar.bz2",
+        "sha256": "c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a"
+      }
+    }
+  ]
+}

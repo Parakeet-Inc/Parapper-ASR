@@ -1,9 +1,8 @@
-# recognition 内部詳細
+# recognition内部詳細
 
-`RecognitionSession` は state holder、`RecognitionDriver` は event order / step priority を持つ。
-個別 workflow は stage module の `flow.rs` に分散している。
+STTの状態遷移は`parapper-stt-engine`にあり、desktop側は`RecognitionDriver`を駆動する。`RecognitionSession`はstate holder、`RecognitionDriver`はevent order / step priority、`AsrExecutionRuntime`は構築済みASR modelの利用policyを持つ。
 
-## Session 状態
+## Session状態
 
 ```mermaid
 classDiagram
@@ -13,15 +12,11 @@ classDiagram
         +push_vad_frame(samples, vad_result)
         +update_config(config)
         +step()
-    }
-
-    class SegmentationFlow {
-        -SegmentBuilder segment_builder
-        +push_vad_frame(samples, vad_result)
+        +flush_input()
     }
 
     class RecognitionSession {
-        -ParapperConfig config
+        -SttEngineConfig config
         -PendingRuntimeState pending
         -RuntimeIo io
         -TurnStore turn_store
@@ -33,78 +28,100 @@ classDiagram
     class RuntimeIo {
         +AsrRequestRunner asr_runner
         +TurnDecisionRunner turn_decision_runner
-        +TurnOutputSink output_sink
-        +LanguageIdRuntime language_id_runtime
+        +RecognitionOutputSink output_sink
         +LanguageDetector language_id
-        +JapaneseMorphAnalyzer japanese_morph
+        +TranscriptBoundaryDetector boundary_detector
     }
 
-    RecognitionDriver *-- SegmentationFlow
+    class AsrExecutionRuntime {
+        -AsrModelRegistry models
+        -Map~AsrStreamingSessionKey, AsrStreamingState~ streams
+        +execute(config, request)
+        +reset_streaming_sessions()
+    }
+
     RecognitionDriver *-- RecognitionSession
     RecognitionSession *-- RuntimeIo
+    RuntimeIo --> AsrExecutionRuntime : host worker経由
 ```
 
-## step 優先順位
+## step優先順位
 
-`RecognitionOuterLoop` は各 step の先頭で frontend からの config 更新を 1 回だけ取り出す。dirty bit に応じて、audio-only 設定は `AudioInputProcessor` の参照 config だけを差し替え、VAD 閾値変更は `RecognitionVadStage`、ASR / turn / delivery に関わる変更は `RecognitionDriver::update_config` へ渡す。
+desktop outer loopはfrontendからのconfig更新を取り出し、audio/VAD/driverへ必要な更新だけを渡す。engine driverの1 stepは次の優先順位を守る。
 
 ```mermaid
 flowchart TD
-    outer[RecognitionOuterLoop::step] --> config{runtime config dirty?}
-    config -- driver dirty --> update_driver[RecognitionDriver::update_config]
-    config -- VAD dirty --> update_vad[RecognitionVadStage::update_config]
-    config -- no / applied --> step[RecognitionDriver::step]
-    update_driver --> step
-    update_vad --> step
-
-    step --> result{ASR result ready?}
-    result -- yes --> transcription_result[transcription::flow\napply ASR result action]
-    result -- no --> turn_check{pending turn check?}
-
-    turn_check -- stale epoch --> drop_check[drop pending check]
-    turn_check -- active --> turn_silence[turn::flow\nsilence action]
-    turn_check -- none --> timeout[turn::flow\ntimeout action]
-
-    turn_silence --> rerecognize[turn::flow\nrerecognition dispatch]
-    turn_silence --> complete[turn::flow\nfinal without grammar]
-    timeout --> timeout_final[turn::flow\ntimeout final or rerecognition]
-    timeout --> dispatch[transcription::flow\ndispatch next ASR if idle]
+    step["RecognitionDriver::step"] --> result{"ASR result ready?"}
+    result -- yes --> apply["request一致・stale判定・result適用"]
+    result -- no --> check{"pending turn check?"}
+    check -- stale --> drop["stale checkを破棄"]
+    check -- active --> silence["silence action"]
+    check -- none --> timeout["timeout action"]
+    silence --> next["rerecognition / final / next request"]
+    timeout --> next
+    apply --> next
 ```
 
-## ASR result から output まで
+activityは小さなbounded job queueに流さず、epochとして更新する。Namo Continue後に`SegmentStarted` / `SegmentExtended`が来た場合はtimeout起点を更新し、active speech中の誤finalを防ぐ。
+
+## ASR request実行
+
+```mermaid
+sequenceDiagram
+    participant Planner as transcription planner
+    participant Worker as src-tauri ASR worker
+    participant Runtime as AsrExecutionRuntime
+    participant Model as parapper-models::AsrEngine
+
+    Planner->>Worker: AsrRequest
+    Worker->>Runtime: execute(SttAsrConfig, request)
+    alt Nemotron streaming interim
+        Runtime->>Model: start_stream(session)（初回のみ）
+        Runtime->>Model: push_stream(session, delta)
+    else completion / offline
+        Runtime->>Model: cancel_stream(active sessions)
+        Runtime->>Model: recognize(prepared source audio)
+    end
+    Model-->>Runtime: AsrTranscript
+    Runtime->>Runtime: leading padding分のtimestamp補正
+    Runtime-->>Worker: transcript / error
+    Worker-->>Planner: AsrResult（elapsedとTauri warningを付加）
+```
+
+model registryとstreaming stateはengineに1つだけ置く。desktop側で同じSession keyのmapを重ねず、model APIのstart/push/cancelをengineから明示的に呼ぶ。ORT SessionやNemotron encoder cacheは`parapper-models`内部から出さない。
+
+## ASR resultからoutputまで
 
 ```mermaid
 sequenceDiagram
     participant Runner as AsrRequestRunner
-    participant Transcription as transcription::flow
-    participant Transcript as turn::transcript
-    participant TurnFlow as turn::flow
-    participant Boundary as turn::boundary_flow
-    participant Sink as TurnOutputSink
+    participant Transcription as transcription flow
+    participant Turn as Turn flow
+    participant Boundary as TranscriptBoundaryDetector
+    participant Sink as RecognitionOutputSink
 
     Runner-->>Transcription: AsrResult
-    Transcription->>Transcription: match request / stale check / reduce
-
+    Transcription->>Transcription: request match / stale check / reduce
     alt InterimDisplay
-        Transcription->>Transcript: apply segment transcript
-        Transcription->>TurnFlow: emit interim when enabled
+        Transcription->>Turn: segment transcriptを反映
+        Turn->>Sink: 設定に応じてinterim
     else CompletionCheck
-        Transcription->>Transcript: apply segment transcript
-        Transcription->>TurnFlow: rerecognize or final
+        Transcription->>Turn: completionを反映
+        Turn->>Turn: rerecognizeまたはfinal
     else Rerecognition
-        Transcription->>Transcript: replace full turn transcript
-        Transcription->>Boundary: grammar boundary flow
-        Boundary->>Sink: final whole turn or keep open
+        Transcription->>Turn: full turn transcriptへ置換
+        Turn->>Boundary: grammar boundary候補
+        Turn->>Sink: whole turnをfinal、またはopen維持
     else stale / mismatch / unusable
-        Transcription->>Transcription: keep in-flight, drop, or fallback
+        Transcription->>Transcription: keep / drop / fallback
     end
 ```
 
 ## 読み方
 
-- ASR の engine / runner / task 型は `transcription/asr/`。
-- request queue、in-flight、result action 適用は `transcription/flow.rs`。
-- TurnDraft mutation は `turn/transcript.rs`。
-- open turn lifecycle と timeout は `turn/flow.rs`。
-- grammar boundary decision は `turn/boundary_flow.rs`。
-- `PendingRuntimeState::turn_check` は単一 slot。stale な check を drain する queue として扱わない。
+- model固有推論: `crates/parapper-models/src/asr/`
+- ASR実行policy: `crates/parapper-stt-engine/src/asr.rs`
+- request planning/reduction/preprocessing: `crates/parapper-stt-engine/src/transcription/`
+- Turn lifecycle: `crates/parapper-stt-engine/src/turn/`
+- desktop composition/worker: `src-tauri/src/recognition/session.rs`と`asr_worker.rs`
+- desktop入出力: `src-tauri/src/recognition/input.rs`と`output_sink.rs`

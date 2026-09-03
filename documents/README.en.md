@@ -2,7 +2,7 @@
 
 # Parapper
 
-<!-- cspell:words parapper Silero ReazonSpeech sherpa OSCQuery UNAS Piper Supertonic CTC SpeechBrain VoxLingua Vibrato UniDic Nemotron ENJP OpenMDW ECAPA TDNN Paravo Zundamon VSeeFace VRSNS espeak -->
+<!-- cspell:words parapper Silero ReazonSpeech OSCQuery UNAS Supertonic CTC SpeechBrain VoxLingua Vibrato UniDic Nemotron ENJP OpenMDW ECAPA TDNN Paravo Zundamon VSeeFace VRSNS -->
 
 Parapper is a desktop application that bundles voice AI running in real time on CPU and connects to a variety of other applications.
 
@@ -103,23 +103,27 @@ Combine them — "subtitles by Parapper, voice by Paravo" — to build a real-ti
 
 - [Parapper](../LICENSE): MIT
 - [ReazonSpeech K2 v2](https://huggingface.co/reazon-research/reazonspeech-k2-v2): Apache-2.0
-- [NeMo Parakeet TDT CTC 0.6B Ja 35000 int8](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8): CC-BY-4.0
+- [Parapper NeMo Parakeet TDT CTC 0.6B Ja ONNX](https://huggingface.co/nadare/parakeet-tdt_ctc-0.6b-ja-onnx-dynamic-int8): CC-BY-4.0. Derived from [NVIDIA Parakeet TDT CTC 0.6B Ja](https://huggingface.co/nvidia/parakeet-tdt_ctc-0.6b-ja), with ONNX re-export, a shared encoder, and selected weight quantization.
 - [NeMo Parakeet TDT 0.6B v2 int8](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8): CC-BY-4.0
 - [NeMo Parakeet TDT 0.6B v3 int8](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8): CC-BY-4.0
-- [Nemotron Speech Streaming 0.6B English](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b): OpenMDW-1.1
+- [NVIDIA NeMo](https://github.com/NVIDIA/NeMo): Apache-2.0 (behavioral reference for ASR; its source code is not embedded in the application)
+- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx): Apache-2.0 (model distribution source and compatibility reference; not a runtime dependency)
+- [Nemotron Speech Streaming 0.6B English](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b): NVIDIA Open Model License
 - [Nemotron 3.5 ASR Streaming 0.6B](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b): OpenMDW-1.1
-- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx): Apache-2.0
+- [ONNX Runtime](https://github.com/microsoft/onnxruntime): MIT
 - [Silero VAD](https://github.com/snakers4/silero-vad): MIT
 - [Namo Turn Detector v1 Japanese](https://huggingface.co/videosdk-live/Namo-Turn-Detector-v1-Japanese): Apache-2.0
 - [Namo Turn Detector v1 English](https://huggingface.co/videosdk-live/Namo-Turn-Detector-v1-English): Apache-2.0
 - [Namo Turn Detector v1 Multilingual](https://huggingface.co/videosdk-live/Namo-Turn-Detector-v1-Multilingual): Apache-2.0
 - [SpeechBrain ECAPA-TDNN VoxLingua107](https://huggingface.co/drakulavich/SpeechBrain-coreml): Apache-2.0
-- [Vibrato UniDic CWJ 3.1.1 dictionary](https://github.com/daac-tools/vibrato/releases/tag/v0.5.0): see archive license files
+- [Vibrato UniDic CWJ 3.1.1 dictionary](https://clrd.ninjal.ac.jp/unidic_archive/cwj/3.1.1/): BSD-3-Clause
 - [UL-UNAS](https://github.com/Xiaobin-Rong/ul-unas): MIT
-- [LFM2-350M-ENJP-MT ONNX (ONNX Community conversion)](https://huggingface.co/onnx-community/LFM2-350M-ENJP-MT-ONNX): LFM Open License v1.0 (base model: `LiquidAI/LFM2-350M-ENJP-MT`)
+- [static-embedding-japanese](https://huggingface.co/hotchpotch/static-embedding-japanese): MIT
+- [LFM2-350M-ENJP-MT ONNX (ONNX Community conversion)](https://huggingface.co/onnx-community/LFM2-350M-ENJP-MT-ONNX): LFM Open License v1.0 (base model: `LiquidAI/LFM2-350M-ENJP-MT`; annual revenue above US$10M requires a separate commercial license)
 - [CAT-Translate 0.8B ONNX Q4 block16](https://huggingface.co/nadare/CAT-Translate-0.8b-onnx-q4-k-quant): MIT (base model: `cyberagent/CAT-Translate-0.8b`)
-- [Piper voices](https://huggingface.co/rhasspy/piper-voices): MIT
-- [espeak-ng-data](https://github.com/espeak-ng/espeak-ng/tree/master/espeak-ng-data): GPL-3.0-or-later
 - [Supertonic 2](https://huggingface.co/Supertone/supertonic-2): OpenRAIL-M
 - [Supertonic 3](https://huggingface.co/Supertone/supertonic-3): OpenRAIL-M
 - [Supertonic 3 ONNX Q4](https://huggingface.co/nadare/supertonic-3-onnx-q4): OpenRAIL-M (unofficial quantized derivative)
+- Built-in hotword reading dictionaries (SudachiDict Full/UniDic/NEologd and CMUdict): [NOTICE](../src-tauri/resources/hotword-reading/NOTICE.md), including Apache-2.0 and upstream attributions. The complete Apache-2.0 text is bundled with the application and available from Settings > Licenses.
+- [JSUT corpus BASIC5000 text](https://sites.google.com/site/shinnosuketakamichi/publication/jsut): selected diagnostic references are attributed to Ryosuke Sonobe, Shinnosuke Takamichi, and Hiroshi Saruwatari under [CC-BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). They are reproduced unmodified; no JSUT audio is included.
+- See the [third-party notices](../public/licenses/THIRD_PARTY_NOTICES.md) for detailed upstream attribution and modification information.

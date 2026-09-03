@@ -11,7 +11,6 @@ import {
   Switch,
   Text,
 } from "@mantine/core";
-import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -23,7 +22,6 @@ import {
   modelOptionsWithAny,
   translationLanguageOptions,
 } from "../../lib/mapping-options";
-import { isMacOs } from "../../lib/platform";
 import type {
   AsrModel,
   LocalTranslationModel,
@@ -39,11 +37,22 @@ import { DisabledReasonTooltip, settingLabel } from "../ui/display";
 type TranslationSettingsProps = {
   config: ParapperConfig;
   runtimeLocked: boolean;
+  yncPluginAvailable: boolean;
+  localTranslationServerAvailable: boolean;
   onUpdateConfig: <K extends keyof ParapperConfig>(
     key: K,
     value: ParapperConfig[K],
   ) => void;
   onDownloadServerModel: (model: LocalTranslationModel) => Promise<boolean>;
+  onGetTranslationServerStatus: () => Promise<TranslationHttpListenerStatus>;
+  onGetLocalTranslationInstalled: (
+    model: LocalTranslationModel,
+  ) => Promise<boolean>;
+  onStartTranslationServer: (
+    port: number,
+    model: LocalTranslationModel,
+  ) => Promise<TranslationHttpListenerStatus>;
+  onStopTranslationServer: () => Promise<TranslationHttpListenerStatus>;
 };
 
 const sendTimingOptions = (t: (key: string) => string) => [
@@ -55,12 +64,17 @@ const defaultLocalTranslationModel: LocalTranslationModel = "lfm2_q4";
 export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
   config,
   runtimeLocked,
+  yncPluginAvailable,
+  localTranslationServerAvailable,
   onUpdateConfig,
   onDownloadServerModel,
+  onGetTranslationServerStatus,
+  onGetLocalTranslationInstalled,
+  onStartTranslationServer,
+  onStopTranslationServer,
 }) => {
   const { t } = useTranslation();
   const { asrModelSelectOptions } = useAsrModelOptions(config.asr_model);
-  const yncPluginAvailable = !isMacOs();
   const [translationListenerStatus, setTranslationListenerStatus] =
     useState<TranslationHttpListenerStatus>({
       state: "stopped",
@@ -85,17 +99,17 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
   );
 
   useEffect(() => {
-    void invoke<TranslationHttpListenerStatus>(
-      "get_translation_http_listener_status",
-    ).then(setTranslationListenerStatus);
-  }, []);
+    if (!localTranslationServerAvailable) return;
+    void onGetTranslationServerStatus().then(setTranslationListenerStatus);
+  }, [localTranslationServerAvailable, onGetTranslationServerStatus]);
 
   useEffect(() => {
     let cancelled = false;
+    if (!localTranslationServerAvailable) return;
     setServerModelInstalled(null);
-    void invoke<boolean>("get_local_translation_model_installed", {
-      model: config.translation_local_server_model,
-    }).then((installed) => {
+    void onGetLocalTranslationInstalled(
+      config.translation_local_server_model,
+    ).then((installed) => {
       if (!cancelled) {
         setServerModelInstalled(installed);
       }
@@ -103,7 +117,11 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [config.translation_local_server_model]);
+  }, [
+    config.translation_local_server_model,
+    localTranslationServerAvailable,
+    onGetLocalTranslationInstalled,
+  ]);
 
   const downloadServerModel = async () => {
     setDownloadingServerModel(true);
@@ -153,133 +171,132 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
           onUpdateConfig("translation_mappings", translationMappings)
         }
       />
-      <Paper withBorder radius="md" p="md" style={{ order: -1 }}>
-        <Stack gap="sm">
-          <Text fw={600}>{t("translationSettings.localServer.title")}</Text>
-          <Group grow align="end">
-            <NumberInput
-              label={t("translationSettings.localServer.port.label")}
-              value={config.translation_local_server_port}
-              min={1}
-              max={65535}
-              disabled={runtimeLocked || translationListenerRunning}
-              onChange={(value) =>
-                onUpdateConfig(
-                  "translation_local_server_port",
-                  typeof value === "number" ? value : 18081,
-                )
-              }
-            />
-            <Select
-              label={t("translationSettings.localServer.model.label")}
-              data={localTranslationModelOptions}
-              value={config.translation_local_server_model}
-              allowDeselect={false}
-              disabled={
-                runtimeLocked ||
-                translationListenerRunning ||
-                downloadingServerModel
-              }
-              onChange={(value) =>
-                onUpdateConfig(
-                  "translation_local_server_model",
-                  (value ??
-                    defaultLocalTranslationModel) as LocalTranslationModel,
-                )
-              }
-            />
-          </Group>
-          <Group justify="space-between">
-            <Text
-              size="xs"
-              c={translationListenerStatus.state === "error" ? "red" : "dimmed"}
-            >
-              {translationListenerStatus.error ??
-                (serverModelMissing && !translationListenerRunning
-                  ? t("translationSettings.localServer.status.modelMissing")
-                  : t(
-                      `translationSettings.localServer.status.${translationListenerStatus.state}`,
-                      { port: translationListenerStatus.port },
-                    ))}
-            </Text>
-            {serverModelMissing && !translationListenerRunning ? (
-              <Button
-                variant="filled"
-                loading={downloadingServerModel}
-                disabled={runtimeLocked}
-                onClick={() => void downloadServerModel()}
-              >
-                {t("translationSettings.localServer.downloadModel")}
-              </Button>
-            ) : (
-              <Button
-                variant={translationListenerRunning ? "light" : "filled"}
-                loading={translationListenerPending}
-                disabled={
-                  translationListenerStatus.state === "starting" ||
-                  translationListenerStatus.state === "stopping"
+      {localTranslationServerAvailable ? (
+        <Paper withBorder radius="md" p="md" style={{ order: -1 }}>
+          <Stack gap="sm">
+            <Text fw={600}>{t("translationSettings.localServer.title")}</Text>
+            <Group grow align="end">
+              <NumberInput
+                label={t("translationSettings.localServer.port.label")}
+                value={config.translation_local_server_port}
+                min={1}
+                max={65535}
+                disabled={runtimeLocked || translationListenerRunning}
+                onChange={(value) =>
+                  onUpdateConfig(
+                    "translation_local_server_port",
+                    typeof value === "number" ? value : 18081,
+                  )
                 }
-                onClick={() => {
-                  setTranslationListenerPending(true);
-                  const command = translationListenerRunning
-                    ? invoke<TranslationHttpListenerStatus>(
-                        "stop_translation_http_listener",
-                      )
-                    : invoke<TranslationHttpListenerStatus>(
-                        "start_translation_http_listener",
-                        {
-                          port: config.translation_local_server_port,
-                          localModel: config.translation_local_server_model,
-                        },
-                      );
-                  void command
-                    .then(setTranslationListenerStatus)
-                    .catch(() =>
-                      invoke<TranslationHttpListenerStatus>(
-                        "get_translation_http_listener_status",
-                      ).then(setTranslationListenerStatus),
-                    )
-                    .finally(() => setTranslationListenerPending(false));
-                }}
+              />
+              <Select
+                label={t("translationSettings.localServer.model.label")}
+                data={localTranslationModelOptions}
+                value={config.translation_local_server_model}
+                allowDeselect={false}
+                disabled={
+                  runtimeLocked ||
+                  translationListenerRunning ||
+                  downloadingServerModel
+                }
+                onChange={(value) =>
+                  onUpdateConfig(
+                    "translation_local_server_model",
+                    (value ??
+                      defaultLocalTranslationModel) as LocalTranslationModel,
+                  )
+                }
+              />
+            </Group>
+            <Group justify="space-between">
+              <Text
+                size="xs"
+                c={
+                  translationListenerStatus.state === "error" ? "red" : "dimmed"
+                }
               >
-                {t(
-                  translationListenerRunning
-                    ? "translationSettings.localServer.stop"
-                    : "translationSettings.localServer.start",
-                )}
-              </Button>
-            )}
-          </Group>
-          <Accordion variant="contained">
-            <Accordion.Item value="ync-neo-setup">
-              <Accordion.Control>
-                {t("translationSettings.localServer.setup.title")}
-              </Accordion.Control>
-              <Accordion.Panel>
-                <List size="sm" spacing="xs">
-                  <List.Item>
-                    {t("translationSettings.localServer.setup.engine")}
-                  </List.Item>
-                  <List.Item>
-                    {t("translationSettings.localServer.setup.url", {
-                      port: config.translation_local_server_port,
-                    })}
-                  </List.Item>
-                  <List.Item>
-                    {t("translationSettings.localServer.setup.postMode")}
-                  </List.Item>
-                  <List.Item>
-                    {t("translationSettings.localServer.setup.model")}
-                  </List.Item>
-                  <List.Item>
-                    {t("translationSettings.localServer.setup.avoidInputApi")}
-                  </List.Item>
-                </List>
-              </Accordion.Panel>
-            </Accordion.Item>
-          </Accordion>
-        </Stack>
-      </Paper>
+                {translationListenerStatus.error ??
+                  (serverModelMissing && !translationListenerRunning
+                    ? t("translationSettings.localServer.status.modelMissing")
+                    : t(
+                        `translationSettings.localServer.status.${translationListenerStatus.state}`,
+                        { port: translationListenerStatus.port },
+                      ))}
+              </Text>
+              {serverModelMissing && !translationListenerRunning ? (
+                <Button
+                  variant="filled"
+                  loading={downloadingServerModel}
+                  disabled={runtimeLocked}
+                  onClick={() => void downloadServerModel()}
+                >
+                  {t("translationSettings.localServer.downloadModel")}
+                </Button>
+              ) : (
+                <Button
+                  variant={translationListenerRunning ? "light" : "filled"}
+                  loading={translationListenerPending}
+                  disabled={
+                    translationListenerStatus.state === "starting" ||
+                    translationListenerStatus.state === "stopping"
+                  }
+                  onClick={() => {
+                    setTranslationListenerPending(true);
+                    const command = translationListenerRunning
+                      ? onStopTranslationServer()
+                      : onStartTranslationServer(
+                          config.translation_local_server_port,
+                          config.translation_local_server_model,
+                        );
+                    void command
+                      .then(setTranslationListenerStatus)
+                      .catch(() =>
+                        onGetTranslationServerStatus().then(
+                          setTranslationListenerStatus,
+                        ),
+                      )
+                      .finally(() => setTranslationListenerPending(false));
+                  }}
+                >
+                  {t(
+                    translationListenerRunning
+                      ? "translationSettings.localServer.stop"
+                      : "translationSettings.localServer.start",
+                  )}
+                </Button>
+              )}
+            </Group>
+            <Accordion variant="contained">
+              <Accordion.Item value="ync-neo-setup">
+                <Accordion.Control>
+                  {t("translationSettings.localServer.setup.title")}
+                </Accordion.Control>
+                <Accordion.Panel>
+                  <List size="sm" spacing="xs">
+                    <List.Item>
+                      {t("translationSettings.localServer.setup.engine")}
+                    </List.Item>
+                    <List.Item>
+                      {t("translationSettings.localServer.setup.url", {
+                        port: config.translation_local_server_port,
+                      })}
+                    </List.Item>
+                    <List.Item>
+                      {t("translationSettings.localServer.setup.postMode")}
+                    </List.Item>
+                    <List.Item>
+                      {t("translationSettings.localServer.setup.model")}
+                    </List.Item>
+                    <List.Item>
+                      {t("translationSettings.localServer.setup.avoidInputApi")}
+                    </List.Item>
+                  </List>
+                </Accordion.Panel>
+              </Accordion.Item>
+            </Accordion>
+          </Stack>
+        </Paper>
+      ) : null}
     </Stack>
   );
 };

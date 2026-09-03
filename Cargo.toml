@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = [
+  "crates/parapper-models",
+  "crates/parapper-stt-engine",
+  "crates/parapper-stt-server",
   "src-tauri",
   "diagnostics",
   "scripts",

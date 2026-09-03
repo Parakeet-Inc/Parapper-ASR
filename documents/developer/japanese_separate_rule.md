@@ -276,9 +276,10 @@ flowchart TD
 
 ## 実装参照
 
-- VAD Segment 構築: `src-tauri/src/recognition/segmentation/segment/builder/`
-- Turn silence policy: `src-tauri/src/recognition/turn/policy/silence.rs`
-- Turn timeout policy: `src-tauri/src/recognition/turn/policy/timeout.rs`
-- Grammar policy: `src-tauri/src/recognition/turn/policy/grammar.rs`
-- Boundary flow: `src-tauri/src/recognition/turn/boundary_flow.rs`
-- Japanese boundary classifier: `src-tauri/src/recognition/turn/boundary/japanese.rs`
+- VAD Segment構築: `crates/parapper-stt-engine/src/segmentation/builder.rs`
+- Turn silence policy: `crates/parapper-stt-engine/src/turn/silence.rs`
+- Turn timeout policy: `crates/parapper-stt-engine/src/turn/timeout.rs`
+- Grammar policy: `crates/parapper-stt-engine/src/turn/grammar.rs`
+- Boundary flow: `crates/parapper-stt-engine/src/turn/boundary_flow.rs`
+- timestampベースの境界候補: `crates/parapper-models/src/td/boundary.rs`
+- Japanese Morph classifier: `crates/parapper-models/src/td/morph/japanese.rs`

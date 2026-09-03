@@ -1,4 +1,5 @@
 export type AsrPrecision = "int8" | "int8_float32" | "float32";
+export type AsrMode = "fast" | "accurate";
 export type AsrLanguage =
   | "japanese"
   | "english"
@@ -6,6 +7,19 @@ export type AsrLanguage =
   | "multilingual";
 export type TurnDetector = "simple" | "morph" | "namo";
 export type NoiseCancellationModel = "ul_unas";
+export type NoiseCancellationTarget = "vad_only" | "vad_and_asr";
+/**
+ * A deliberately small, persisted palette for marking the source of a
+ * recognition result. Keep this in sync with Rust's SttProfileDisplayColor.
+ */
+export type SttProfileDisplayColor =
+  | "green"
+  | "blue"
+  | "violet"
+  | "red"
+  | "orange"
+  | "yellow"
+  | "white";
 export type NeoSendTiming = "interim" | "final";
 export type DeveloperConnectionMode = "http" | "web_socket";
 export type SpeechSourceKind = "recognition" | "translation";
@@ -14,9 +28,6 @@ export type TranslationBackend = "ync" | "local";
 export type LocalTranslationModel = "lfm2_q4" | "cat_translate_0_8b_q4_k_quant";
 export type TranslationLanguage = "en" | "ja";
 export type LocalTtsVoice =
-  | "vits_piper_en_US_kristin_medium"
-  | "vits_piper_en_US_john_medium"
-  | "vits_piper_en_US_norman_medium"
   | "supertonic_2_onnx"
   | "supertonic_3_onnx"
   | "supertonic_3_onnx_quantized";
@@ -25,10 +36,23 @@ export type AsrModel =
   | "nemo_parakeet_tdt_ctc_0_6b_ja_35000_int8"
   | "nemo_parakeet_tdt_0_6b_v2_int8"
   | "nemo_parakeet_tdt_0_6b_v3_int8"
+  | "nemotron_speech_streaming_en_0_6b_80ms_int8"
   | "nemotron_speech_streaming_en_0_6b_160ms_int8"
+  | "nemotron_speech_streaming_en_0_6b_320ms_int8"
   | "nemotron_speech_streaming_en_0_6b_560ms_int8"
+  | "nemotron_speech_streaming_en_0_6b_1120ms_int8"
+  | "nemotron_3_5_asr_streaming_0_6b_80ms_int8"
   | "nemotron_3_5_asr_streaming_0_6b_160ms_int8"
-  | "nemotron_3_5_asr_streaming_0_6b_560ms_int8";
+  | "nemotron_3_5_asr_streaming_0_6b_320ms_int8"
+  | "nemotron_3_5_asr_streaming_0_6b_560ms_int8"
+  | "nemotron_3_5_asr_streaming_0_6b_1120ms_int8";
+
+/** A surface form and optional pronunciation hints used by ASR hotword biasing. */
+export type AsrHotword = {
+  surface: string;
+  readings: string[];
+  score: number | null;
+};
 
 export type RecognitionStatus =
   | "idle"
@@ -42,6 +66,113 @@ export type StreamingRecognitionOutputMode =
   | "web_socket_only"
   | "web_socket_and_desktop";
 
+export type CaptureEndpointConfig = {
+  id: string;
+  device_host: string;
+  device_id: string;
+  device_name: string | null;
+};
+
+export type RecognitionSourceConfig = {
+  source_id: string;
+  speaker_label: string;
+  capture_endpoint_id: string;
+  channel_index: number;
+  asr_route_policy?: AsrRoutePolicyConfig | null;
+  delivery_profile_id?: string | null;
+};
+
+export type SttProfileInputConfig = {
+  device_host: string | null;
+  device_id: string | null;
+  device_name: string | null;
+  channel_index: number;
+  volume_percent: number;
+  muted: boolean;
+};
+
+export type SttProfileNoiseCancellationConfig = {
+  enabled: boolean;
+  model: NoiseCancellationModel;
+  target: NoiseCancellationTarget;
+};
+
+export type SttProfileSegmentationConfig = {
+  vad_threshold: number;
+  vad_interval_ms: number;
+  segment_start_speech_ms: number;
+};
+
+export type SttProfileTurnConfig = {
+  detector: TurnDetector;
+  interim_result_enabled: boolean;
+  interim_result_silence_ms: number;
+  check_silence_ms: number;
+  namo_confidence_threshold: number;
+  namo_context_max_tokens: number;
+  rerecognize_full_on_complete: boolean;
+};
+
+export type SttProfileAsrConfig = {
+  language: AsrLanguage;
+  model: AsrModel;
+  interim_model: AsrModel | null;
+  precision: AsrPrecision;
+  num_threads: number;
+  mode: AsrMode;
+  hotwords_enabled: boolean;
+  hotwords: AsrHotword[];
+  normalize_input_audio: boolean;
+  multilingual_enabled: boolean;
+  enabled_models: AsrModel[];
+  runtime_profiles: AsrRuntimeProfileConfig[];
+};
+
+export type SttProfileConfig = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  neo_http_enabled: boolean;
+  developer_http_enabled: boolean;
+  display_color: SttProfileDisplayColor;
+  input: SttProfileInputConfig;
+  noise_cancellation: SttProfileNoiseCancellationConfig;
+  segmentation: SttProfileSegmentationConfig;
+  turn: SttProfileTurnConfig;
+  asr: SttProfileAsrConfig;
+  delivery_profile_id: string | null;
+};
+
+export type DeliveryProfileConfig = {
+  id: string;
+  gui_enabled: boolean;
+  translation_mapping_ids: string[];
+  speech_mapping_ids: string[];
+  http_profile_ids: string[];
+  neo_text_enabled: boolean;
+};
+
+export type HttpPayloadFormat = "text_event_v1";
+export type HttpArtifactKind = "recognition" | "translation";
+
+export type HttpDeliveryProfileConfig = {
+  id: string;
+  url: string;
+  payload_format: HttpPayloadFormat;
+  artifact_kinds: HttpArtifactKind[];
+  send_timing: NeoSendTiming;
+};
+
+export type AsrRuntimeProfileConfig = {
+  id: string;
+  model: AsrModel;
+};
+
+export type AsrRoutePolicyConfig = {
+  interim_runtime_id?: string | null;
+  completion_runtime_id: string;
+};
+
 export type ParapperConfig = {
   neo_http_enabled: boolean;
   neo_http_port: number;
@@ -50,14 +181,24 @@ export type ParapperConfig = {
   input_device_host: string | null;
   input_device_name: string | null;
   input_volume_db: number;
+  input_muted?: boolean;
+  capture_endpoint?: CaptureEndpointConfig | null;
+  recognition_sources?: RecognitionSourceConfig[];
+  stt_profiles?: SttProfileConfig[];
+  delivery_profiles?: DeliveryProfileConfig[];
+  http_delivery_profiles?: HttpDeliveryProfileConfig[];
   asr_language: AsrLanguage;
   asr_model: AsrModel;
   interim_asr_model: AsrModel | null;
   asr_precision: AsrPrecision;
   asr_num_threads: number;
+  asr_mode: AsrMode;
+  asr_hotwords_enabled: boolean;
+  asr_hotwords: AsrHotword[];
   asr_normalize_input_audio: boolean;
   multilingual_asr_enabled: boolean;
   enabled_asr_models: AsrModel[];
+  asr_runtime_profiles?: AsrRuntimeProfileConfig[];
   translation_enabled: boolean;
   ync_plugin_port: number;
   translation_local_server_port: number;
@@ -78,6 +219,7 @@ export type ParapperConfig = {
   turn_rerecognize_full_on_complete: boolean;
   noise_cancellation_enabled: boolean;
   noise_cancellation_model: NoiseCancellationModel;
+  noise_cancellation_target: NoiseCancellationTarget;
   vrc_osc_micmute: boolean;
   streaming_recognition_enabled: boolean;
   developer_connection_mode: DeveloperConnectionMode;
@@ -137,7 +279,17 @@ export type AudioDeviceInfo = {
   sample_rate: number;
 };
 
+export type AudioChunkEvent = {
+  source_id?: string | null;
+  source_sample_rate: number;
+  sample_rate: number;
+  frames: number;
+  level: number;
+  pre_gain_level: number;
+};
+
 export type InputLevelEvent = {
+  source_id?: string | null;
   pre_gain_level: number;
   post_gain_level: number;
 };
@@ -165,12 +317,20 @@ export type RecognizedTextEvent = {
 };
 
 export type RecognitionSourceMeta = {
+  identity: SourceIdentitySnapshot;
   turn_session_id: number;
   turn_id: number;
   turn_revision: number;
   output_sequence: number;
   segment_id: number;
   previous_segment_id: number | null;
+};
+
+export type SourceIdentitySnapshot = {
+  source_id: string;
+  speaker_label: string;
+  capture_endpoint_id: string;
+  channel_index: number | null;
 };
 
 export type TranslationTextEvent = {
@@ -193,6 +353,7 @@ export type TranslationTextEvent = {
 export type SpeechRequestEvent = {
   id: string;
   source_event_id: string;
+  source: RecognitionSourceMeta;
   source_kind: SpeechSourceKind;
   target_lang: string | null;
   elapsed_millis: number;

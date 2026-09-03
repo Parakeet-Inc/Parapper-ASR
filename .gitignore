@@ -11,6 +11,7 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+dist-web-preview/
 node_modules/
 downloads/
 models/
@@ -145,6 +146,12 @@ tmp/
 /work/
 /plan/
 /documents/inner/
+/AGENTS.md
+# Local cross-repository evaluation tooling is not part of public releases.
+/diagnostics/python/summarize_jsut_auxiliary_metrics.py
+/diagnostics/python/tests/test_summarize_jsut_auxiliary_metrics.py
+# Local benchmark outputs and experiment worklogs are not release artifacts.
+/diagnostics/baselines/
 /survey/
 
 # Spyder project settings

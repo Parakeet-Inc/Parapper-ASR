@@ -47,25 +47,70 @@ export const en = {
   },
   tabs: {
     settings: "Settings",
-    connection: "Connection",
+    connection: "Input",
     vad: "VAD",
     asr: "ASR",
     noiseCancellation: "NC",
     other: "Other",
+    downloads: "Downloads",
     licenses: "Licenses",
     translation: "MT",
     speech: "TTS",
+    externalApps: "External apps",
     collapseSettings: "Collapse settings",
     expandSettings: "Expand settings",
+  },
+  settingsGroups: {
+    stt: "STT",
+    output: "Output",
+    other: "Other",
+  },
+  sttProfiles: {
+    selectorLabel: "STT profile",
+    defaultName: "Profile {{number}}",
+    add: "Add new",
+    delete: "Delete profile",
+    deleteFor: "Delete {{name}}",
+    deleteConfirmationTitle: "Delete this profile?",
+    deleteConfirmationBody:
+      "{{name}} and its related STT settings will be deleted. This cannot be undone.",
+    enabledFor: "Enable {{name}}",
+    name: "Profile name",
+    color: "Display color",
+    volumeLabel: "Profile volume",
+    mute: "Mute profile",
+    unmute: "Unmute profile",
+    inputLevel: "Input level",
+    neoHttpEnabled: "Send to YNC NEO",
+    neoHttpEnabledDescription:
+      "Send recognition results from this STT profile to YNC NEO.",
+    neoHttpEnabledFor: "Send {{name}} to YNC NEO",
+    developerHttpEnabled: "Send over HTTP",
+    developerHttpEnabledDescription:
+      "Send recognition results from this STT profile to the developer HTTP connection.",
+    developerHttpEnabledFor: "Send {{name}} over HTTP",
   },
   licenses: {
     modelLicenses: "Model licenses",
     rustLicenses: "Rust dependency licenses",
     openRustLicenses: "Open Rust dependency licenses",
     loadingRustLicenses: "Loading Rust dependency licenses",
+    hotwordReadingNotices: "Built-in dictionary licenses",
+    hotwordReadingNoticesDescription:
+      "Attribution and license texts for the Morph UniDic CWJ 3.1.1 dictionary, SudachiDict Full/UniDic/NEologd, and CMUdict.",
+    openHotwordReadingNotices: "Open built-in dictionary licenses",
+    loadingHotwordNotices: "Loading dictionary licenses",
+    failedToLoadHotwordNotices: "Could not load dictionary licenses.",
+    thirdPartyNotices: "Third-party notices",
+    thirdPartyNoticesDescription:
+      "Attribution for upstream ASR models, reference implementations, and model distributions, including a description of Parapper's modifications.",
+    openThirdPartyNotices: "Open third-party notices",
+    loadingThirdPartyNotices: "Loading third-party notices",
+    failedToLoadThirdPartyNotices: "Could not load third-party notices.",
     usedBy: "Used by",
   },
   common: {
+    cancel: "Cancel",
     search: "Find",
     resetLogs: "Reset logs",
     csvExport: "CSV export",
@@ -97,8 +142,6 @@ export const en = {
     },
     oscQuery: {
       label: "VRChat / OSCQuery settings",
-      description:
-        "Reads the VRChat mute state through OSCQuery and skips sending to YNC while muted.",
       muteSyncLabel: "Do not send while muted in VRChat (requires OSC)",
     },
     turnDetector: {
@@ -162,13 +205,32 @@ export const en = {
     asrModel: {
       label: "ASR model",
       description:
-        "Choose a language and sherpa-onnx model. NeMo models are heavier but may provide better accuracy.",
+        "Choose the ASR model. Japanese models also provide a separate inference mode.",
+    },
+    asrMode: {
+      label: "ASR mode",
+      description:
+        "Fast and lightweight uses greedy decoding; Accuracy uses additional beam-search rescoring. Models without an accuracy decoder offer fast mode only.",
+      options: {
+        fast: "Fast and lightweight",
+        accurate: "Accuracy",
+      },
     },
     interimAsrModel: {
       label: "Interim ASR model",
       description:
         "ASR model used only for interim display. By default, this uses the primary ASR model.",
       primary: "Same as ASR model",
+      nemotronEnglish: "Nemotron (English)",
+      nemotronMultilingual: "Nemotron 3.5 (multilingual)",
+      latencyLabel: "Nemotron latency",
+      latencyDescription:
+        "Choose the balance between interim responsiveness and recognition accuracy. This cannot be changed while recognition is running.",
+      latency80: "80 ms",
+      latency160: "160 ms",
+      latency320: "320 ms",
+      latency560: "560 ms",
+      latency1120: "1120 ms",
     },
     asrPrecision: {
       label: "ASR precision",
@@ -180,6 +242,49 @@ export const en = {
       description:
         "Intra CPU thread count used for ASR inference. max lets the runtime choose.",
       max: "max",
+    },
+    hotwords: {
+      label: "Hotwords",
+      count: "{{count}} entries",
+      manage: "Manage hotwords",
+      enable: "Enable hotwords",
+      enableDescription:
+        "Apply registered hotwords during candidate selection in accuracy mode. Registered entries are kept when disabled.",
+      accurateOnly: "Hotwords can only be enabled in accuracy mode.",
+      title: "Hotword management",
+      description:
+        "Register surface forms and hiragana readings to prioritize in accuracy mode.\nEnter one hiragana reading per line.\nThe priority multiplier defaults to x100; x1 is neutral and values below 1 suppress a phrase.",
+      entry: "Hotword {{number}}",
+      surfaceColumn: "Surface form",
+      readingsColumn: "Readings",
+      scoreColumn: "Priority multiplier",
+      surface: "Surface form (required)",
+      surfacePlaceholder: "Example: 斎藤",
+      surfaceRequired: "Enter a surface form.",
+      duplicateSurface: "More than one hotword uses this surface form.",
+      pathCollision:
+        "This surface or reading has the same token path as another hotword.",
+      terminalPrefix:
+        "This is a prefix of another surface or reading. Change either the shorter or longer entry.",
+      readings: "Readings (optional)",
+      readingsDescription:
+        "Enter multiple readings on separate lines. You may leave this blank.",
+      readingsPlaceholder: "ぱらっぱー",
+      autofill: "Autofill",
+      autofillHelp:
+        "Look up an exact English spelling, then estimate a reading from its pronunciation if needed.",
+      autofillEmpty: "No reading suggestion was found.",
+      autofillFailed: "Could not generate reading suggestions.",
+      blankReading: "Remove the blank reading or enter a value.",
+      duplicateReading: "This reading is duplicated.",
+      score: "Priority multiplier (optional)",
+      invalidScore: "Enter a finite priority multiplier greater than zero.",
+      scorePlaceholder: "100 (default)",
+      add: "Add hotword",
+      delete: "Delete hotword",
+      empty: "No hotwords have been registered.",
+      cancel: "Cancel",
+      save: "Save",
     },
     multilingualAsr: {
       label: "Use multilingual ASR routing",
@@ -244,17 +349,22 @@ export const en = {
     },
     inputAudioDevice: {
       label: "Input device",
+      description: "Input device and channel assigned to this STT profile.",
       placeholder: "Default input device",
+      channelLabel: "Input channel",
+      channelPlaceholder: "Choose a channel",
+      channel: "Channel {{number}}",
       loopbackGroup: "Speaker output (loopback)",
       networkGroup: "Network input",
       webSocket: "WebSocket (PCM 16 kHz)",
     },
   },
   connectionSettings: {
-    neoEnabled: "Connect to YNC",
-    developerEnabled: "Enable HTTP / WebSocket connection (Developers)",
+    streamingEnabled: "Enable HTTP / WebSocket connection (Developers)",
     connectionMode: "Connection mode",
+    neoProfiles: "STT profiles sent to YNC NEO",
     httpUrl: "HTTP destination URL",
+    httpProfiles: "STT profiles sent over HTTP",
     httpPayloadExample: "Example HTTP payload",
     bindAddress: "Bind address",
     port: "WebSocket port",
@@ -265,11 +375,22 @@ export const en = {
     webSocketAndDesktop: "WebSocket + desktop integrations",
     endpoint: "Endpoint: ws://{{address}}:{{port}}/ws/recognition",
   },
+  externalAppSettings: {
+    yncEnabled: "Connect to YNC",
+    yncPlugin: "YNC translation plugin",
+  },
   noiseCancellationSettings: {
     enable: {
       label: "Enable noise cancellation",
       description:
-        "Process microphone audio with a noise cancellation model before VAD and ASR.",
+        "Use noise-cancelled audio for VAD. Choose separately whether ASR receives it.",
+    },
+    target: {
+      label: "NC application",
+      description:
+        "VAD only keeps ASR audio unmodified while suppressing noise-triggered speech detection.",
+      disabledTooltip:
+        "Enable noise cancellation to choose where it is applied.",
     },
     model: {
       label: "NC model",
@@ -290,14 +411,26 @@ export const en = {
       nemoParakeetTdtV2Int8: "English (NeMo Parakeet TDT 0.6B v2 int8)",
       nemoParakeetTdtV3Int8:
         "European multilingual (NeMo Parakeet TDT 0.6B v3 int8)",
+      nemotronSpeechStreamingEn80MsInt8:
+        "English (Nemotron Speech Streaming 0.6B 80ms int8)",
       nemotronSpeechStreamingEn160MsInt8:
         "English (Nemotron Speech Streaming 0.6B 160ms int8)",
+      nemotronSpeechStreamingEn320MsInt8:
+        "English (Nemotron Speech Streaming 0.6B 320ms int8)",
       nemotronSpeechStreamingEn560MsInt8:
         "English (Nemotron Speech Streaming 0.6B 560ms int8)",
+      nemotronSpeechStreamingEn1120MsInt8:
+        "English (Nemotron Speech Streaming 0.6B 1120ms int8)",
+      nemotron35AsrStreaming80MsInt8:
+        "Multilingual (Nemotron 3.5 ASR Streaming 0.6B 80ms int8)",
       nemotron35AsrStreaming160MsInt8:
         "Multilingual (Nemotron 3.5 ASR Streaming 0.6B 160ms int8)",
+      nemotron35AsrStreaming320MsInt8:
+        "Multilingual (Nemotron 3.5 ASR Streaming 0.6B 320ms int8)",
       nemotron35AsrStreaming560MsInt8:
         "Multilingual (Nemotron 3.5 ASR Streaming 0.6B 560ms int8)",
+      nemotron35AsrStreaming1120MsInt8:
+        "Multilingual (Nemotron 3.5 ASR Streaming 0.6B 1120ms int8)",
     },
     turnDetector: {
       simple: "Simple",
@@ -306,6 +439,10 @@ export const en = {
     },
     noiseCancellationModel: {
       ulUnas: "UL-UNAS",
+    },
+    noiseCancellationTarget: {
+      vadOnly: "VAD only",
+      vadAndAsr: "VAD and ASR",
     },
     neoSendTiming: {
       interim: "Send interim updates",
@@ -492,6 +629,10 @@ export const en = {
     },
     audioDeviceSaveFailed: {
       title: "Failed to apply device settings",
+    },
+    sttProfileAddFailed: {
+      title: "Could not add STT profile",
+      message: "There is no unused input-device channel.",
     },
     audioDeviceRefreshFailed: {
       title: "Failed to refresh device list",

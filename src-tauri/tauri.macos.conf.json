@@ -5,7 +5,14 @@
       "infoPlist": "Info.plist"
     },
     "resources": {
-      "macos-runtime/*.dylib": "macos-runtime/"
+      "macos-runtime/libonnxruntime.dylib": "macos-runtime/libonnxruntime.dylib",
+      "macos-runtime/libonnxruntime.1.24.4.dylib": "macos-runtime/libonnxruntime.1.24.4.dylib",
+      "resources/hotword-reading/NOTICE.md": "licenses/hotword-reading/NOTICE.md",
+      "../public/licenses/hotword-reading/LICENSE-APACHE-2.0.txt": "licenses/hotword-reading/LICENSE-APACHE-2.0.txt",
+      "../public/licenses/THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
+      "resources/morph/NOTICE": "licenses/morph/NOTICE",
+      "resources/morph/BSD": "licenses/morph/BSD",
+      "resources/morph/AUTHORS": "licenses/morph/AUTHORS"
     },
     "targets": ["app"]
   }

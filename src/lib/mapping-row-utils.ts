@@ -6,8 +6,7 @@ export const updateById = <T extends MappingRow>(
   rows: T[],
   id: string,
   patch: Partial<T>,
-) =>
-  rows.map((row) => (row.id === id ? { ...row, ...patch } : row));
+) => rows.map((row) => (row.id === id ? { ...row, ...patch } : row));
 
 export const removeById = <T extends MappingRow>(rows: T[], id: string) =>
   rows.filter((row) => row.id !== id);

@@ -1,9 +1,12 @@
 import { Group, Select, Stack, Text, Title } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import type {
+  FrontendCapabilities,
+  FrontendServices,
+} from "./application/frontend-services";
 import { OnboardingModal } from "./components/onboarding-modal";
 import { RuntimePanel } from "./components/runtime-panel";
 import { SettingsPanel } from "./components/settings-panel";
@@ -11,12 +14,24 @@ import { StatusBadges } from "./components/status-badges";
 import { TranslationSidePanel } from "./components/translation-side-panel";
 import { useAppState } from "./hooks/use-app-state";
 import { useConfigState } from "./hooks/use-config-state";
+import { useSttProfileSelection } from "./hooks/use-stt-profile-selection";
 import { availableLanguages, normalizeLanguage } from "./i18n";
+import { configWithDeveloperConnectionEnabled } from "./lib/developer-connection";
 import { zeroMinHeight } from "./lib/layout-styles";
+import {
+  addSttProfile,
+  deleteSttProfile,
+  effectiveSttProfiles,
+  setSttProfileEnabled,
+  updateSttProfile,
+} from "./lib/stt-profiles";
 import { notificationColor } from "./lib/theme";
 import type { ConfigPreset, ParapperConfig } from "./lib/types";
 
-export const App: React.FC = () => {
+export const App: React.FC<{
+  services: FrontendServices;
+  capabilities: FrontendCapabilities;
+}> = ({ services, capabilities }) => {
   const { i18n, t } = useTranslation();
   const {
     config,
@@ -26,12 +41,10 @@ export const App: React.FC = () => {
     updateConfig,
     replaceConfig,
     resetConfig: resetConfigInner,
-    applyAsrModel,
-  } = useConfigState(t);
+  } = useConfigState(services.config, t);
   const [configPresets, setConfigPresets] = useState<ConfigPreset[]>([]);
   const {
     runtime,
-    setRuntime,
     model,
     ui,
     setUi,
@@ -47,13 +60,22 @@ export const App: React.FC = () => {
     refreshAudioDevices,
     downloadSelectedModels,
     downloadLocalTranslationModel,
+    startRecognition,
+    stopRecognition,
+    stopSpeech,
+    ensureLoopbackPermission,
   } = useAppState({
+    services,
+    capabilities,
     config,
     configRef,
     setConfig,
     setAppliedConfig,
     t,
   });
+  const sttProfiles = config ? effectiveSttProfiles(config) : [];
+  const { selectedProfileId, selectProfile } =
+    useSttProfileSelection(sttProfiles);
 
   const languageOptions = useMemo(
     () =>
@@ -69,7 +91,8 @@ export const App: React.FC = () => {
   );
   const dateTimeLocale = currentLanguage === "en" ? "en-US" : "ja-JP";
   useEffect(() => {
-    void invoke<ConfigPreset[]>("get_config_presets")
+    void services.presets
+      .list()
       .then(setConfigPresets)
       .catch((error) => {
         notifications.show({
@@ -78,7 +101,7 @@ export const App: React.FC = () => {
           color: notificationColor.error,
         });
       });
-  }, [t]);
+  }, [services.presets, t]);
 
   if (!config) {
     return (
@@ -88,36 +111,14 @@ export const App: React.FC = () => {
     );
   }
 
-  const applyAudioDeviceConfig = async (nextConfig: ParapperConfig) => {
-    setConfig(nextConfig);
-    try {
-      const saved = await invoke<ParapperConfig>("save_config", {
-        config: nextConfig,
-      });
-      setConfig(saved);
-      setAppliedConfig(saved);
-    } catch (error) {
-      notifications.show({
-        title: t("notifications.audioDeviceSaveFailed.title"),
-        message: String(error),
-        color: notificationColor.error,
-      });
-    }
-  };
-
   const saveConfigPreset = async (name: string) => {
-    const presets = await invoke<ConfigPreset[]>("save_config_preset", {
-      name,
-      config,
-    });
+    const presets = await services.presets.save(name, config);
     setConfigPresets(presets);
     return presets;
   };
 
   const deleteConfigPreset = async (name: string) => {
-    const presets = await invoke<ConfigPreset[]>("delete_config_preset", {
-      name,
-    });
+    const presets = await services.presets.delete(name);
     setConfigPresets(presets);
     return presets;
   };
@@ -128,15 +129,54 @@ export const App: React.FC = () => {
   };
 
   const modelsMissing =
-    model.status?.vad.installed === false ||
-    model.status?.asr.installed === false ||
-    model.status?.japanese_morph?.installed === false ||
-    model.status?.language_id?.installed === false ||
-    model.status?.turn_detectors.some((status) => !status.installed) === true ||
-    model.status?.tts.some((status) => !status.installed) === true ||
-    model.status?.local_translation?.installed === false ||
-    model.status?.noise_cancellation?.installed === false;
+    capabilities.modelManagement &&
+    (model.status?.vad.installed === false ||
+      model.status?.asr.installed === false ||
+      model.status?.japanese_morph?.installed === false ||
+      model.status?.language_id?.installed === false ||
+      model.status?.turn_detectors.some((status) => !status.installed) ===
+        true ||
+      model.status?.tts.some((status) => !status.installed) === true ||
+      model.status?.local_translation?.installed === false ||
+      model.status?.noise_cancellation?.installed === false);
   const canStartRecognition = !modelsMissing;
+  const runtimeLocked = runtime.running || runtime.starting;
+  const updateProfile = (
+    profileId: string,
+    update: (
+      profile: (typeof sttProfiles)[number],
+    ) => (typeof sttProfiles)[number],
+  ) => replaceConfig(updateSttProfile(config, profileId, update));
+  const addProfile = () => {
+    if (runtimeLocked || !selectedProfileId) return;
+    const nextConfig = addSttProfile(
+      config,
+      selectedProfileId,
+      inputAudioDevices,
+    );
+    if (!nextConfig) {
+      notifications.show({
+        title: t("notifications.sttProfileAddFailed.title"),
+        message: t("notifications.sttProfileAddFailed.message"),
+        color: notificationColor.warn,
+      });
+      return;
+    }
+    const added = effectiveSttProfiles(nextConfig).at(-1);
+    replaceConfig(nextConfig);
+    if (added) selectProfile(added.id);
+  };
+  const removeProfile = (profileId: string) => {
+    if (runtimeLocked) return;
+    const removed = deleteSttProfile(config, profileId);
+    if (!removed) return;
+    replaceConfig(removed.config);
+    selectProfile(removed.selectedProfileId);
+  };
+  const setProfileEnabled = (profileId: string, enabled: boolean) => {
+    if (runtimeLocked) return;
+    replaceConfig(setSttProfileEnabled(config, profileId, enabled));
+  };
 
   return (
     <Stack w="100vw" h="100vh" p="lg" gap="md">
@@ -170,7 +210,10 @@ export const App: React.FC = () => {
             }}
           />
         </Group>
-        <StatusBadges runtime={runtime} />
+        <StatusBadges
+          runtime={runtime}
+          nativeConnectionsAvailable={capabilities.externalConnectionProbe}
+        />
       </Group>
 
       <OnboardingModal
@@ -199,6 +242,7 @@ export const App: React.FC = () => {
       >
         <SettingsPanel
           config={config}
+          capabilities={capabilities}
           outputAudioDevices={outputAudioDevices}
           settingsOpen={ui.settingsOpen}
           settingsTab={ui.settingsTab}
@@ -210,6 +254,10 @@ export const App: React.FC = () => {
           downloadingModels={model.downloading}
           modelDownloadProgress={model.progress}
           configPresets={configPresets}
+          sttProfiles={sttProfiles}
+          selectedSttProfileId={selectedProfileId ?? ""}
+          inputAudioDevices={inputAudioDevices}
+          refreshingAudioDevices={refreshingAudioDevices}
           onSettingsOpenChange={(settingsOpen) =>
             setUi((current) => ({ ...current, settingsOpen }))
           }
@@ -217,34 +265,57 @@ export const App: React.FC = () => {
             setUi((current) => ({ ...current, settingsTab }))
           }
           onUpdateConfig={updateConfig}
-          onApplyAsrModel={applyAsrModel}
+          onSuggestHotwordReadings={services.hotwordReadings.suggest}
           onDownloadSelectedModels={() => void downloadSelectedModels()}
           onDownloadLocalTranslationModel={downloadLocalTranslationModel}
           onResetConfig={resetConfigInner}
           onSaveConfigPreset={saveConfigPreset}
           onDeleteConfigPreset={deleteConfigPreset}
           onApplyConfigPreset={replaceConfig}
+          onSelectSttProfile={selectProfile}
+          onAddSttProfile={addProfile}
+          onDeleteSttProfile={removeProfile}
+          onUpdateSttProfile={updateProfile}
+          onSetSttProfileEnabled={setProfileEnabled}
+          onSetDeveloperConnectionEnabled={(enabled) =>
+            replaceConfig(configWithDeveloperConnectionEnabled(config, enabled))
+          }
+          onRefreshAudioDevices={() => void refreshAudioDevices()}
+          onRequestLoopbackPermission={ensureLoopbackPermission}
+          onFindNeoPort={services.connections.findNeoPort}
+          onFindYncPluginPort={services.connections.findYncPluginPort}
+          onFetchNeoVoices={services.connections.fetchNeoVoices}
+          onGetTranslationServerStatus={services.translationServer.status}
+          onGetLocalTranslationInstalled={
+            services.models.isLocalTranslationInstalled
+          }
+          onStartTranslationServer={services.translationServer.start}
+          onStopTranslationServer={services.translationServer.stop}
+          onOpenExternalUrl={services.system.openExternalUrl}
+          onLoadRustLicenses={services.system.loadRustLicenses}
         />
 
         <RuntimePanel
           config={config}
-          inputAudioDevices={inputAudioDevices}
+          profiles={sttProfiles}
           recognizedTexts={recognizedTexts}
           runtime={runtime}
-          setRuntime={setRuntime}
-          refreshingAudioDevices={refreshingAudioDevices}
           translationPanel={
             config.translation_enabled ? (
               <TranslationSidePanel
                 config={config}
                 recognizedTexts={recognizedTexts}
                 translatedTexts={translatedTexts}
+                profiles={sttProfiles}
               />
             ) : null
           }
           dateTimeLocale={dateTimeLocale}
           canStartRecognition={canStartRecognition}
           downloadingModels={model.downloading}
+          fileExportAvailable={capabilities.fileExport}
+          recognitionControlAvailable={capabilities.recognitionControl}
+          speechControlAvailable={capabilities.speechControl}
           canClearLogs={
             recognizedTexts.length > 0 || translatedTexts.length > 0
           }
@@ -252,21 +323,45 @@ export const App: React.FC = () => {
             setRecognizedTexts([]);
             setTranslatedTexts([]);
           }}
-          onRefreshAudioDevices={() => void refreshAudioDevices()}
-          onApplyAudioDeviceConfig={(nextConfig) =>
-            void applyAudioDeviceConfig(nextConfig)
+          onSetProfileVolume={(profileId, volumePercent) =>
+            updateProfile(profileId, (profile) => ({
+              ...profile,
+              input: { ...profile.input, volume_percent: volumePercent },
+            }))
           }
-          onUpdateConfig={updateConfig}
+          onToggleProfileMute={(profileId) => {
+            const profile = sttProfiles.find(
+              (candidate) => candidate.id === profileId,
+            );
+            if (profile) {
+              updateProfile(profileId, (current) => ({
+                ...current,
+                input: { ...current.input, muted: !current.input.muted },
+              }));
+            }
+          }}
           onOpenModelDownload={() => {
             setUi((current) => ({
               ...current,
               settingsOpen: true,
-              settingsTab: "connection",
+              settingsTab: "downloads",
             }));
             if (!model.downloading) {
               void downloadSelectedModels();
             }
           }}
+          onStartRecognition={startRecognition}
+          onStopRecognition={stopRecognition}
+          onStopSpeech={() => stopSpeech(config.ync_plugin_port)}
+          onSaveRecognitionCsv={(defaultFileName, content) =>
+            services.system.saveRecognitionCsv({ defaultFileName, content })
+          }
+          onSaveAsrInputWav={(defaultFileName, content) =>
+            services.system.saveAsrInputWav({ defaultFileName, content })
+          }
+          onPlayAudio={(samples, sampleRate) =>
+            services.system.playAudio(samples, sampleRate)
+          }
         />
       </Group>
     </Stack>

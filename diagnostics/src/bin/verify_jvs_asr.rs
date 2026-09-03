@@ -5,7 +5,7 @@
     clippy::too_many_lines
 )]
 
-//! JVS nonparallel wav を sherpa-onnx / `ReazonSpeech` に直接かける ASR engine 単体評価ツール。
+//! JVS nonparallel wav を direct ONNX Runtime / `ReazonSpeech` にかける ASR engine 単体評価ツール。
 //!
 //! この binary は VAD plot、連結 wav、CER、token timestamp の診断用であり、
 //! `RecognitionSession` の segmenter / `TurnDraft` / UI output 統合経路は通さない。
@@ -23,12 +23,14 @@ use ort::{
     session::Session,
     value::{Tensor, TensorRef},
 };
+use parapper_models::asr::{
+    AsrEngine as _, AsrModel, AsrPrecision, backend::reazon_ort::ReazonSpeechOrtAsrEngine,
+};
 use rubato::{
     Async, FixedAsync, PolynomialDegree, Resampler,
     audioadapter::{Adapter, AdapterMut},
 };
 use serde::Serialize;
-use sherpa_onnx::{OfflineRecognizer, OfflineRecognizerConfig, OfflineTransducerModelConfig};
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 #[path = "../verify_jvs_asr_constants.rs"]
@@ -65,7 +67,7 @@ fn main() -> Result<()> {
     }
 
     validate_model_dir(&args.model_dir)?;
-    let recognizer = create_recognizer(&args.model_dir, args.num_threads)?;
+    let mut recognizer = create_recognizer(&args.model_dir, args.num_threads)?;
     let mut raw_vad = if args.plot_json.is_some() || args.trim_by_vad {
         Some(RawSileroVadEngine::new(
             &args.vad_model,
@@ -102,7 +104,7 @@ fn main() -> Result<()> {
                 }
             }
             if args.verbose {
-                let standalone_recognized = transcribe(&recognizer, &resampled)
+                let standalone_recognized = transcribe(&mut recognizer, &resampled)
                     .with_context(|| format!("Failed to transcribe standalone {}", part.id))?;
                 let standalone_expected_normalized = normalize_for_jvs_asr_check(&part.expected);
                 let standalone_recognized_normalized =
@@ -145,7 +147,7 @@ fn main() -> Result<()> {
             .map(|vad| vad.process_audio(&audio))
             .transpose()?
             .unwrap_or_default();
-        let raw_recognized = transcribe(&recognizer, &audio)
+        let raw_recognized = transcribe(&mut recognizer, &audio)
             .with_context(|| format!("Failed to transcribe {}", sample.id))?;
         let display_transcript = raw_recognized.clone();
         let expected_normalized = normalize_for_jvs_asr_check(&sample.expected);
@@ -154,7 +156,7 @@ fn main() -> Result<()> {
             .compare_interim_rerecognition
             .then(|| {
                 evaluate_legacy_interim_rerecognition(
-                    &recognizer,
+                    &mut recognizer,
                     &sample,
                     &audio,
                     &speech_ranges,
@@ -366,7 +368,7 @@ fn main() -> Result<()> {
 }
 
 fn evaluate_legacy_interim_rerecognition(
-    asr: &OfflineRecognizer,
+    asr: &mut ReazonSpeechOrtAsrEngine,
     sample: &JvsSample,
     continuous_audio: &[f32],
     speech_ranges: &[std::ops::Range<usize>],
@@ -870,22 +872,13 @@ fn validate_model_dir(model_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn create_recognizer(model_dir: &Path, num_threads: i32) -> Result<OfflineRecognizer> {
-    let mut config = OfflineRecognizerConfig::default();
-    config.model_config.transducer = OfflineTransducerModelConfig {
-        encoder: Some(model_dir.join(ENCODER_FILE).display().to_string()),
-        decoder: Some(model_dir.join(DECODER_FILE).display().to_string()),
-        joiner: Some(model_dir.join(JOINER_FILE).display().to_string()),
-    };
-    config.model_config.tokens = Some(model_dir.join(TOKENS_FILE).display().to_string());
-    config.model_config.provider = Some("cpu".to_string());
-    config.model_config.modeling_unit = Some("cjkchar".to_string());
-    config.model_config.num_threads = num_threads;
-    config.decoding_method = Some("greedy_search".to_string());
-    config.max_active_paths = 1;
-
-    OfflineRecognizer::create(&config)
-        .ok_or_else(|| anyhow!("Failed to create sherpa-onnx recognizer"))
+fn create_recognizer(model_dir: &Path, num_threads: i32) -> Result<ReazonSpeechOrtAsrEngine> {
+    ReazonSpeechOrtAsrEngine::new(
+        model_dir,
+        AsrModel::ReazonSpeechK2V2,
+        AsrPrecision::Int8Float32,
+        num_threads,
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -1097,32 +1090,18 @@ fn is_in_any_range(sample: usize, ranges: &[std::ops::Range<usize>]) -> bool {
     ranges.iter().any(|range| range.contains(&sample))
 }
 
-fn transcribe(recognizer: &OfflineRecognizer, samples: &[f32]) -> Result<RecognizedTranscript> {
-    let stream = recognizer.create_stream();
-    stream.accept_waveform(
-        i32::try_from(ASR_SAMPLE_RATE).expect("ASR sample rate should fit i32"),
-        samples,
-    );
-    recognizer.decode(&stream);
-    let result = stream
-        .get_result()
-        .ok_or_else(|| anyhow!("Failed to fetch sherpa-onnx result"))?;
+fn transcribe(
+    recognizer: &mut ReazonSpeechOrtAsrEngine,
+    samples: &[f32],
+) -> Result<RecognizedTranscript> {
+    let result = recognizer.recognize(samples)?;
     let tokens = result
         .tokens
         .into_iter()
-        .enumerate()
-        .map(|(index, text)| RecognizedToken {
-            text,
-            start_sec: result
-                .timestamps
-                .as_ref()
-                .and_then(|timestamps| timestamps.get(index))
-                .copied(),
-            duration_sec: result
-                .durations
-                .as_ref()
-                .and_then(|durations| durations.get(index))
-                .copied(),
+        .map(|token| RecognizedToken {
+            text: token.text,
+            start_sec: token.start_sec,
+            duration_sec: token.duration_sec,
         })
         .collect();
     Ok(RecognizedTranscript {

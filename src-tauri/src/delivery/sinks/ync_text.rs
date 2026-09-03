@@ -12,7 +12,7 @@ use crate::{
     config::ParapperConfig,
     connect::{TextInputPayload, TextTransport, YncTextInputTransport},
     delivery::{RecognizedTextOutput, sinks::ui_event::emit_connection_state},
-    recognition::control::events::ConnectionTarget,
+    recognition::events::ConnectionTarget,
 };
 
 use super::{DispatchContext, RecognizedTextSink};
@@ -30,6 +30,13 @@ impl RecognizedTextSink for YncTextSink {
     }
 
     fn deliver(&self, ctx: &DispatchContext<'_>, output: &RecognizedTextOutput) {
+        if !ctx.route.neo_text_enabled
+            || !ctx
+                .config
+                .neo_http_enabled_for_source(output.meta.source().identity.source_id.as_str())
+        {
+            return;
+        }
         enqueue_recognized_text_for_ync_text(ctx, output);
     }
 }

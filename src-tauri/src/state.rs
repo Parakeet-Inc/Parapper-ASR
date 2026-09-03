@@ -10,18 +10,15 @@ use tokio::sync::Mutex;
 
 use crate::{
     config::{
-        ConfigPreset, DeveloperConnectionMode, InputSourceKind, ParapperConfig, SpeechMapping,
-        StreamingRecognitionOutputMode, delete_config_preset, load_config_presets,
-        save_config_preset,
+        ConfigPreset, DeveloperConnectionMode, InputSourceKind, ParapperConfig, SpeechBackend,
+        StreamingRecognitionOutputMode, TranslationBackend, delete_config_preset,
+        load_config_presets, save_config_preset,
     },
     model::{ModelStatus, any_model_installed_in, model_status_from_root, models_root},
     recognition::{
-        RecognitionShutdownResult, RecognitionStartError, RecognitionStatus,
+        NetworkOutputMode, RecognitionShutdownResult, RecognitionStartError, RecognitionStatus,
         RecognitionStreamEvent, RunningInputSource, RunningRecognitionInput, RuntimeConfigState,
-        TurnOutputSink,
-    },
-    streaming_recognition::{
-        NetworkOutputMode, StreamingRecognitionServer, StreamingRecognitionServerConfig,
+        StreamingRecognitionServer, StreamingRecognitionServerConfig, TurnOutputSink,
     },
     synthesis::prewarm_local_tts_engines,
     translation::TranslationHttpListener,
@@ -144,7 +141,8 @@ impl AppState {
     }
 
     pub async fn set_config(&self, config: ParapperConfig) -> Result<ParapperConfig> {
-        let mut config = config.normalized();
+        config.validate()?;
+        let config = config.normalized();
         if matches!(
             *self.recognition_status.lock().await,
             RecognitionStatus::WaitingForClient
@@ -152,18 +150,7 @@ impl AppState {
                 | RecognitionStatus::Draining
         ) {
             let previous = self.runtime_config_snapshot()?;
-            if previous.input.source_kind != config.input.source_kind
-                || previous.streaming_recognition != config.streaming_recognition
-            {
-                anyhow::bail!(
-                    "recognition input source and listener settings cannot change while recognition is running"
-                );
-            }
-            preserve_running_vad_interval(&previous, &mut config);
-            config.speech.mappings = preserve_running_speech_model_mappings(
-                &previous.speech.mappings,
-                &config.speech.mappings,
-            );
+            validate_running_config_change(&previous, &config)?;
         }
         config.save(&self.config_path)?;
         self.runtime_config.replace(config.clone());
@@ -317,6 +304,10 @@ impl AppState {
         handle: AppHandle,
     ) -> Result<RecognitionStatus, RecognitionStartError> {
         let config = self.get_config().await;
+        config
+            .validate()
+            .context("recognition input config is invalid")
+            .map_err(RecognitionStartError::AudioInput)?;
         if config.input.source_kind == InputSourceKind::WebSocket {
             return self.start_streaming_recognition(handle, &config).await;
         }
@@ -420,6 +411,10 @@ impl AppState {
         }
 
         let config = self.get_config().await;
+        config
+            .validate()
+            .context("recognition input config is invalid")
+            .map_err(RecognitionStartError::AudioInput)?;
         let running = RunningRecognitionInput::start_with_source_and_sink(
             handle,
             &config,
@@ -520,96 +515,489 @@ impl AppState {
     }
 }
 
-fn preserve_running_vad_interval(previous: &ParapperConfig, next: &mut ParapperConfig) {
-    next.segmentation.vad_interval_ms = previous.segmentation.vad_interval_ms;
+fn validate_running_config_change(previous: &ParapperConfig, next: &ParapperConfig) -> Result<()> {
+    if running_config_with_runtime_parameters(previous, next) == *next {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "recognition must be stopped before changing session, resource, or pipeline settings"
+    );
 }
 
-fn preserve_running_speech_model_mappings(
-    previous: &[SpeechMapping],
-    next: &[SpeechMapping],
-) -> Vec<SpeechMapping> {
+fn running_config_with_runtime_parameters(
+    previous: &ParapperConfig,
+    next: &ParapperConfig,
+) -> ParapperConfig {
+    let mut allowed = previous.clone();
+    allowed.neo.http_enabled = next.neo.http_enabled;
+    allowed.neo.http_port = next.neo.http_port;
+    allowed.input.volume_db = next.input.volume_db;
+    allowed
+        .streaming_recognition
+        .http_url
+        .clone_from(&next.streaming_recognition.http_url);
+    allowed.asr.normalize_input_audio = next.asr.normalize_input_audio;
+    allowed.translation.enabled = next.translation.enabled;
+    allowed.translation.ync_plugin_port = next.translation.ync_plugin_port;
+    allowed.translation.send_timing = next.translation.send_timing;
+    if !translation_mapping_change_requires_restart(previous, next) {
+        allowed
+            .translation
+            .mappings
+            .clone_from(&next.translation.mappings);
+    }
+    if !speech_mapping_change_requires_restart(previous, next) {
+        allowed.speech.mappings.clone_from(&next.speech.mappings);
+    }
+    if previous.stt_profiles.is_empty() && next.stt_profiles.is_empty() {
+        // Legacy single-input mode keeps its existing runtime-tunable fields.
+        allowed.input.volume_db = next.input.volume_db;
+        allowed.input.muted = next.input.muted;
+        allowed.segmentation.vad_threshold = next.segmentation.vad_threshold;
+        allowed.segmentation.segment_start_speech_ms = next.segmentation.segment_start_speech_ms;
+        allowed.turn.interim_result_silence_ms = next.turn.interim_result_silence_ms;
+        allowed.turn.check_silence_ms = next.turn.check_silence_ms;
+        allowed.turn.namo_confidence_threshold = next.turn.namo_confidence_threshold;
+        allowed.turn.namo_context_max_tokens = next.turn.namo_context_max_tokens;
+        allowed.turn.rerecognize_full_on_complete = next.turn.rerecognize_full_on_complete;
+    } else if stt_profile_runtime_updates_only(previous, next) {
+        // In independent-profile mode, only each lane's live gain/mute may
+        // change while running.  Device/channel and all pipeline settings are
+        // startup-owned, even though the flattened legacy fields above remain
+        // present for compatibility with older config files.
+        allowed.stt_profiles = previous
+            .stt_profiles
+            .iter()
+            .zip(&next.stt_profiles)
+            .map(|(previous, next)| {
+                let mut profile = previous.clone();
+                profile.input.volume_percent = next.input.volume_percent;
+                profile.input.muted = next.input.muted;
+                profile
+            })
+            .collect();
+    }
+    allowed.vrc.clone_from(&next.vrc);
+    allowed.debug.clone_from(&next.debug);
+    allowed
+}
+
+fn stt_profile_runtime_updates_only(previous: &ParapperConfig, next: &ParapperConfig) -> bool {
+    if previous.stt_profiles.len() != next.stt_profiles.len() {
+        return false;
+    }
+
     previous
+        .stt_profiles
         .iter()
-        .map(|previous_mapping| {
-            let Some(next_mapping) = next
-                .iter()
-                .find(|mapping| mapping.id == previous_mapping.id)
-            else {
-                return previous_mapping.clone();
-            };
-            let mut mapping = previous_mapping.clone();
-            mapping.talker.clone_from(&next_mapping.talker);
-            mapping
-                .local_tts_language
-                .clone_from(&next_mapping.local_tts_language);
-            mapping.local_tts_speaker_id = next_mapping.local_tts_speaker_id;
-            mapping
-                .output_device_id
-                .clone_from(&next_mapping.output_device_id);
-            mapping
-                .output_device_host
-                .clone_from(&next_mapping.output_device_host);
-            mapping
-                .output_device_name
-                .clone_from(&next_mapping.output_device_name);
-            mapping.muted = next_mapping.muted;
-            mapping.volume = next_mapping.volume;
-            mapping
+        .zip(&next.stt_profiles)
+        .all(|(previous, next)| {
+            previous.id == next.id
+                && previous.name == next.name
+                && previous.enabled == next.enabled
+                && previous.display_color == next.display_color
+                && previous.input.device_host == next.input.device_host
+                && previous.input.device_id == next.input.device_id
+                && previous.input.device_name == next.input.device_name
+                && previous.input.channel_index == next.input.channel_index
+                && previous.noise_cancellation == next.noise_cancellation
+                && previous.segmentation == next.segmentation
+                && previous.turn == next.turn
+                && previous.asr == next.asr
+                && previous.delivery_profile_id == next.delivery_profile_id
         })
-        .collect()
+}
+
+fn translation_mapping_change_requires_restart(
+    previous: &ParapperConfig,
+    next: &ParapperConfig,
+) -> bool {
+    next.translation.mappings.iter().any(|next_mapping| {
+        let previous_mapping = previous
+            .translation
+            .mappings
+            .iter()
+            .find(|mapping| mapping.id == next_mapping.id);
+        match (previous_mapping, next_mapping.backend) {
+            (Some(previous_mapping), TranslationBackend::Local) => {
+                previous_mapping.backend != TranslationBackend::Local
+                    || previous_mapping.local_model != next_mapping.local_model
+            }
+            (Some(previous_mapping), TranslationBackend::Ync) => {
+                previous_mapping.backend == TranslationBackend::Local
+            }
+            (None, TranslationBackend::Local) => true,
+            (None, TranslationBackend::Ync) => false,
+        }
+    })
+}
+
+fn speech_mapping_change_requires_restart(
+    previous: &ParapperConfig,
+    next: &ParapperConfig,
+) -> bool {
+    next.speech.mappings.iter().any(|next_mapping| {
+        let previous_mapping = previous
+            .speech
+            .mappings
+            .iter()
+            .find(|mapping| mapping.id == next_mapping.id);
+        match (previous_mapping, next_mapping.backend) {
+            (Some(previous_mapping), SpeechBackend::LocalTts) => {
+                previous_mapping.backend != SpeechBackend::LocalTts
+                    || previous_mapping.local_tts_voice != next_mapping.local_tts_voice
+            }
+            (Some(previous_mapping), SpeechBackend::Ync) => {
+                previous_mapping.backend == SpeechBackend::LocalTts
+            }
+            (None, SpeechBackend::LocalTts) => true,
+            (None, SpeechBackend::Ync) => false,
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{RecognitionSessionOwner, RecognitionSessionSlot, preserve_running_vad_interval};
-    use crate::config::{ParapperConfig, TurnDetector};
+    use std::{fs, path::PathBuf, sync::Arc};
 
-    #[test]
-    fn running_vad_interval_is_preserved_but_timing_settings_can_update() {
-        let previous = parapper_config! {
-            vad_threshold: 0.7,
-            vad_interval_ms: 32,
-            segment_start_speech_ms: 128,
-            turn_detector: TurnDetector::Namo,
-            interim_result_enabled: false,
-            interim_result_silence_ms: 640,
-            turn_check_silence_ms: 960,
-            namo_turn_confidence_threshold: 0.65,
-            namo_context_max_tokens: 128,
-            turn_rerecognize_full_on_complete: true,
+    use tokio::sync::Mutex;
+    use uuid::Uuid;
+
+    use super::{
+        AppState, RecognitionSessionOwner, RecognitionSessionSlot, TranslationHttpListenerStatus,
+    };
+    use crate::{
+        config::{
+            AsrMode, AsrModel, AsrPrecision, InputSourceKind, LocalTranslationModel, LocalTtsVoice,
+            NeoSendTiming, ParapperConfig, SpeechBackend, SpeechMapping, SpeechSourceKind,
+            SttProfileConfig, SttProfileDisplayColor, SttProfileInputConfig, TranslationBackend,
+            TranslationLanguage, TranslationMapping, TurnDetector,
+        },
+        recognition::{RecognitionStatus, RuntimeConfigState},
+    };
+
+    fn translation_mapping(backend: TranslationBackend) -> TranslationMapping {
+        TranslationMapping {
+            id: "translation-route".to_string(),
+            source_asr_model: None,
+            backend,
+            local_model: LocalTranslationModel::default(),
+            source_lang: TranslationLanguage::Ja,
+            target_lang: TranslationLanguage::En,
+        }
+    }
+
+    fn speech_mapping(backend: SpeechBackend) -> SpeechMapping {
+        SpeechMapping {
+            id: "speech-route".to_string(),
+            source_kind: SpeechSourceKind::Recognition,
+            source_asr_model: None,
+            target_lang: None,
+            backend,
+            talker: "voice".to_string(),
+            local_tts_voice: (backend == SpeechBackend::LocalTts)
+                .then_some(LocalTtsVoice::Supertonic2Onnx),
+            local_tts_language: None,
+            local_tts_speaker_id: None,
+            output_device_id: None,
+            output_device_host: None,
+            output_device_name: None,
+            muted: false,
+            volume: 0.0,
+        }
+    }
+
+    fn test_app_state(config: &ParapperConfig, status: RecognitionStatus) -> AppState {
+        let root = std::env::temp_dir().join(format!("parapper-state-test-{}", Uuid::new_v4()));
+        let config_path = root.join("config.json");
+        config.save(&config_path).unwrap();
+        AppState {
+            config_path,
+            config_presets_path: root.join("config-presets.json"),
+            models_root: root.join("models"),
+            config: Mutex::new(config.clone()),
+            runtime_config: Arc::new(RuntimeConfigState::new(config.clone())),
+            recognition_status: Mutex::new(status),
+            recognition_session: Mutex::new(RecognitionSessionSlot::default()),
+            streaming_recognition_server: Mutex::new(None),
+            translation_http_listener: std::sync::Mutex::new(None),
+            translation_http_listener_status: std::sync::Mutex::new(
+                TranslationHttpListenerStatus::default(),
+            ),
+        }
+    }
+
+    fn persisted_config(path: &PathBuf) -> ParapperConfig {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn stt_profile(id: &str, device: &str, channel_index: u16) -> SttProfileConfig {
+        let defaults = ParapperConfig::default();
+        SttProfileConfig {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            enabled: true,
+            neo_http_enabled: true,
+            developer_http_enabled: true,
+            display_color: SttProfileDisplayColor::Green,
+            input: SttProfileInputConfig {
+                device_host: Some("wasapi".to_owned()),
+                device_id: Some(device.to_owned()),
+                device_name: Some(device.to_owned()),
+                channel_index,
+                volume_percent: 100,
+                muted: false,
+            },
+            noise_cancellation: defaults.noise_cancellation,
+            segmentation: defaults.segmentation,
+            turn: defaults.turn,
+            asr: defaults.asr,
+            delivery_profile_id: None,
+        }
+    }
+
+    fn profile_config() -> ParapperConfig {
+        ParapperConfig {
+            stt_profiles: vec![
+                stt_profile("profile-a", "device-a", 0),
+                stt_profile("profile-b", "device-b", 0),
+            ],
             ..ParapperConfig::default()
-        };
-        let mut next = parapper_config! {
-            vad_threshold: 0.1,
-            vad_interval_ms: 999,
-            segment_start_speech_ms: 32,
-            turn_detector: TurnDetector::Simple,
-            interim_result_enabled: true,
-            interim_result_silence_ms: 32,
-            turn_check_silence_ms: 32,
-            namo_turn_confidence_threshold: 0.95,
-            namo_context_max_tokens: 512,
-            turn_rerecognize_full_on_complete: false,
-            input_volume_db: 6.0,
-            ..ParapperConfig::default()
-        };
+        }
+    }
 
-        preserve_running_vad_interval(&previous, &mut next);
+    fn remove_test_state(state: AppState) {
+        let root = state
+            .config_path
+            .parent()
+            .expect("test config must have a parent")
+            .to_path_buf();
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
+    }
 
-        assert_eq!(
-            next.segmentation.vad_interval_ms,
-            previous.segmentation.vad_interval_ms
-        );
-        assert_f32_close(next.segmentation.vad_threshold, 0.1);
-        assert_eq!(next.segmentation.segment_start_speech_ms, 32);
-        assert_eq!(next.turn.detector, TurnDetector::Simple);
-        assert!(next.turn.interim_result_enabled);
-        assert_eq!(next.turn.interim_result_silence_ms, 32);
-        assert_eq!(next.turn.check_silence_ms, 32);
-        assert_f32_close(next.turn.namo_confidence_threshold, 0.95);
-        assert_eq!(next.turn.namo_context_max_tokens, 512);
-        assert!(!next.turn.rerecognize_full_on_complete);
-        assert_f32_close(next.input.volume_db, 6.0);
+    type ConfigMutation = fn(&mut ParapperConfig);
+
+    #[tokio::test]
+    async fn running_recognition_rejects_each_session_fixed_stt_change_without_partial_save() {
+        let cases: [(&str, ConfigMutation); 16] = [
+            ("primary ASR model", |config| {
+                config.asr.model = AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8;
+            }),
+            ("ASR precision", |config| {
+                config.asr.precision = AsrPrecision::Float32;
+            }),
+            ("interim ASR model", |config| {
+                config.asr.interim_model = Some(AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8);
+            }),
+            ("ASR thread count", |config| config.asr.num_threads = 2),
+            ("multilingual ASR", |config| {
+                config.asr.multilingual_enabled = true;
+            }),
+            ("enabled ASR models", |config| {
+                config
+                    .asr
+                    .enabled_models
+                    .push(AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8);
+            }),
+            ("Turn Detector", |config| {
+                config.turn.detector = TurnDetector::Namo;
+            }),
+            ("interim recognition topology", |config| {
+                config.turn.interim_result_enabled = false;
+            }),
+            ("noise cancellation", |config| {
+                config.noise_cancellation.enabled = true;
+            }),
+            ("noise cancellation target", |config| {
+                config.noise_cancellation.target =
+                    crate::config::NoiseCancellationTarget::VadAndAsr;
+            }),
+            ("model directory", |config| {
+                config.models.dir = Some("other-models".to_string());
+            }),
+            ("input source", |config| {
+                config.input.source_kind = InputSourceKind::WebSocket;
+            }),
+            ("ASR decoding mode", |config| {
+                config.asr.mode = AsrMode::Accurate;
+            }),
+            ("developer listener", |config| {
+                config.streaming_recognition.enabled = true;
+            }),
+            ("new local translation route", |config| {
+                config
+                    .translation
+                    .mappings
+                    .push(translation_mapping(TranslationBackend::Local));
+            }),
+            ("new local speech route", |config| {
+                config
+                    .speech
+                    .mappings
+                    .push(speech_mapping(SpeechBackend::LocalTts));
+            }),
+        ];
+
+        for status in [
+            RecognitionStatus::WaitingForClient,
+            RecognitionStatus::Listening,
+            RecognitionStatus::Draining,
+        ] {
+            for (name, mutate) in cases {
+                let previous = ParapperConfig::default();
+                let state = test_app_state(&previous, status);
+                let config_path = state.config_path.clone();
+                let mut next = previous.clone();
+                mutate(&mut next);
+
+                let error = state.set_config(next).await.expect_err(name).to_string();
+
+                assert!(
+                    error.contains("recognition must be stopped"),
+                    "{name} returned an unclear error in {status:?}: {error}"
+                );
+                assert_eq!(state.get_config().await, previous, "{name} in {status:?}");
+                assert_eq!(
+                    state.runtime_config_snapshot().unwrap(),
+                    previous,
+                    "{name} in {status:?}"
+                );
+                assert_eq!(
+                    persisted_config(&config_path),
+                    previous,
+                    "{name} in {status:?}"
+                );
+                remove_test_state(state);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn running_recognition_accepts_one_transaction_of_runtime_parameters() {
+        let previous = ParapperConfig::default();
+        let state = test_app_state(&previous, RecognitionStatus::Listening);
+        let mut next = previous.clone();
+        next.input.volume_db = 6.0;
+        next.segmentation.vad_threshold = 0.25;
+        next.segmentation.segment_start_speech_ms = 160;
+        next.turn.interim_result_silence_ms = 192;
+        next.turn.check_silence_ms = 640;
+        next.turn.namo_confidence_threshold = 0.65;
+        next.turn.namo_context_max_tokens = 128;
+        next.turn.rerecognize_full_on_complete = true;
+        next.asr.normalize_input_audio = false;
+        next.neo.http_enabled = true;
+        next.neo.http_port = 15521;
+        next.streaming_recognition.http_url = "http://127.0.0.1:15523/events".to_string();
+        next.translation.enabled = true;
+        next.translation.ync_plugin_port = 8081;
+        next.translation.send_timing = NeoSendTiming::Interim;
+        next.translation
+            .mappings
+            .push(translation_mapping(TranslationBackend::Ync));
+        next.speech
+            .mappings
+            .push(speech_mapping(SpeechBackend::Ync));
+
+        let saved = state.set_config(next.clone()).await.unwrap();
+
+        assert_eq!(saved, next.normalized());
+        remove_test_state(state);
+    }
+
+    #[tokio::test]
+    async fn running_profile_recognition_allows_only_profile_gain_and_mute_updates() {
+        type ProfileMutation = fn(&mut ParapperConfig);
+
+        let allowed: [(&str, ProfileMutation); 3] = [
+            ("profile volume", |config| {
+                config.stt_profiles[0].input.volume_percent = 35;
+            }),
+            ("profile mute", |config| {
+                config.stt_profiles[1].input.muted = true;
+            }),
+            ("profile volume and mute", |config| {
+                config.stt_profiles[0].input.volume_percent = 5;
+                config.stt_profiles[1].input.muted = true;
+            }),
+        ];
+        let rejected: [(&str, ProfileMutation); 9] = [
+            ("profile device", |config| {
+                config.stt_profiles[0].input.device_id = Some("other-device".to_owned());
+            }),
+            ("profile channel", |config| {
+                config.stt_profiles[0].input.channel_index = 1;
+            }),
+            ("profile display color", |config| {
+                config.stt_profiles[0].display_color = SttProfileDisplayColor::Blue;
+            }),
+            ("profile noise cancellation", |config| {
+                config.stt_profiles[0].noise_cancellation.enabled = true;
+            }),
+            ("profile VAD", |config| {
+                config.stt_profiles[0].segmentation.vad_threshold = 0.42;
+            }),
+            ("profile ASR", |config| {
+                config.stt_profiles[0].asr.model = AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8;
+            }),
+            ("profile set", |config| {
+                config.stt_profiles.pop();
+            }),
+            ("profile add", |config| {
+                config
+                    .stt_profiles
+                    .push(stt_profile("profile-c", "device-c", 0));
+            }),
+            ("profile reorder", |config| {
+                config.stt_profiles.reverse();
+            }),
+        ];
+
+        for (name, mutate) in allowed {
+            let previous = profile_config();
+            let state = test_app_state(&previous, RecognitionStatus::Listening);
+            let mut next = previous.clone();
+            mutate(&mut next);
+
+            state
+                .set_config(next.clone())
+                .await
+                .unwrap_or_else(|error| panic!("{name} should be allowed: {error}"));
+            assert_eq!(state.get_config().await, next.normalized(), "{name}");
+            remove_test_state(state);
+        }
+
+        for (name, mutate) in rejected {
+            let previous = profile_config();
+            let state = test_app_state(&previous, RecognitionStatus::Listening);
+            let mut next = previous.clone();
+            mutate(&mut next);
+
+            let error = state.set_config(next).await.expect_err(name).to_string();
+            assert!(
+                error.contains("recognition must be stopped"),
+                "{name}: {error}"
+            );
+            assert_eq!(state.get_config().await, previous, "{name}");
+            remove_test_state(state);
+        }
+    }
+
+    #[tokio::test]
+    async fn stopped_recognition_accepts_session_fixed_config_for_the_next_start() {
+        let previous = ParapperConfig::default();
+        let state = test_app_state(&previous, RecognitionStatus::Stopped);
+        let mut next = previous;
+        next.asr.model = AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8;
+        next.turn.detector = TurnDetector::Namo;
+
+        let saved = state.set_config(next.clone()).await.unwrap();
+
+        assert_eq!(saved, next.normalized());
+        assert_eq!(state.get_config().await, saved);
+        assert_eq!(state.runtime_config_snapshot().unwrap(), saved);
+        remove_test_state(state);
     }
 
     #[test]
@@ -652,12 +1040,5 @@ mod tests {
         assert_eq!(slot.owner(), Some(&network));
         assert_eq!(slot.take(&network), Some(7));
         assert_eq!(slot.owner(), None);
-    }
-
-    fn assert_f32_close(actual: f32, expected: f32) {
-        assert!(
-            (actual - expected).abs() < f32::EPSILON,
-            "actual={actual}, expected={expected}"
-        );
     }
 }

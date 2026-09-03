@@ -1,10 +1,29 @@
 import { notifications } from "@mantine/notifications";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import type { TFunction } from "i18next";
-import type { Dispatch, SetStateAction } from "react";
+import type { MutableRefObject } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { upsertRecognizedText } from "../application/app-state/recognized-text";
+import {
+  applyConnectionAvailability,
+  applyInputLevel,
+  applyModelDownloadProgress,
+  applyModelStatus,
+  applyRecognitionStatus,
+  initialModelState,
+  initialRuntimeState,
+  setModelDownloading,
+} from "../application/app-state/reducer";
+import type {
+  ModelState,
+  RuntimeState,
+} from "../application/app-state/reducer";
+import { upsertTranslatedText } from "../application/app-state/translated-text";
+import type {
+  FrontendCapabilities,
+  FrontendEvent,
+  FrontendServices,
+} from "../application/frontend-services";
 import {
   configuredLimit,
   trimRecognizedTextLog,
@@ -17,46 +36,18 @@ import {
   normalizeParapperErrorPayload,
   notifyParapperIssue,
 } from "../lib/error";
-import { isMacOs } from "../lib/platform";
 import { notificationColor } from "../lib/theme";
 import type {
-  AsrMissingEvent,
   AudioDeviceInfo,
   ConnectionStateEvent,
   InputLevelEvent,
   LocalTranslationModel,
-  ModelDownloadProgress,
-  ModelStatus,
-  OscMuteStateEvent,
   ParapperConfig,
-  ParapperErrorPayload,
   RecognizedTextEvent,
-  RecognitionStatus,
-  SpeechRequestEvent,
   TranslationTextEvent,
-  VadStateEvent,
 } from "../lib/types";
 
-export type RuntimeState = {
-  status: RecognitionStatus;
-  running: boolean;
-  starting: boolean;
-  inputLevel: number;
-  inputLevelBeforeGain: number;
-  vadState: VadStateEvent | null;
-  asrWarning: string | null;
-  lastError: ParapperErrorPayload | null;
-  oscMuted: boolean | null;
-  neoNotFound: boolean;
-  vrcNotFound: boolean;
-  translationSpeechDelaySuspected: boolean;
-};
-
-export type ModelState = {
-  status: ModelStatus | null;
-  downloading: boolean;
-  progress: ModelDownloadProgress | null;
-};
+export type { RuntimeState } from "../application/app-state/reducer";
 
 export type UiState = {
   settingsOpen: boolean;
@@ -68,33 +59,7 @@ export type OnboardingState = {
   step: number;
 };
 
-const initialRuntimeState: RuntimeState = {
-  status: "idle",
-  running: false,
-  starting: false,
-  inputLevel: 0,
-  inputLevelBeforeGain: 0,
-  vadState: null,
-  asrWarning: null,
-  lastError: null,
-  oscMuted: null,
-  neoNotFound: false,
-  vrcNotFound: false,
-  translationSpeechDelaySuspected: false,
-};
-
-const recognitionIsRunning = (status: RecognitionStatus) =>
-  status === "waiting_for_client" ||
-  status === "listening" ||
-  status === "draining";
-
 const TRANSLATION_SPEECH_DELAY_WARNING_MS = 3000;
-
-const initialModelState: ModelState = {
-  status: null,
-  downloading: false,
-  progress: null,
-};
 
 const initialUiState: UiState = {
   settingsOpen: false,
@@ -107,14 +72,18 @@ const initialOnboardingState: OnboardingState = {
 };
 
 type UseAppStateParams = {
+  services: FrontendServices;
+  capabilities: FrontendCapabilities;
   config: ParapperConfig | null;
-  configRef: { current: ParapperConfig | null };
-  setConfig: Dispatch<SetStateAction<ParapperConfig | null>>;
-  setAppliedConfig: Dispatch<SetStateAction<ParapperConfig | null>>;
+  configRef: MutableRefObject<ParapperConfig | null>;
+  setConfig: (config: ParapperConfig | null) => void;
+  setAppliedConfig: (config: ParapperConfig | null) => void;
   t: TFunction;
 };
 
 export const useAppState = ({
+  services,
+  capabilities,
   config,
   configRef,
   setConfig,
@@ -140,7 +109,7 @@ export const useAppState = ({
   const [translatedTexts, setTranslatedTexts] = useState<
     TranslationTextEvent[]
   >([]);
-  const nativeConnectionsDisabled = isMacOs();
+  const nativeConnectionsDisabled = !capabilities.externalConnectionProbe;
   const notifiedMissingTargetsRef = useRef<Set<ConnectionStateEvent["target"]>>(
     new Set(),
   );
@@ -155,11 +124,9 @@ export const useAppState = ({
       return;
     }
 
-    setRuntime((current) => ({
-      ...current,
-      neoNotFound: target === "neo" ? !found : current.neoNotFound,
-      vrcNotFound: target === "vrchat" ? !found : current.vrcNotFound,
-    }));
+    setRuntime((current) =>
+      applyConnectionAvailability(current, target, found),
+    );
 
     if (found) {
       notifiedMissingTargetsRef.current.delete(target);
@@ -180,19 +147,28 @@ export const useAppState = ({
   };
 
   const loadAudioDevices = useCallback(async () => {
+    if (!capabilities.localAudioDevices && !capabilities.outputAudioDevices) {
+      setInputAudioDevices([]);
+      setOutputAudioDevices([]);
+      return;
+    }
     setRefreshingAudioDevices(true);
     try {
       const [loadedInputAudioDevices, loadedOutputAudioDevices] =
         await Promise.all([
-          invoke<AudioDeviceInfo[]>("get_audio_devices"),
-          invoke<AudioDeviceInfo[]>("get_output_audio_devices"),
+          capabilities.localAudioDevices
+            ? services.audioDevices.inputDevices()
+            : Promise.resolve([]),
+          capabilities.outputAudioDevices
+            ? services.audioDevices.outputDevices()
+            : Promise.resolve([]),
         ]);
       setInputAudioDevices(loadedInputAudioDevices);
       setOutputAudioDevices(loadedOutputAudioDevices);
     } finally {
       setRefreshingAudioDevices(false);
     }
-  }, []);
+  }, [capabilities, services.audioDevices]);
 
   const refreshAudioDevices = useCallback(async () => {
     try {
@@ -209,7 +185,7 @@ export const useAppState = ({
   useEffect(() => {
     void (async () => {
       try {
-        const loadedConfig = await invoke<ParapperConfig>("get_config");
+        const loadedConfig = await services.config.load();
         setConfig(loadedConfig);
         setAppliedConfig(loadedConfig);
 
@@ -221,22 +197,17 @@ export const useAppState = ({
           });
         });
 
-        const loadedStatus = await invoke<RecognitionStatus>(
-          "get_recognition_status",
-        );
-        setRuntime((current) => ({
-          ...current,
-          status: loadedStatus,
-          running: recognitionIsRunning(loadedStatus),
-          starting: false,
-        }));
+        const loadedStatus = await services.recognition.status();
+        setRuntime((current) => applyRecognitionStatus(current, loadedStatus));
 
-        const loadedModelStatus = await invoke<ModelStatus>("get_model_status");
-        setModel((current) => ({ ...current, status: loadedModelStatus }));
+        if (capabilities.modelManagement) {
+          const loadedModelStatus = await services.models.status();
+          setModel((current) => applyModelStatus(current, loadedModelStatus));
+        }
 
-        const hasAnyModelInstalled = await invoke<boolean>(
-          "has_any_model_installed",
-        );
+        const hasAnyModelInstalled = capabilities.modelManagement
+          ? await services.models.hasAnyInstalled()
+          : true;
         setOnboarding((current) => ({
           ...current,
           open: !hasAnyModelInstalled,
@@ -247,18 +218,29 @@ export const useAppState = ({
         notifyParapperIssue(payload);
       }
     })();
-  }, [loadAudioDevices, setAppliedConfig, setConfig, t]);
+  }, [
+    capabilities.modelManagement,
+    loadAudioDevices,
+    services.config,
+    services.models,
+    services.recognition,
+    setAppliedConfig,
+    setConfig,
+    t,
+  ]);
 
   useEffect(() => {
     configRef.current = config;
   }, [config, configRef]);
 
   useEffect(() => {
-    if (!config) return;
-    void invoke<ModelStatus>("get_model_status").then((status) =>
-      setModel((current) => ({ ...current, status })),
-    );
-  }, [config]);
+    if (!config || !capabilities.modelManagement) return;
+    void services.models
+      .status()
+      .then((status) =>
+        setModel((current) => applyModelStatus(current, status)),
+      );
+  }, [capabilities.modelManagement, config, services.models]);
 
   useEffect(() => {
     if (!config) return;
@@ -288,30 +270,29 @@ export const useAppState = ({
     }
 
     if (config.neo_http_enabled) {
-      void invoke<boolean>("check_neo_http_available", {
-        neoHttpEnabled: config.neo_http_enabled,
-        neoHttpPort: config.neo_http_port,
-      }).then(async (found) => {
-        const detectedPort = found
-          ? null
-          : await invoke<number | null>("find_neo_http_port").catch(() => null);
-        const detail =
-          detectedPort && detectedPort !== config.neo_http_port
-            ? t("notifications.connectionNotFound.neo.detectedPortMessage", {
-                configuredPort: config.neo_http_port,
-                detectedPort,
-              })
-            : null;
-        applyConnectionState("neo", found, detail, false);
-      });
+      void services.connections
+        .checkNeo(config.neo_http_enabled, config.neo_http_port)
+        .then(async (found) => {
+          const detectedPort = found
+            ? null
+            : await services.connections.findNeoPort().catch(() => null);
+          const detail =
+            detectedPort && detectedPort !== config.neo_http_port
+              ? t("notifications.connectionNotFound.neo.detectedPortMessage", {
+                  configuredPort: config.neo_http_port,
+                  detectedPort,
+                })
+              : null;
+          applyConnectionState("neo", found, detail, false);
+        });
     } else {
       applyConnectionState("neo", true);
     }
 
     if (config.vrc_osc_micmute) {
-      void invoke<boolean>("check_vrchat_oscquery_available", {
-        vrcOscMicmute: config.vrc_osc_micmute,
-      }).then((found) => applyConnectionState("vrchat", found, null, false));
+      void services.connections
+        .checkVrchat(config.vrc_osc_micmute)
+        .then((found) => applyConnectionState("vrchat", found, null, false));
     } else {
       applyConnectionState("vrchat", true);
     }
@@ -320,121 +301,116 @@ export const useAppState = ({
     config?.neo_http_port,
     config?.vrc_osc_micmute,
     nativeConnectionsDisabled,
+    services.connections,
   ]);
 
   useEffect(() => {
-    const unlistenCallbacks = [
-      listen<RecognitionStatus>("parapper://status", (event) => {
-        setRuntime((current) => ({
-          ...current,
-          status: event.payload,
-          running: recognitionIsRunning(event.payload),
-          starting: false,
-        }));
-      }),
-      listen<InputLevelEvent | number>("parapper://input-level", (event) => {
-        const level = parseInputLevelEvent(event.payload);
-        setRuntime((current) => ({
-          ...current,
-          inputLevel: Math.max(0, level.postGain),
-          inputLevelBeforeGain: Math.max(0, level.preGain),
-        }));
-      }),
-      listen<VadStateEvent>("parapper://vad-state", (event) => {
-        setRuntime((current) => ({
-          ...current,
-          vadState: event.payload,
-        }));
-      }),
-      listen<RecognizedTextEvent>("parapper://recognized-text", (event) => {
-        const eventConfig = configRef.current;
-        setRecognizedTexts((texts) =>
-          trimRecognizedTextLog(
-            upsertRecognizedText(texts, event.payload),
-            configuredLimit(
-              eventConfig?.recognition_log_limit,
-              DEFAULT_RECOGNITION_LOG_LIMIT,
+    const applyEvent = (event: FrontendEvent) => {
+      switch (event.type) {
+        case "recognitionStatusChanged":
+          setRuntime((current) =>
+            applyRecognitionStatus(current, event.payload),
+          );
+          break;
+        case "inputLevelChanged": {
+          const level = parseInputLevelEvent(event.payload);
+          setRuntime((current) =>
+            applyInputLevel(
+              current,
+              level.preGain,
+              level.postGain,
+              level.sourceId,
             ),
-            configuredLimit(
-              eventConfig?.debug_audio_log_limit,
-              DEFAULT_DEBUG_AUDIO_LOG_LIMIT,
-            ),
-          ),
-        );
-      }),
-      listen<TranslationTextEvent>("parapper://translated-text", (event) => {
-        setTranslatedTexts((texts) =>
-          upsertTranslatedText(texts, event.payload),
-        );
-      }),
-      listen<SpeechRequestEvent>("parapper://speech-request", (event) => {
-        const eventConfig = configRef.current;
-        if (
-          event.payload.source_kind !== "translation" ||
-          event.payload.status !== "accepted" ||
-          event.payload.elapsed_millis < TRANSLATION_SPEECH_DELAY_WARNING_MS ||
-          !eventConfig ||
-          !canNeoMainTextDelayTranslationSpeech(eventConfig)
-        ) {
-          return;
+          );
+          break;
         }
-        setRuntime((current) => ({
-          ...current,
-          translationSpeechDelaySuspected: true,
-        }));
-      }),
-      listen<AsrMissingEvent>("parapper://asr-missing", (event) => {
-        setRuntime((current) => ({
-          ...current,
-          asrWarning: event.payload.reason,
-        }));
-      }),
-      listen<OscMuteStateEvent>("parapper://osc-mute-state", (event) => {
-        setRuntime((current) => ({
-          ...current,
-          oscMuted: event.payload.muted,
-        }));
-      }),
-      listen<ConnectionStateEvent>("parapper://connection-state", (event) => {
-        const { target, found, detail } = event.payload;
-        applyConnectionState(target, found, detail);
-      }),
-      listen<ModelDownloadProgress>(
-        "parapper://model-download-progress",
-        (event) => {
-          setModel((current) => ({
+        case "vadStateChanged":
+          setRuntime((current) => ({ ...current, vadState: event.payload }));
+          break;
+        case "recognizedTextReceived": {
+          const eventConfig = configRef.current;
+          setRecognizedTexts((texts) =>
+            trimRecognizedTextLog(
+              upsertRecognizedText(texts, event.payload),
+              configuredLimit(
+                eventConfig?.recognition_log_limit,
+                DEFAULT_RECOGNITION_LOG_LIMIT,
+              ),
+              configuredLimit(
+                eventConfig?.debug_audio_log_limit,
+                DEFAULT_DEBUG_AUDIO_LOG_LIMIT,
+              ),
+            ),
+          );
+          break;
+        }
+        case "translationTextReceived":
+          setTranslatedTexts((texts) =>
+            upsertTranslatedText(texts, event.payload),
+          );
+          break;
+        case "speechRequestReceived": {
+          const eventConfig = configRef.current;
+          if (
+            event.payload.source_kind === "translation" &&
+            event.payload.status === "accepted" &&
+            event.payload.elapsed_millis >=
+              TRANSLATION_SPEECH_DELAY_WARNING_MS &&
+            eventConfig &&
+            canNeoMainTextDelayTranslationSpeech(eventConfig)
+          ) {
+            setRuntime((current) => ({
+              ...current,
+              translationSpeechDelaySuspected: true,
+            }));
+          }
+          break;
+        }
+        case "asrMissing":
+          setRuntime((current) => ({
             ...current,
-            progress: event.payload,
+            asrWarning: event.payload.reason,
           }));
-        },
-      ),
-      listen<ParapperErrorPayload>("parapper://error", (event) => {
-        const payload = normalizeParapperErrorPayload(event.payload);
-        setRuntime((current) => ({ ...current, lastError: payload }));
-        notifyParapperIssue(payload);
-      }),
-    ];
+          break;
+        case "oscMuteStateChanged":
+          setRuntime((current) => ({
+            ...current,
+            oscMuted: event.payload.muted,
+          }));
+          break;
+        case "connectionStateChanged": {
+          const { target, found, detail } = event.payload;
+          applyConnectionState(target, found, detail);
+          break;
+        }
+        case "modelDownloadProgressed":
+          setModel((current) =>
+            applyModelDownloadProgress(current, event.payload),
+          );
+          break;
+        case "applicationError": {
+          const payload = normalizeParapperErrorPayload(event.payload);
+          setRuntime((current) => ({ ...current, lastError: payload }));
+          notifyParapperIssue(payload);
+          break;
+        }
+      }
+    };
+
+    const unsubscribe = services.events.subscribe(applyEvent);
 
     return () => {
-      void Promise.all(unlistenCallbacks).then((callbacks) => {
-        callbacks.forEach((unlisten) => unlisten());
-      });
+      void unsubscribe.then((stop) => stop());
     };
-  }, [configRef, t]);
+  }, [configRef, services.events, t]);
 
   const downloadSelectedModels = async (downloadConfig = config) => {
-    if (!downloadConfig) return null;
+    if (!downloadConfig || !capabilities.modelManagement) return null;
 
-    setModel((current) => ({
-      ...current,
-      downloading: true,
-      progress: null,
-    }));
+    setModel((current) => setModelDownloading(current, true));
     try {
-      const downloaded = await invoke<ModelStatus>("download_models", {
-        config: downloadConfig,
-      });
-      setModel((current) => ({ ...current, status: downloaded }));
+      const downloaded = await services.models.download(downloadConfig);
+      setModel((current) => applyModelStatus(current, downloaded));
       setRuntime((current) => ({ ...current, asrWarning: null }));
       notifications.show({
         title: t("notifications.modelsPrepared.title"),
@@ -442,39 +418,107 @@ export const useAppState = ({
       });
       return downloaded;
     } finally {
-      setModel((current) => ({ ...current, downloading: false }));
+      setModel((current) => setModelDownloading(current, false));
     }
   };
 
   const downloadLocalTranslationModel = async (
     localTranslationModel: LocalTranslationModel,
   ) => {
-    setModel((current) => ({
-      ...current,
-      downloading: true,
-      progress: null,
-    }));
+    if (!capabilities.modelManagement) return false;
+    setModel((current) => setModelDownloading(current, true));
     try {
-      const installed = await invoke<boolean>(
-        "download_local_translation_model",
-        {
-          model: localTranslationModel,
-        },
+      const installed = await services.models.downloadLocalTranslation(
+        localTranslationModel,
       );
-      const status = await invoke<ModelStatus>("get_model_status");
-      setModel((current) => ({ ...current, status }));
+      const status = await services.models.status();
+      setModel((current) => applyModelStatus(current, status));
       return installed;
     } catch (error) {
       notifyParapperIssue(normalizeParapperErrorPayload(error));
       return false;
     } finally {
-      setModel((current) => ({ ...current, downloading: false }));
+      setModel((current) => setModelDownloading(current, false));
+    }
+  };
+
+  const refreshRecognitionStatus = async () => {
+    const status = await services.recognition.status();
+    setRuntime((current) => applyRecognitionStatus(current, status));
+    return status;
+  };
+
+  const stopRecognition = async () => {
+    try {
+      const status = await services.recognition.stop();
+      setRuntime((current) => applyRecognitionStatus(current, status));
+    } catch (error) {
+      const payload = normalizeParapperErrorPayload(error);
+      setRuntime((current) => ({ ...current, lastError: payload }));
+      notifyParapperIssue(payload);
+      await refreshRecognitionStatus();
+    }
+  };
+
+  const startRecognition = async () => {
+    if (!capabilities.recognitionControl) return;
+    setRuntime((current) => ({ ...current, starting: true }));
+    try {
+      const status = await services.recognition.start();
+      setRuntime((current) => applyRecognitionStatus(current, status));
+    } catch (error) {
+      const payload = normalizeParapperErrorPayload(error);
+      setRuntime((current) => ({
+        ...current,
+        running: false,
+        starting: false,
+        lastError: payload,
+      }));
+      notifyParapperIssue(payload);
+      try {
+        await services.recognition.stop();
+      } finally {
+        await refreshRecognitionStatus();
+      }
+    }
+  };
+
+  const stopSpeech = async (port: number) => {
+    if (!capabilities.speechControl) return;
+    try {
+      await services.speech.stop(port);
+    } catch (error) {
+      notifications.show({
+        title: t("notifications.speechStopFailed.title"),
+        message: String(error),
+        color: notificationColor.error,
+      });
+    }
+  };
+
+  const ensureLoopbackPermission = async () => {
+    if (!capabilities.systemAudioPermission) return;
+    try {
+      const granted = await services.audioDevices.requestLoopbackPermission();
+      if (!granted) {
+        notifications.show({
+          title: t("notifications.loopbackPermissionRequired.title"),
+          message: t("notifications.loopbackPermissionRequired.message"),
+          color: notificationColor.warn,
+        });
+        await services.audioDevices.openLoopbackPermissionSettings();
+      }
+    } catch (error) {
+      notifications.show({
+        title: t("notifications.loopbackPermissionRequired.title"),
+        message: String(error),
+        color: notificationColor.error,
+      });
     }
   };
 
   return {
     runtime,
-    setRuntime,
     model,
     ui,
     setUi,
@@ -490,6 +534,10 @@ export const useAppState = ({
     refreshAudioDevices,
     downloadSelectedModels,
     downloadLocalTranslationModel,
+    startRecognition,
+    stopRecognition,
+    stopSpeech,
+    ensureLoopbackPermission,
   };
 };
 
@@ -507,102 +555,17 @@ const canNeoMainTextDelayTranslationSpeech = (config: ParapperConfig) =>
 
 const parseInputLevelEvent = (
   payload: InputLevelEvent | number,
-): { preGain: number; postGain: number } => {
+): { preGain: number; postGain: number; sourceId: string | null } => {
   if (typeof payload === "number") {
     return {
       preGain: payload,
       postGain: payload,
+      sourceId: null,
     };
   }
   return {
     preGain: payload.pre_gain_level,
     postGain: payload.post_gain_level,
+    sourceId: payload.source_id ?? null,
   };
-};
-
-const upsertRecognizedText = (
-  texts: RecognizedTextEvent[],
-  event: RecognizedTextEvent,
-) => {
-  if (event.update_mode !== "replace") {
-    return [...texts, event];
-  }
-
-  const index = texts.findIndex((text) =>
-    sameRecognitionSource(text.source, event.source),
-  );
-  if (index < 0) {
-    return [...texts, event];
-  }
-
-  const current = texts[index];
-  if (!shouldReplaceRecognitionEvent(current, event)) {
-    return texts;
-  }
-
-  return texts.map((text, currentIndex) =>
-    currentIndex === index ? event : text,
-  );
-};
-
-const upsertTranslatedText = (
-  texts: TranslationTextEvent[],
-  event: TranslationTextEvent,
-) => {
-  if (event.update_mode !== "replace") {
-    return [...texts, event];
-  }
-
-  const index = texts.findIndex(
-    (text) =>
-      sameRecognitionSource(text.source, event.source) &&
-      text.target_lang === event.target_lang,
-  );
-  if (index < 0) {
-    return [...texts, event];
-  }
-
-  const current = texts[index];
-  if (!shouldReplaceRecognitionEvent(current, event)) {
-    return texts;
-  }
-
-  return texts.map((text, currentIndex) =>
-    currentIndex === index ? event : text,
-  );
-};
-
-const sameRecognitionSource = (
-  left: { turn_session_id: number; turn_id: number },
-  right: { turn_session_id: number; turn_id: number },
-) =>
-  left.turn_session_id === right.turn_session_id &&
-  left.turn_id === right.turn_id;
-
-const shouldReplaceRecognitionEvent = (
-  current: {
-    source: {
-      turn_revision: number;
-      output_sequence: number;
-    };
-    is_final: boolean;
-  },
-  incoming: {
-    source: {
-      turn_revision: number;
-      output_sequence: number;
-    };
-    is_final: boolean;
-  },
-) => {
-  if (current.is_final && !incoming.is_final) {
-    return false;
-  }
-  if (incoming.source.turn_revision !== current.source.turn_revision) {
-    return incoming.source.turn_revision > current.source.turn_revision;
-  }
-  if (incoming.source.output_sequence !== current.source.output_sequence) {
-    return incoming.source.output_sequence > current.source.output_sequence;
-  }
-  return incoming.is_final || !current.is_final;
 };

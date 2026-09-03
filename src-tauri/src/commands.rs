@@ -14,6 +14,7 @@ use crate::{
         detect_ync_text_input_http_port, query_current_mute_state, ync_text_input_http_available,
     },
     error_event::{ErrorSeverity, ParapperErrorPayload, ParapperErrorType, parapper_error_payload},
+    hotword_reading,
     model::{
         ModelStatus, ensure_local_translation_model_downloaded, ensure_models_downloaded,
         local_translation_model_is_installed,
@@ -21,6 +22,16 @@ use crate::{
     recognition::RecognitionStatus,
     state::{AppState, TranslationHttpListenerStatus},
 };
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri::command receives an owned String from the JS invoke payload"
+)]
+pub fn suggest_hotword_readings(surface: String) -> CommandResult<Vec<String>> {
+    hotword_reading::suggest_hotword_readings(&surface)
+        .map_err(|detail| command_error(ParapperErrorType::Config, detail))
+}
 
 type CommandResult<T> = Result<T, ParapperErrorPayload>;
 
@@ -296,10 +307,6 @@ pub fn start_translation_http_listener(
 }
 
 #[tauri::command]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "tauri::command requires State<'_, T> by value"
-)]
 pub async fn stop_translation_http_listener(
     state: State<'_, AppState>,
 ) -> CommandResult<TranslationHttpListenerStatus> {

@@ -4,7 +4,7 @@ use crate::{
     audio::ASR_SAMPLE_RATE,
     config::ParapperConfig,
     delivery::RecognizedTextOutput,
-    recognition::control::events::{ConnectionStateEvent, ConnectionTarget, RecognizedTextEvent},
+    recognition::events::{ConnectionStateEvent, ConnectionTarget, RecognizedTextEvent},
 };
 
 use super::{DispatchContext, RecognizedTextSink};
@@ -19,6 +19,9 @@ impl RecognizedTextSink for UiEventSink {
     }
 
     fn deliver(&self, ctx: &DispatchContext<'_>, output: &RecognizedTextOutput) {
+        if !ctx.route.gui_enabled {
+            return;
+        }
         emit_recognized_text_to_ui(ctx, output);
     }
 }

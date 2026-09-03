@@ -56,8 +56,26 @@ export const asrModelOptions: {
     capability: "completion_and_interim",
   },
   {
+    labelKey: "options.asrModel.nemotronSpeechStreamingEn80MsInt8",
+    value: "nemotron_speech_streaming_en_0_6b_80ms_int8",
+    language: "english",
+    supportedPrecisions: ["int8"],
+    defaultPrecision: "int8",
+    implementation: "nemotron",
+    capability: "interim_only",
+  },
+  {
     labelKey: "options.asrModel.nemotronSpeechStreamingEn160MsInt8",
     value: "nemotron_speech_streaming_en_0_6b_160ms_int8",
+    language: "english",
+    supportedPrecisions: ["int8"],
+    defaultPrecision: "int8",
+    implementation: "nemotron",
+    capability: "interim_only",
+  },
+  {
+    labelKey: "options.asrModel.nemotronSpeechStreamingEn320MsInt8",
+    value: "nemotron_speech_streaming_en_0_6b_320ms_int8",
     language: "english",
     supportedPrecisions: ["int8"],
     defaultPrecision: "int8",
@@ -74,8 +92,35 @@ export const asrModelOptions: {
     capability: "interim_only",
   },
   {
+    labelKey: "options.asrModel.nemotronSpeechStreamingEn1120MsInt8",
+    value: "nemotron_speech_streaming_en_0_6b_1120ms_int8",
+    language: "english",
+    supportedPrecisions: ["int8"],
+    defaultPrecision: "int8",
+    implementation: "nemotron",
+    capability: "interim_only",
+  },
+  {
+    labelKey: "options.asrModel.nemotron35AsrStreaming80MsInt8",
+    value: "nemotron_3_5_asr_streaming_0_6b_80ms_int8",
+    language: "multilingual",
+    supportedPrecisions: ["int8"],
+    defaultPrecision: "int8",
+    implementation: "nemotron",
+    capability: "interim_only",
+  },
+  {
     labelKey: "options.asrModel.nemotron35AsrStreaming160MsInt8",
     value: "nemotron_3_5_asr_streaming_0_6b_160ms_int8",
+    language: "multilingual",
+    supportedPrecisions: ["int8"],
+    defaultPrecision: "int8",
+    implementation: "nemotron",
+    capability: "interim_only",
+  },
+  {
+    labelKey: "options.asrModel.nemotron35AsrStreaming320MsInt8",
+    value: "nemotron_3_5_asr_streaming_0_6b_320ms_int8",
     language: "multilingual",
     supportedPrecisions: ["int8"],
     defaultPrecision: "int8",
@@ -91,14 +136,19 @@ export const asrModelOptions: {
     implementation: "nemotron",
     capability: "interim_only",
   },
+  {
+    labelKey: "options.asrModel.nemotron35AsrStreaming1120MsInt8",
+    value: "nemotron_3_5_asr_streaming_0_6b_1120ms_int8",
+    language: "multilingual",
+    supportedPrecisions: ["int8"],
+    defaultPrecision: "int8",
+    implementation: "nemotron",
+    capability: "interim_only",
+  },
 ];
 
 export const completionAsrModelOptions = asrModelOptions.filter(
   (option) => option.capability === "completion_and_interim",
-);
-
-export const interimOnlyAsrModelOptions = asrModelOptions.filter(
-  (option) => option.capability === "interim_only",
 );
 
 export const asrModelOption = (model: AsrModel) =>

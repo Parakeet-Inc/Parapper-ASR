@@ -10,8 +10,6 @@ runtime_dir="src-tauri/macos-runtime"
 mkdir -p "$runtime_dir"
 
 for library in \
-  libsherpa-onnx-c-api.dylib \
-  libsherpa-onnx-cxx-api.dylib \
   libonnxruntime.dylib \
   libonnxruntime.1.24.4.dylib
 do
@@ -27,8 +25,7 @@ do
     "target/${TARGET_TRIPLE:-}/debug" \
     "target/${CARGO_BUILD_TARGET:-}/release" \
     "target/${CARGO_BUILD_TARGET:-}/debug" \
-    "target/sherpa-onnx-prebuilt/${SHERPA_PREBUILT_DIR:-}/lib" \
-    "target/sherpa-onnx-prebuilt/sherpa-onnx-v1.12.39-osx-arm64-shared-lib/lib"
+    "target/onnxruntime-prebuilt/${ONNXRUNTIME_PREBUILT_DIR:-onnxruntime-osx-arm64-1.24.4}/lib"
   do
     if [ -f "$source_dir/$library" ]; then
       source_path="$source_dir/$library"

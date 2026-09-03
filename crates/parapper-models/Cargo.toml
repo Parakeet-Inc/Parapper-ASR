@@ -1,0 +1,61 @@
+[package]
+name = "parapper-models"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+native-models = [
+    "asr-ort",
+    "mt-ort",
+    "nc-ort",
+    "td-morph",
+    "td-namo-ort",
+    "tts-supertonic-ort",
+    "vad-ort",
+]
+native-ort = ["dep:ort"]
+asr-ort = [
+    "native-ort",
+    "dep:onnx-protobuf",
+    "dep:protobuf",
+    "dep:realfft",
+    "dep:serde_json",
+]
+mt-ort = ["native-ort", "dep:tokenizers"]
+nc-ort = ["native-ort", "dep:num-complex", "dep:realfft"]
+td-morph = ["dep:vibrato-rkyv"]
+td-namo-ort = ["native-ort", "dep:tokenizers"]
+tts-supertonic-ort = [
+    "native-ort",
+    "dep:ndarray",
+    "dep:rand",
+    "dep:regex",
+    "dep:serde_json",
+]
+vad-ort = ["native-ort"]
+real-asr-tests = ["asr-ort"]
+
+[dependencies]
+anyhow.workspace = true
+ndarray = { version = "0.17.2", optional = true }
+num-complex = { version = "0.4.6", optional = true }
+onnx-protobuf = { version = "0.2.3", optional = true }
+ort = { version = "=2.0.0-rc.12", features = ["load-dynamic"], optional = true }
+protobuf = { version = "=3.4.0", optional = true }
+rand = { version = "0.9.0", optional = true }
+realfft = { version = "3.5.0", optional = true }
+regex = { version = "1.10", optional = true }
+serde.workspace = true
+serde_json = { workspace = true, optional = true }
+tokenizers = { version = "=0.22.2", default-features = false, features = ["onig"], optional = true }
+unicode-normalization = "0.1"
+vibrato-rkyv = { version = "0.7.8", default-features = false, features = ["legacy"], optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true

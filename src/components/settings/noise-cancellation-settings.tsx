@@ -1,9 +1,13 @@
 import { Select, Stack, Switch } from "@mantine/core";
 import { useTranslation } from "react-i18next";
 
-import { buildNoiseCancellationModelOptions } from "../../lib/settings-options";
+import {
+  buildNoiseCancellationModelOptions,
+  buildNoiseCancellationTargetOptions,
+} from "../../lib/settings-options";
 import type {
   NoiseCancellationModel,
+  NoiseCancellationTarget,
   ParapperConfig,
 } from "../../lib/types";
 import { DisabledReasonTooltip, settingLabel } from "../ui/display";
@@ -23,6 +27,7 @@ export const NoiseCancellationSettings: React.FC<
   const { t } = useTranslation();
   const runtimeLockedTooltip = t("tooltip.runtimeLocked");
   const noiseCancellationModelOptions = buildNoiseCancellationModelOptions(t);
+  const noiseCancellationTargetOptions = buildNoiseCancellationTargetOptions(t);
 
   return (
     <Stack gap="sm">
@@ -47,6 +52,33 @@ export const NoiseCancellationSettings: React.FC<
             }
           />
         </Stack>
+      </DisabledReasonTooltip>
+      <DisabledReasonTooltip
+        disabled={runtimeLocked || !config.noise_cancellation_enabled}
+        label={
+          runtimeLocked
+            ? runtimeLockedTooltip
+            : t("noiseCancellationSettings.target.disabledTooltip")
+        }
+      >
+        <Select
+          label={settingLabel(
+            t("noiseCancellationSettings.target.label"),
+            t("noiseCancellationSettings.target.description"),
+          )}
+          data={noiseCancellationTargetOptions}
+          value={config.noise_cancellation_target}
+          allowDeselect={false}
+          disabled={runtimeLocked || !config.noise_cancellation_enabled}
+          onChange={(value) => {
+            if (value === "vad_only" || value === "vad_and_asr") {
+              onUpdateConfig(
+                "noise_cancellation_target",
+                value as NoiseCancellationTarget,
+              );
+            }
+          }}
+        />
       </DisabledReasonTooltip>
       <DisabledReasonTooltip
         disabled={runtimeLocked || !config.noise_cancellation_enabled}

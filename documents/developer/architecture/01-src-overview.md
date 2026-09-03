@@ -10,8 +10,10 @@ flowchart LR
 
     state --> config[config\nsettings]
     state --> audio[audio\ninput/output devices]
-    state --> recognition[recognition\nspeech to RecognizedTextOutput]
-    state --> streaming[streaming_recognition\nWebSocket PCM input/output]
+    state --> recognition[recognition\ndesktop STT adapters]
+    recognition --> sttEngine[parapper-stt-engine\nSegment / Turn / ASR policy]
+    recognition --> streaming[recognition::streaming\nWebSocket host adapter]
+    sttEngine --> models[parapper-models\nAI model implementations]
     state --> model[model\nmodel status/download]
 
     recognition --> delivery[delivery\nfanout]
@@ -32,17 +34,18 @@ flowchart LR
     classDef edge fill:#f3ecff,stroke:#8764ba,color:#2b174f
 
     class ui,commands app
-    class state,config,model core
+    class state,config,model,sttEngine,models core
     class audio,playback,connect io
     class recognition,delivery,translation,synthesis edge
 ```
 
 ## 読み方
 
-- `recognition` は音声を文字起こしして `RecognizedTextOutput` を作るまで。
+- `recognition` はaudio/network入力、native model構築、worker、Tauri event/outputをTauri-freeなSTT engineへ接続するdesktop adapter。
+- `parapper-stt-engine` はSegment/Turn、ASR request、streaming lifecycle、route、timeoutを所有し、`parapper-models`はORT Sessionとmodel固有のdecoder/cacheを所有する。
 - `delivery` は認識結果を UI、翻訳、音声合成、外部連携へ配る境界。
 - `connect` は外部 API / plugin HTTP / OSC などの接続先仕様を扱う。
 - `audio` は入力と出力の両方で参照されるため、矢印が集まりやすい。
-- `streaming_recognition` は `/ws/recognition` のbinary PCM入力とversioned Turn event出力を扱い、物理入力と同じrecognition pipelineを利用する。
+- `recognition::streaming` は`parapper-stt-server`をdesktopへ接続し、`/ws/recognition`のbinary PCM入力とversioned Turn event出力を物理入力と同じrecognition pipelineへ流す。
 - `translation` / `synthesis` はmanagerからlocal/YNCを直接分岐せず、能力別provider registryで解決する。
 - 外部向け翻訳HTTP listenerは`AppState`が所有し、ユーザーの明示Start / Stopでのみportを開く。内部翻訳の有効化とは独立している。

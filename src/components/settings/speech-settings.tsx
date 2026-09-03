@@ -23,7 +23,6 @@ import {
   modelOptionsWithAny,
   translationLanguageOptions,
 } from "../../lib/mapping-options";
-import { isMacOs } from "../../lib/platform";
 import type {
   AudioDeviceInfo,
   AsrModel,
@@ -42,6 +41,8 @@ type SpeechSettingsProps = {
   outputAudioDevices: AudioDeviceInfo[];
   runtimeLocked: boolean;
   neoReadAloudDelaySuspected: boolean;
+  yncPluginAvailable: boolean;
+  onFetchNeoVoices: (port: number) => Promise<string[]>;
   onUpdateConfig: <K extends keyof ParapperConfig>(
     key: K,
     value: ParapperConfig[K],
@@ -53,11 +54,14 @@ export const SpeechSettings: React.FC<SpeechSettingsProps> = ({
   outputAudioDevices,
   runtimeLocked,
   neoReadAloudDelaySuspected,
+  yncPluginAvailable,
+  onFetchNeoVoices,
   onUpdateConfig,
 }) => {
   const { t } = useTranslation();
   const { voiceList, refreshingVoiceList, refreshVoiceList } = useVoiceList(
     config.ync_plugin_port,
+    onFetchNeoVoices,
   );
   const shouldShowNeoReadAloudWarning =
     neoReadAloudDelaySuspected &&
@@ -85,6 +89,7 @@ export const SpeechSettings: React.FC<SpeechSettingsProps> = ({
         outputAudioDevices={outputAudioDevices}
         voiceList={voiceList}
         refreshingVoiceList={refreshingVoiceList}
+        yncPluginAvailable={yncPluginAvailable}
         modelLocked={runtimeLocked}
         onRefreshVoiceList={() => void refreshVoiceList()}
         onChange={(speechMappings) =>
@@ -108,18 +113,6 @@ const buildVoiceOptions = (
 
 const localTtsVoiceOptions: { value: LocalTtsVoice; label: string }[] = [
   {
-    value: "vits_piper_en_US_kristin_medium",
-    label: "piper-voices en_US Kristin medium",
-  },
-  {
-    value: "vits_piper_en_US_john_medium",
-    label: "piper-voices en_US John medium",
-  },
-  {
-    value: "vits_piper_en_US_norman_medium",
-    label: "piper-voices en_US Norman medium",
-  },
-  {
     value: "supertonic_2_onnx",
     label: "Supertonic 2 ONNX",
   },
@@ -133,7 +126,7 @@ const localTtsVoiceOptions: { value: LocalTtsVoice; label: string }[] = [
   },
 ];
 
-const defaultLocalTtsVoice: LocalTtsVoice = "vits_piper_en_US_kristin_medium";
+const defaultLocalTtsVoice: LocalTtsVoice = "supertonic_2_onnx";
 const supertonic2TtsVoice: LocalTtsVoice = "supertonic_2_onnx";
 const supertonic3TtsVoice: LocalTtsVoice = "supertonic_3_onnx";
 const supertonic3QuantizedTtsVoice: LocalTtsVoice =
@@ -205,6 +198,7 @@ const SpeechMappingRows: React.FC<{
   voiceList: string[];
   refreshingVoiceList: boolean;
   modelLocked: boolean;
+  yncPluginAvailable: boolean;
   onRefreshVoiceList: () => void;
   onChange: (mappings: SpeechMapping[]) => void;
 }> = ({
@@ -214,6 +208,7 @@ const SpeechMappingRows: React.FC<{
   voiceList,
   refreshingVoiceList,
   modelLocked,
+  yncPluginAvailable,
   onRefreshVoiceList,
   onChange,
 }) => {
@@ -229,7 +224,6 @@ const SpeechMappingRows: React.FC<{
   );
   const defaultTranslationTarget =
     config.translation_mappings[0]?.target_lang ?? "en";
-  const yncPluginAvailable = !isMacOs();
   const backendOptions = [
     ...(yncPluginAvailable
       ? [

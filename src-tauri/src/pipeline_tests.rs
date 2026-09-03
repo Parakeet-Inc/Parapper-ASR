@@ -4,9 +4,9 @@ use tauri::Listener;
 
 use crate::{
     config::{
-        AsrLanguage, AsrModel, LocalTranslationModel, NeoSendTiming, ParapperConfig, SpeechBackend,
-        SpeechMapping, SpeechSourceKind, TranslationBackend, TranslationLanguage,
-        TranslationMapping,
+        AsrLanguage, AsrModel, DeliveryRouteSnapshot, LocalTranslationModel, NeoSendTiming,
+        ParapperConfig, SpeechBackend, SpeechMapping, SpeechSourceKind, TranslationBackend,
+        TranslationLanguage, TranslationMapping,
     },
     connect::test_support::{TimedMockHttpServer, json_response, request_id_from_plugin_request},
     delivery::{
@@ -16,6 +16,12 @@ use crate::{
 
 fn source_meta() -> RecognitionSourceMeta {
     RecognitionSourceMeta {
+        identity: parapper_stt_engine::SourceIdentitySnapshot::new(
+            "channel-1".into(),
+            "Speaker 1".to_string(),
+            "interface-1".to_string(),
+            Some(0),
+        ),
         turn_session_id: 1,
         turn_id: 1,
         turn_revision: 0,
@@ -69,7 +75,7 @@ fn speech_mapping(id: &str, source_kind: SpeechSourceKind) -> SpeechMapping {
 
 #[test]
 #[cfg(not(target_os = "macos"))]
-fn recognized_text_pipeline_dispatches_translation_and_speech_sinks() {
+fn recognized_text_pipeline_dispatches_only_profile_selected_translation_and_speech_sinks() {
     let builder = tauri::Builder::default();
     #[cfg(any(windows, target_os = "linux"))]
     let builder = builder.any_thread();
@@ -77,11 +83,23 @@ fn recognized_text_pipeline_dispatches_translation_and_speech_sinks() {
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .expect("test app should build");
     let handle = app.handle().clone();
+    let (recognized_sender, recognized_receiver) = mpsc::channel::<String>();
+    let _recognized_event_id = handle.listen("parapper://recognized-text", move |event| {
+        recognized_sender
+            .send(event.payload().to_string())
+            .expect("recognized event should be recorded");
+    });
     let (translated_sender, translated_receiver) = mpsc::channel::<String>();
     let _event_id = handle.listen("parapper://translated-text", move |event| {
         translated_sender
             .send(event.payload().to_string())
             .expect("translated event should be recorded");
+    });
+    let (speech_sender, speech_receiver) = mpsc::channel::<String>();
+    let _speech_event_id = handle.listen("parapper://speech-request", move |event| {
+        speech_sender
+            .send(event.payload().to_string())
+            .expect("speech event should be recorded");
     });
 
     let server = TimedMockHttpServer::start_until_idle(
@@ -112,10 +130,10 @@ fn recognized_text_pipeline_dispatches_translation_and_speech_sinks() {
             json_response(&body)
         },
     );
-    let config = pipeline_test_config(server.port());
+    let (config, route) = profile_scoped_pipeline_config(server.port());
     let output = recognized_output("turn-pipeline-1", "翻訳して読み上げます。");
 
-    dispatch_recognized_text(&handle, &config, None, &output);
+    dispatch_recognized_text(&handle, &config, None, &output, &route);
 
     let mut translated_ids = Vec::new();
     let mut speech_ids = Vec::new();
@@ -130,10 +148,6 @@ fn recognized_text_pipeline_dispatches_translation_and_speech_sinks() {
     }
     speech_ids.sort();
 
-    let translated_event = translated_receiver
-        .recv_timeout(Duration::from_secs(1))
-        .expect("translated event should be emitted");
-
     assert_eq!(translated_ids, vec!["turn-pipeline-1"]);
     assert_eq!(
         speech_ids,
@@ -142,14 +156,22 @@ fn recognized_text_pipeline_dispatches_translation_and_speech_sinks() {
             "speech-turn-pipeline-1|en-speech-translation",
         ]
     );
-    assert!(translated_event.contains(r#""source_recognition_id":"turn-pipeline-1""#));
-    assert!(translated_event.contains(r#""target_lang":"en""#));
-    assert!(translated_event.contains(r#""translated_text":"translated turn-pipeline-1""#));
-    let translated_event: serde_json::Value =
-        serde_json::from_str(&translated_event).expect("translated event should be JSON");
-    assert_eq!(translated_event["source"]["turn_session_id"], 1);
-    assert_eq!(translated_event["source"]["turn_id"], 1);
-    assert_eq!(translated_event["source"]["output_sequence"], 1);
+    let translated_event = recv_json_event(&translated_receiver, "translated");
+    let recognized_event = recv_json_event(&recognized_receiver, "recognized");
+    let speech_events = (0..2)
+        .map(|_| recv_json_event(&speech_receiver, "speech"))
+        .collect::<Vec<_>>();
+    assert_eq!(translated_event["source_recognition_id"], "turn-pipeline-1");
+    assert_eq!(translated_event["target_lang"], "en");
+    assert_eq!(
+        translated_event["translated_text"],
+        "translated turn-pipeline-1"
+    );
+    assert_source_metadata(
+        [&recognized_event, &translated_event]
+            .into_iter()
+            .chain(speech_events.iter()),
+    );
     assert!(
         server
             .try_recv_request(Duration::from_millis(500))
@@ -157,6 +179,33 @@ fn recognized_text_pipeline_dispatches_translation_and_speech_sinks() {
         "recognized text pipeline must not send extra translation or speech requests"
     );
     server.join();
+}
+
+fn recv_json_event(receiver: &mpsc::Receiver<String>, event_name: &str) -> serde_json::Value {
+    let payload = receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap_or_else(|_| panic!("{event_name} event should be emitted"));
+    serde_json::from_str(&payload).unwrap_or_else(|_| panic!("{event_name} event should be JSON"))
+}
+
+fn assert_source_metadata<'a>(events: impl IntoIterator<Item = &'a serde_json::Value>) {
+    let expected_source = serde_json::json!({
+        "identity": {
+            "source_id": "channel-1",
+            "speaker_label": "Speaker 1",
+            "capture_endpoint_id": "interface-1",
+            "channel_index": 0,
+        },
+        "turn_session_id": 1,
+        "turn_id": 1,
+        "turn_revision": 0,
+        "output_sequence": 1,
+        "segment_id": 1,
+        "previous_segment_id": null,
+    });
+    for event in events {
+        assert_eq!(event["source"], expected_source);
+    }
 }
 
 fn pipeline_test_config(port: u16) -> ParapperConfig {
@@ -178,4 +227,25 @@ fn pipeline_test_config(port: u16) -> ParapperConfig {
         ],
         ..ParapperConfig::default()
     }
+}
+
+fn profile_scoped_pipeline_config(port: u16) -> (ParapperConfig, DeliveryRouteSnapshot) {
+    let mut config = pipeline_test_config(port);
+    config.translation.mappings.insert(
+        0,
+        TranslationMapping {
+            backend: TranslationBackend::Local,
+            ..translation_mapping("translate-excluded", "en")
+        },
+    );
+    config.speech.mappings.push(SpeechMapping {
+        ..speech_mapping("speech-excluded", SpeechSourceKind::Recognition)
+    });
+    let mut route = config.legacy_delivery_route();
+    route.translation_mapping_ids = vec!["translate-en".to_owned()];
+    route.speech_mapping_ids = vec![
+        "speech-recognition".to_owned(),
+        "speech-translation".to_owned(),
+    ];
+    (config, route)
 }

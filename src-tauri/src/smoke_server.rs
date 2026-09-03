@@ -7,7 +7,7 @@
 
 use std::net::SocketAddr;
 
-use crate::streaming_recognition::StreamingRecognitionServer;
+use crate::recognition::StreamingRecognitionServer;
 
 /// Owns a running smoke-test listener. Dropping it stops the listener.
 pub struct SmokeServerHandle {
@@ -15,6 +15,7 @@ pub struct SmokeServerHandle {
 }
 
 impl SmokeServerHandle {
+    #[must_use]
     pub fn local_addr(&self) -> SocketAddr {
         self.server.local_addr()
     }
@@ -24,6 +25,10 @@ impl SmokeServerHandle {
 /// recognition backend: the first audio chunk in a session produces
 /// `speech.started` plus one fixed `turn.partial`, and a graceful
 /// `session.stop` produces one fixed `turn.final`.
+///
+/// # Errors
+///
+/// Returns an error when the loopback listener cannot bind or its worker thread cannot start.
 pub fn start(bind_addr: SocketAddr, api_key: Option<String>) -> anyhow::Result<SmokeServerHandle> {
     let server = StreamingRecognitionServer::start_smoke(bind_addr, api_key)?;
     Ok(SmokeServerHandle { server })

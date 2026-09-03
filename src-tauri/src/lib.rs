@@ -71,6 +71,12 @@ macro_rules! parapper_config_field {
     ($config:ident, asr_num_threads, $value:expr) => {
         $config.asr.num_threads = $value;
     };
+    ($config:ident, asr_mode, $value:expr) => {
+        $config.asr.mode = $value;
+    };
+    ($config:ident, asr_hotwords_enabled, $value:expr) => {
+        $config.asr.hotwords_enabled = $value;
+    };
     ($config:ident, asr_normalize_input_audio, $value:expr) => {
         $config.asr.normalize_input_audio = $value;
     };
@@ -140,6 +146,9 @@ macro_rules! parapper_config_field {
     ($config:ident, noise_cancellation_model, $value:expr) => {
         $config.noise_cancellation.model = $value;
     };
+    ($config:ident, noise_cancellation_target, $value:expr) => {
+        $config.noise_cancellation.target = $value;
+    };
     ($config:ident, vrc_osc_micmute, $value:expr) => {
         $config.vrc.osc_micmute = $value;
     };
@@ -158,16 +167,17 @@ mod audio;
 #[cfg(not(test))]
 mod commands;
 mod config;
+pub use config::{AsrLanguage, AsrMode, AsrModel, AsrPrecision};
 mod connect;
 mod delivery;
 mod error_event;
+mod hotword_reading;
 mod model;
 mod playback;
 mod recognition;
 #[cfg(feature = "smoke-server")]
 pub mod smoke_server;
 mod state;
-mod streaming_recognition;
 mod synthesis;
 mod translation;
 
@@ -222,6 +232,7 @@ pub fn run() {
         })
         .invoke_handler(generate_handler![
             commands::get_config,
+            commands::suggest_hotword_readings,
             commands::open_external_url,
             commands::save_config,
             commands::reset_config,

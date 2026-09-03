@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use cpal::{
     Device, HostId, SampleFormat, StreamConfig,
     traits::{DeviceTrait, HostTrait},
@@ -78,6 +78,46 @@ pub(crate) fn selected_input_device(config: &ParapperConfig) -> Result<InputDevi
     }
 
     default_input_device()
+}
+
+/// Resolves an explicitly configured input endpoint without falling back to a
+/// default device or another capture mode.
+pub(crate) fn selected_input_device_strict(host: &str, id: &str) -> Result<InputDeviceSelection> {
+    resolve_input_device_strict_with(
+        host,
+        id,
+        LOOPBACK_SUPPORTED,
+        find_input_device,
+        find_loopback_device,
+    )
+}
+
+fn resolve_input_device_strict_with<T, FindPhysical, FindLoopback>(
+    host: &str,
+    id: &str,
+    loopback_supported: bool,
+    mut find_physical: FindPhysical,
+    mut find_loopback: FindLoopback,
+) -> Result<T>
+where
+    FindPhysical: FnMut(&str, &str) -> Result<Option<T>>,
+    FindLoopback: FnMut(&str, &str) -> Result<Option<T>>,
+{
+    let selected = if let Some(real_host) = loopback_source_host(host) {
+        if !loopback_supported {
+            bail!(
+                "explicit input endpoint uses unsupported loopback capture: host={host}, id={id}"
+            );
+        }
+        find_loopback(real_host, id)
+    } else {
+        find_physical(host, id)
+    }
+    .with_context(|| format!("failed to resolve explicit input endpoint: host={host}, id={id}"))?;
+
+    selected.ok_or_else(|| {
+        anyhow::anyhow!("explicit input endpoint was not found: host={host}, id={id}")
+    })
 }
 
 pub(crate) fn selected_output_device_by_id(
@@ -356,4 +396,147 @@ fn normalize_device_name(name: &str) -> String {
 #[cfg(not(target_os = "windows"))]
 fn normalize_device_name(name: &str) -> String {
     name.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::resolve_input_device_strict_with;
+
+    #[test]
+    fn strict_resolver_returns_exact_physical_match_without_trying_loopback() {
+        let physical_calls = Cell::new(0);
+        let loopback_calls = Cell::new(0);
+
+        let selected = resolve_input_device_strict_with(
+            "WASAPI",
+            "mic-1",
+            true,
+            |host, id| {
+                physical_calls.set(physical_calls.get() + 1);
+                assert_eq!((host, id), ("WASAPI", "mic-1"));
+                Ok(Some("physical"))
+            },
+            |_host, _id| {
+                loopback_calls.set(loopback_calls.get() + 1);
+                Ok(Some("loopback"))
+            },
+        )
+        .expect("exact physical endpoint should resolve");
+
+        assert_eq!(selected, "physical");
+        assert_eq!(physical_calls.get(), 1);
+        assert_eq!(loopback_calls.get(), 0);
+    }
+
+    #[test]
+    fn strict_resolver_reports_physical_miss_without_trying_another_resolver() {
+        let physical_calls = Cell::new(0);
+        let loopback_calls = Cell::new(0);
+
+        let error = resolve_input_device_strict_with::<(), _, _>(
+            "WASAPI",
+            "missing-mic",
+            true,
+            |_host, _id| {
+                physical_calls.set(physical_calls.get() + 1);
+                Ok(None)
+            },
+            |_host, _id| {
+                loopback_calls.set(loopback_calls.get() + 1);
+                Ok(None)
+            },
+        )
+        .expect_err("a missing explicit endpoint must fail");
+
+        assert_eq!(
+            error.to_string(),
+            "explicit input endpoint was not found: host=WASAPI, id=missing-mic"
+        );
+        assert_eq!(physical_calls.get(), 1);
+        assert_eq!(loopback_calls.get(), 0);
+    }
+
+    #[test]
+    fn strict_resolver_returns_exact_loopback_match_without_trying_physical() {
+        let physical_calls = Cell::new(0);
+        let loopback_calls = Cell::new(0);
+
+        let selected = resolve_input_device_strict_with(
+            "WASAPI (Loopback)",
+            "speakers-1",
+            true,
+            |_host, _id| {
+                physical_calls.set(physical_calls.get() + 1);
+                Ok(Some("physical"))
+            },
+            |host, id| {
+                loopback_calls.set(loopback_calls.get() + 1);
+                assert_eq!((host, id), ("WASAPI", "speakers-1"));
+                Ok(Some("loopback"))
+            },
+        )
+        .expect("exact loopback endpoint should resolve");
+
+        assert_eq!(selected, "loopback");
+        assert_eq!(physical_calls.get(), 0);
+        assert_eq!(loopback_calls.get(), 1);
+    }
+
+    #[test]
+    fn strict_resolver_reports_loopback_miss_without_trying_physical() {
+        let physical_calls = Cell::new(0);
+        let loopback_calls = Cell::new(0);
+
+        let error = resolve_input_device_strict_with::<(), _, _>(
+            "WASAPI (Loopback)",
+            "missing-speakers",
+            true,
+            |_host, _id| {
+                physical_calls.set(physical_calls.get() + 1);
+                Ok(None)
+            },
+            |_host, _id| {
+                loopback_calls.set(loopback_calls.get() + 1);
+                Ok(None)
+            },
+        )
+        .expect_err("a missing explicit loopback endpoint must fail");
+
+        assert_eq!(
+            error.to_string(),
+            "explicit input endpoint was not found: host=WASAPI (Loopback), id=missing-speakers"
+        );
+        assert_eq!(physical_calls.get(), 0);
+        assert_eq!(loopback_calls.get(), 1);
+    }
+
+    #[test]
+    fn strict_resolver_rejects_unsupported_loopback_without_calling_resolvers() {
+        let physical_calls = Cell::new(0);
+        let loopback_calls = Cell::new(0);
+
+        let error = resolve_input_device_strict_with::<(), _, _>(
+            "ALSA (Loopback)",
+            "speakers-1",
+            false,
+            |_host, _id| {
+                physical_calls.set(physical_calls.get() + 1);
+                Ok(None)
+            },
+            |_host, _id| {
+                loopback_calls.set(loopback_calls.get() + 1);
+                Ok(None)
+            },
+        )
+        .expect_err("unsupported loopback must fail explicitly");
+
+        assert_eq!(
+            error.to_string(),
+            "explicit input endpoint uses unsupported loopback capture: host=ALSA (Loopback), id=speakers-1"
+        );
+        assert_eq!(physical_calls.get(), 0);
+        assert_eq!(loopback_calls.get(), 0);
+    }
 }

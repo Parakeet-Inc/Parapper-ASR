@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "corpora": {
+    "common_voice_train_latin": {
+      "fixed_hotwords": [
+        "Slovenia",
+        "Corelli",
+        "Tony Hawk's",
+        "Roundcube",
+        "Bonifacio Calero Santana",
+        "Reading in the Championship"
+      ],
+      "parakeet_tdt_token_ids": {
+        "Slovenia": [0, 1216, 514, 1169, 542, 593, 539, 397],
+        "Corelli": [0, 514, 663, 542, 1216, 1216, 539],
+        "Tony Hawk's": [0, 514, 593, 1401, 2, 0, 397, 1376, 813, 0, 691],
+        "Roundcube": [0, 514, 1091, 593, 1007, 582, 1091, 806, 542],
+        "Bonifacio Calero Santana": [0, 514, 593, 539, 1371, 397, 582, 539, 514, 2, 0, 397, 1216, 542, 663, 514, 2, 0, 397, 593, 523, 397, 593, 397],
+        "Reading in the Championship": [0, 542, 397, 1007, 539, 593, 962, 2, 539, 593, 2, 523, 1333, 542, 2, 0, 1333, 397, 400, 983, 539, 514, 593, 691, 1333, 539, 983]
+      },
+      "parakeet_tdt_reading_paths": {
+        "Slovenia": [
+          { "reading": "すろべにあ", "token_ids": [55, 177, 373, 6, 54] },
+          { "reading": "スロベニア", "token_ids": [29, 135, 334, 212, 60] }
+        ],
+        "Corelli": [
+          { "reading": "これっり", "token_ids": [156, 68, 18] },
+          { "reading": "コレッリ", "token_ids": [136, 138, 137, 70] }
+        ],
+        "Tony Hawk's": [
+          { "reading": "とにーほーくす", "token_ids": [10, 6, 20, 332, 20, 26, 55] },
+          { "reading": "トニーホークス", "token_ids": [73, 212, 20, 637, 20, 71, 29] }
+        ],
+        "Roundcube": [
+          { "reading": "らうんどきゅーぶ", "token_ids": [41, 49, 33, 209, 36, 1093, 20, 283] },
+          { "reading": "ラウンドキューブ", "token_ids": [72, 157, 23, 80, 163, 3070, 20, 223] }
+        ],
+        "Bonifacio Calero Santana": [
+          { "reading": "ぼにふぁしおかれろさんたな", "token_ids": [664, 6, 464, 1017, 16, 28, 13, 74, 177, 46, 22, 15] },
+          { "reading": "ボニファシオカレロサンタナ", "token_ids": [366, 212, 603, 155, 206, 94, 138, 135, 152, 23, 146, 102] }
+        ],
+        "Reading in the Championship": [
+          { "reading": "りーでぃんぐいんざちゃんぴおんしっぷ", "token_ids": [18, 20, 9, 2234, 33, 585, 12, 33, 423, 248, 1573, 28, 33, 16, 68, 1793] },
+          { "reading": "リーディングインザチャンピオンシップ", "token_ids": [216, 702, 291, 346, 644, 742, 23, 296, 206, 23, 155, 459] }
+        ]
+      },
+      "oracle_by_utterance": {
+        "common_voice_ja_26001349": ["Slovenia"],
+        "common_voice_ja_26067750": ["Corelli"],
+        "common_voice_ja_26038021": ["Tony Hawk's"],
+        "common_voice_ja_26068107": ["Roundcube"],
+        "common_voice_ja_26001264": ["Bonifacio Calero Santana"],
+        "common_voice_ja_26134743": ["Reading in the Championship"]
+      }
+    }
+  }
+}

@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+    time::Instant,
+};
 
 use anyhow::{Context, Result};
 use tauri::AppHandle;
@@ -7,10 +11,33 @@ use crate::{
     config::{LocalTranslationModel, TranslationLanguage},
     connect::YncPluginClient,
     delivery::common::TranslationProviderId,
+    model::local_translation_model_dir,
     processing::ProcessingContext,
 };
 
-use super::local;
+fn local_translation_service() -> Arc<parapper_models::mt::LocalTranslationService> {
+    static SERVICE: OnceLock<Arc<parapper_models::mt::LocalTranslationService>> = OnceLock::new();
+    Arc::clone(
+        SERVICE.get_or_init(|| Arc::new(parapper_models::mt::LocalTranslationService::new())),
+    )
+}
+
+pub(super) fn translate_local_text(
+    handle: &AppHandle,
+    local_model: LocalTranslationModel,
+    source_lang: TranslationLanguage,
+    target_lang: TranslationLanguage,
+    source_text: &str,
+) -> Result<String> {
+    let model_dir = local_translation_model_dir(handle, local_model)?;
+    local_translation_service().translate(
+        model_dir,
+        local_model,
+        source_lang,
+        target_lang,
+        source_text,
+    )
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct TranslationTask {
@@ -96,7 +123,7 @@ impl TranslationProvider for InProcessTranslationProvider {
             .as_ref()
             .context("local translation requires an application handle for model loading")?;
         let started_at = Instant::now();
-        let text = local::translate_text(
+        let text = translate_local_text(
             handle,
             self.model,
             task.source_lang,

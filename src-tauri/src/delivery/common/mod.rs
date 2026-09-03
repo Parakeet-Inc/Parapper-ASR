@@ -6,6 +6,7 @@ pub(crate) use mapping::{
     SpeechTextSource, TranslationProviderId, TranslationTarget, speech_mapping_matches,
     translation_targets_for_mappings,
 };
+#[cfg(test)]
 pub(crate) use text_format::{continuing_turn_text, finalize_turn_text, join_turn_segments};
 pub(crate) use timing::speech_timing_allows;
 #[cfg(test)]

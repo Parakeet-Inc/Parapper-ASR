@@ -1,6 +1,6 @@
 # 使い方
 
-<!-- cspell:words ENJP parapper Silero ReazonSpeech sherpa OSCQuery Piper Supertonic Namo Nemotron UNAS Kristin VOICEVOX VRSNS CTC -->
+<!-- cspell:words ENJP parapper Silero ReazonSpeech OSCQuery Supertonic Namo Nemotron UNAS VOICEVOX VRSNS CTC -->
 
 Parapper の初回セットアップ、日常の操作、各設定項目を説明します。外部アプリから音声を送る開発者は [開発者向け文書](./developer/README.md) も参照してください。
 
@@ -127,7 +127,6 @@ MTタブ上部の「翻訳HTTPサーバーをローカルに立てる」は、Pa
   - **話者**:
     - ゆかコネNEOの場合: ゆかコネNEOに登録されているVOICEVOXなどの話者から選びます。「話者一覧を取得」ボタンで最新の一覧を取得できます。
     - ローカルTTSの場合: 以下のエンジンから言語と話者を選びます。
-      - Piper voices: 英語のみ(Kristin / John / Norman)
       - Supertonic 2: 英語・韓国語・スペイン語・ポルトガル語・フランス語
       - Supertonic 3: 上記に加えて日本語など、計23言語に対応
       - Supertonic3 (quantized): Supertonic 3と同じ23言語・10話者に対応

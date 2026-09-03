@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use crate::config::{
     AsrLanguage, AsrModel, LocalTranslationModel, SpeechBackend, SpeechMapping, SpeechSourceKind,
     TranslationBackend, TranslationLanguage, TranslationMapping,
+    translation_language_from_asr_language,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,7 +73,7 @@ pub(crate) fn translation_targets_for_mappings(
 ) -> Vec<TranslationTarget> {
     let Some(source_lang) = detected_language
         .and_then(TranslationLanguage::from_code)
-        .or_else(|| TranslationLanguage::from_asr_language(source_language))
+        .or_else(|| translation_language_from_asr_language(source_language))
     else {
         return Vec::new();
     };

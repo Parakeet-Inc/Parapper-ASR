@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "kind": "streaming",
+  "reference": {
+    "oracle": "pinned_nvidia_python",
+    "nemo_commit": "b331a34885986ec879ca7acb62d955e7af71c015",
+    "model_repository": "nvidia/nemotron-speech-streaming-en-0.6b",
+    "model_revision": "ebe59e5a817142986528bbbee5dba8db7b38ed50",
+    "runtime": "onnxruntime-1.24.4",
+    "decoding_strategy": "NVIDIA RNNT greedy, production streaming ONNX",
+    "parameters": {
+      "max_symbols_per_frame": 10
+    }
+  },
+  "input": {
+    "sha256": "6bc58a4efdf20daac252b6b1502632601a71efe0308f6757dc1eda34891a7e4f",
+    "sample_rate_hz": 16000,
+    "samples": 106000,
+    "chunk_samples": 2560,
+    "model_dir": "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
+  },
+  "output": {
+    "text": "After early nightfall, the yellow lamps would light up here and there the squalid quarter of the brothels",
+    "token_ids": [
+      62, 398, 547, 76, 43, 115, 959, 84, 961, 5, 38, 942, 529, 36, 88, 597, 7,
+      127, 36, 115, 189, 77, 6, 33, 5, 6, 5, 9, 155, 46, 71, 246, 37, 118, 29,
+      5, 362, 450, 820
+    ],
+    "timestamps": [
+      2, 2, 9, 9, 15, 15, 18, 18, 24, 24, 28, 28, 28, 29, 29, 29, 32, 32, 36,
+      36, 37, 42, 42, 43, 46, 46, 56, 57, 57, 58, 60, 63, 63, 64, 65, 66, 70,
+      70, 73
+    ],
+    "partials": [
+      "",
+      "",
+      "",
+      "",
+      "After",
+      "After",
+      "After",
+      "After early",
+      "After early",
+      "After early",
+      "After early",
+      "After early nightfall",
+      "After early nightfall",
+      "After early nightfall",
+      "After early nightfall, the",
+      "After early nightfall, the",
+      "After early nightfall, the",
+      "After early nightfall, the",
+      "After early nightfall, the yellow lamps would",
+      "After early nightfall, the yellow lamps would",
+      "After early nightfall, the yellow lamps would",
+      "After early nightfall, the yellow lamps would light up",
+      "After early nightfall, the yellow lamps would light up",
+      "After early nightfall, the yellow lamps would light up",
+      "After early nightfall, the yellow lamps would light up",
+      "After early nightfall, the yellow lamps would light up here and there",
+      "After early nightfall, the yellow lamps would light up here and there",
+      "After early nightfall, the yellow lamps would light up here and there",
+      "After early nightfall, the yellow lamps would light up here and there",
+      "After early nightfall, the yellow lamps would light up here and there",
+      "After early nightfall, the yellow lamps would light up here and there",
+      "After early nightfall, the yellow lamps would light up here and there",
+      "After early nightfall, the yellow lamps would light up here and there the squalid",
+      "After early nightfall, the yellow lamps would light up here and there the squalid",
+      "After early nightfall, the yellow lamps would light up here and there the squalid",
+      "After early nightfall, the yellow lamps would light up here and there the squalid quarter of the",
+      "After early nightfall, the yellow lamps would light up here and there the squalid quarter of the",
+      "After early nightfall, the yellow lamps would light up here and there the squalid quarter of the",
+      "After early nightfall, the yellow lamps would light up here and there the squalid quarter of the",
+      "After early nightfall, the yellow lamps would light up here and there the squalid quarter of the brothels",
+      "After early nightfall, the yellow lamps would light up here and there the squalid quarter of the brothels",
+      "After early nightfall, the yellow lamps would light up here and there the squalid quarter of the brothels"
+    ],
+    "encoder_frames": 77,
+    "window_frames": 65,
+    "shift_frames": 56,
+    "prompt_id": null
+  }
+}

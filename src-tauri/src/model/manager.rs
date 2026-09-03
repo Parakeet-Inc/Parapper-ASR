@@ -1,8 +1,7 @@
 use std::{
     fs,
-    io::{Read, Write},
+    io::Read,
     path::{Component, Path, PathBuf},
-    time::{Duration, SystemTime},
 };
 
 use anyhow::{Context, Result};
@@ -12,26 +11,24 @@ use sha2::{Digest, Sha256};
 use tar::Archive;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::{fs::File, io::AsyncWriteExt};
-use vibrato_rkyv::LoadMode;
 
 use super::catalog::{
     ALL_ASR_MODELS, ALL_LOCAL_TRANSLATION_MODELS, ALL_NAMO_TURN_DETECTOR_MODELS,
     ALL_NOISE_CANCELLATION_MODELS, FileIntegrity, NamoTurnDetectorModel, VAD_MODEL_URL,
-    VIBRATO_MODEL_MAGIC, asr_model_archive_name, asr_model_base_url, asr_model_dir_name,
-    asr_model_required_file_names, language_id_model_base_url, language_id_model_dir_name,
-    language_id_model_files, local_translation_model_base_url, local_translation_model_dir_name,
+    asr_model_archive_integrity, asr_model_archive_name, asr_model_base_url, asr_model_dir_name,
+    asr_model_file_integrity, asr_model_required_file_names, language_id_model_base_url,
+    language_id_model_dir_name, language_id_model_files, local_translation_model_base_url,
+    local_translation_model_dir_name, local_translation_model_file_base_url,
     local_translation_model_file_integrity, local_translation_model_required_file_names,
-    local_tts_model_archive_name, local_tts_model_base_url, local_tts_model_file_integrity,
-    local_tts_model_required_dir_names, local_tts_model_required_file_names,
-    namo_turn_detector_base_url, namo_turn_detector_dir_name, namo_turn_detector_files,
-    noise_cancellation_model_base_url, noise_cancellation_model_dir_name,
-    noise_cancellation_model_required_file_names, supertonic_tts_model_base_url,
-    vibrato_unidic_archive_integrity, vibrato_unidic_archive_name, vibrato_unidic_archive_url,
-    vibrato_unidic_dir_name, vibrato_unidic_expanded_integrity,
+    local_tts_model_file_integrity, local_tts_model_required_dir_names,
+    local_tts_model_required_file_names, namo_turn_detector_base_url, namo_turn_detector_dir_name,
+    namo_turn_detector_files, noise_cancellation_model_base_url, noise_cancellation_model_dir_name,
+    noise_cancellation_model_required_file_names, reazon_static_embedding_base_url,
+    reazon_static_embedding_file_integrity, supertonic_tts_model_base_url,
 };
 use crate::config::{
-    ALL_LOCAL_TTS_VOICES, AsrModel, AsrPrecision, LocalTranslationModel, LocalTtsFamily,
-    LocalTtsVoice, NoiseCancellationModel, ParapperConfig, SpeechBackend, TranslationBackend,
+    ALL_LOCAL_TTS_VOICES, AsrMode, AsrModel, AsrPrecision, LocalTranslationModel, LocalTtsVoice,
+    NoiseCancellationModel, ParapperConfig, SpeechBackend, TranslationBackend,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,14 +59,6 @@ impl ModelAssetStatus {
             path: path.display().to_string(),
         }
     }
-
-    fn new_with_preparing(path: &Path, installed: bool, preparing: bool) -> Self {
-        Self {
-            installed,
-            preparing,
-            path: path.display().to_string(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,15 +80,16 @@ struct DownloadTarget {
     integrity: Option<FileIntegrity>,
 }
 
+const MODEL_ARCHIVE_SHA256_MARKER: &str = ".parapper-archive-sha256";
+const BUILT_IN_JAPANESE_MORPH_DICTIONARY: &str = "built-in:unidic-cwj-3_1_1";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DownloadTargetKind {
     File,
     LocalFile,
     TarBz2Directory,
-    TarZstdJapaneseMorphDirectory,
 }
 
-const STALE_EXTRACTION_MARKER_AGE: Duration = Duration::from_secs(60 * 60 * 6);
 pub fn models_root(handle: &AppHandle) -> Result<PathBuf> {
     Ok(handle.path().app_data_dir()?.join("models"))
 }
@@ -110,14 +100,6 @@ pub fn vad_model_path_from_root(root: &Path) -> PathBuf {
 
 pub fn vad_model_path(handle: &AppHandle) -> Result<PathBuf> {
     Ok(vad_model_path_from_root(&models_root(handle)?))
-}
-
-pub fn japanese_morph_model_dir_from_root(root: &Path) -> PathBuf {
-    root.join(vibrato_unidic_dir_name())
-}
-
-pub fn japanese_morph_dictionary_paths_from_root(root: &Path) -> Vec<PathBuf> {
-    japanese_morph_dictionary_paths_from_model_dir(&japanese_morph_model_dir_from_root(root))
 }
 
 pub fn default_asr_model_dir_from_root(root: &Path, model: AsrModel) -> PathBuf {
@@ -228,32 +210,35 @@ pub fn model_status(handle: &AppHandle, config: &ParapperConfig) -> Result<Model
 
 pub fn model_status_from_root(root: &Path, config: &ParapperConfig) -> ModelStatus {
     let vad_path = vad_model_path_from_root(root);
-    let asr_path = asr_model_dir_from_root(root, config);
-    let asr_installed = config.required_asr_models().into_iter().all(|model| {
-        let model_dir = if model == config.asr.model {
-            asr_path.clone()
-        } else {
-            default_asr_model_dir_from_root(root, model)
-        };
-        asr_model_installed_for(&model_dir, model, config.asr_precision_for(model))
+    let stt_runtime_configs = stt_runtime_configs_for_model_management(config);
+    let asr_path = asr_model_dir_from_root(root, &stt_runtime_configs[0]);
+    let asr_installed = stt_runtime_configs.iter().all(|runtime_config| {
+        runtime_config
+            .required_asr_models()
+            .into_iter()
+            .all(|model| {
+                let model_dir = asr_model_dir_for_runtime_config(root, runtime_config, model);
+                asr_model_installed_for(&model_dir, model, runtime_config.asr_precision_for(model))
+                    && (!reazon_accuracy_assets_required(runtime_config, model)
+                        || reazon_accuracy_assets_installed(&model_dir))
+                    && (!parakeet_accuracy_assets_required(runtime_config, model)
+                        || parakeet_accuracy_assets_installed(&model_dir))
+            })
     });
+    let noise_cancellation_models = noise_cancellation_models_for_stt_runtime(&stt_runtime_configs);
     ModelStatus {
         root_dir: root.display().to_string(),
         vad: ModelAssetStatus::new(&vad_path, vad_path.is_file()),
         asr: ModelAssetStatus::new(&asr_path, asr_installed),
-        japanese_morph: japanese_morph_required(config).then(|| {
-            let path = japanese_morph_model_dir_from_root(root);
-            let installed = japanese_morph_model_installed(&path);
-            ModelAssetStatus::new_with_preparing(
-                &path,
-                installed,
-                !installed && japanese_morph_model_preparing(&path),
-            )
-        }),
-        language_id: config.asr.multilingual_enabled.then(|| {
-            let path = language_id_model_dir_from_root(root);
-            ModelAssetStatus::new(&path, language_id_model_installed(&path))
-        }),
+        japanese_morph: japanese_morph_required(config)
+            .then(|| ModelAssetStatus::new(Path::new(BUILT_IN_JAPANESE_MORPH_DICTIONARY), true)),
+        language_id: stt_runtime_configs
+            .iter()
+            .any(|runtime_config| runtime_config.asr.multilingual_enabled)
+            .then(|| {
+                let path = language_id_model_dir_from_root(root);
+                ModelAssetStatus::new(&path, language_id_model_installed(&path))
+            }),
         turn_detectors: if config.uses_namo_turn_detector() {
             namo_turn_detector_models_for_config(config)
                 .into_iter()
@@ -279,12 +264,14 @@ pub fn model_status_from_root(root: &Path, config: &ParapperConfig) -> ModelStat
                 ModelAssetStatus::new(&path, local_translation_models_installed(root, &models))
             })
         },
-        noise_cancellation: config.noise_cancellation.enabled.then(|| {
-            let path =
-                noise_cancellation_model_dir_from_root(root, config.noise_cancellation.model);
+        noise_cancellation: (!noise_cancellation_models.is_empty()).then(|| {
+            let path = noise_cancellation_model_dir_from_root(root, noise_cancellation_models[0]);
             ModelAssetStatus::new(
                 &path,
-                noise_cancellation_model_installed(&path, config.noise_cancellation.model),
+                noise_cancellation_models.iter().all(|model| {
+                    let path = noise_cancellation_model_dir_from_root(root, *model);
+                    noise_cancellation_model_installed(&path, *model)
+                }),
             )
         }),
     }
@@ -297,11 +284,6 @@ pub fn any_model_installed_in(root: &Path) -> bool {
 
     let vad_installed = vad_model_path_from_root(root).is_file();
     if vad_installed {
-        return true;
-    }
-
-    let japanese_morph_dir = japanese_morph_model_dir_from_root(root);
-    if japanese_morph_model_installed(&japanese_morph_dir) {
         return true;
     }
 
@@ -362,7 +344,7 @@ pub async fn ensure_models_downloaded(
 
     let mut targets = Vec::new();
     push_vad_download_targets(&mut targets, handle)?;
-    push_japanese_morph_download_targets(&mut targets, &root, config)?;
+    // Japanese Morph and hotword-reading dictionaries are compiled into the application.
     push_asr_download_targets(&mut targets, handle, config)?;
     push_language_id_download_targets(&mut targets, &root, config)?;
     push_namo_download_targets(&mut targets, &root, config)?;
@@ -376,31 +358,6 @@ pub async fn ensure_models_downloaded(
     }
 
     model_status(handle, config)
-}
-
-fn push_japanese_morph_download_targets(
-    targets: &mut Vec<DownloadTarget>,
-    root: &Path,
-    config: &ParapperConfig,
-) -> Result<()> {
-    if !japanese_morph_required(config) {
-        return Ok(());
-    }
-
-    let model_dir = japanese_morph_model_dir_from_root(root);
-    if japanese_morph_model_installed(&model_dir) {
-        return Ok(());
-    }
-    fs::create_dir_all(root)
-        .with_context(|| format!("Failed to create model root dir: {}", root.display()))?;
-    targets.push(DownloadTarget {
-        url: vibrato_unidic_archive_url().to_string(),
-        output_path: model_dir,
-        file_name: vibrato_unidic_archive_name().to_string(),
-        kind: DownloadTargetKind::TarZstdJapaneseMorphDirectory,
-        integrity: Some(vibrato_unidic_archive_integrity()),
-    });
-    Ok(())
 }
 
 fn push_vad_download_targets(targets: &mut Vec<DownloadTarget>, handle: &AppHandle) -> Result<()> {
@@ -427,32 +384,104 @@ fn push_asr_download_targets(
     handle: &AppHandle,
     config: &ParapperConfig,
 ) -> Result<()> {
+    push_asr_download_targets_from_root(targets, &models_root(handle)?, config)
+}
+
+fn push_asr_download_targets_from_root(
+    targets: &mut Vec<DownloadTarget>,
+    root: &Path,
+    config: &ParapperConfig,
+) -> Result<()> {
+    for runtime_config in stt_runtime_configs_for_model_management(config) {
+        push_asr_download_targets_for_runtime_config(targets, root, &runtime_config)?;
+    }
+    Ok(())
+}
+
+fn push_asr_download_targets_for_runtime_config(
+    targets: &mut Vec<DownloadTarget>,
+    root: &Path,
+    config: &ParapperConfig,
+) -> Result<()> {
     for model in config.required_asr_models() {
-        let asr_path = asr_model_dir_for(handle, config, model)?;
+        let asr_path = asr_model_dir_for_runtime_config(root, config, model);
         fs::create_dir_all(&asr_path)
             .with_context(|| format!("Failed to create ASR model dir: {}", asr_path.display()))?;
         let precision = config.asr_precision_for(model);
-        if asr_model_installed_for(&asr_path, model, precision) {
-            continue;
+        if !asr_model_installed_for(&asr_path, model, precision) {
+            if let Some(archive_name) = asr_model_archive_name(model) {
+                let archive_already_scheduled = targets.iter().any(|target| {
+                    target.kind == DownloadTargetKind::TarBz2Directory
+                        && target.output_path == asr_path
+                });
+                if !archive_already_scheduled {
+                    targets.push(DownloadTarget {
+                        url: format!("{}/{}", asr_model_base_url(model), archive_name),
+                        output_path: asr_path.clone(),
+                        file_name: archive_name,
+                        kind: DownloadTargetKind::TarBz2Directory,
+                        integrity: asr_model_archive_integrity(model),
+                    });
+                }
+                continue;
+            }
+            push_missing_asr_file_targets(
+                targets,
+                &asr_path,
+                model,
+                asr_model_required_file_names(model, precision),
+            );
         }
-        if let Some(archive_name) = asr_model_archive_name(model) {
-            targets.push(DownloadTarget {
-                url: format!("{}/{}", asr_model_base_url(model), archive_name),
-                output_path: asr_path,
-                file_name: archive_name,
-                kind: DownloadTargetKind::TarBz2Directory,
-                integrity: None,
-            });
-            continue;
-        }
-        push_missing_file_targets(
-            targets,
-            &asr_path,
-            asr_model_required_file_names(model, precision),
-            asr_model_base_url(model),
-        );
+        push_reazon_accuracy_download_targets(targets, &asr_path, config, model);
+        push_parakeet_accuracy_download_targets(targets, &asr_path, config, model);
     }
     Ok(())
+}
+
+fn push_reazon_accuracy_download_targets(
+    targets: &mut Vec<DownloadTarget>,
+    asr_model_dir: &Path,
+    config: &ParapperConfig,
+    model: AsrModel,
+) {
+    if !reazon_accuracy_assets_required(config, model) {
+        return;
+    }
+    let model_dir =
+        asr_model_dir.join(parapper_models::asr::backend::REAZON_STATIC_EMBEDDING_DIR_NAME);
+    for file_name in parapper_models::asr::backend::REAZON_STATIC_EMBEDDING_REQUIRED_FILES {
+        let output_path = model_dir.join(file_name);
+        if output_path.is_file() || target_output_already_scheduled(targets, &output_path) {
+            continue;
+        }
+        targets.push(DownloadTarget {
+            url: format!(
+                "{}/{file_name}?download=true",
+                reazon_static_embedding_base_url()
+            ),
+            output_path,
+            file_name: (*file_name).to_owned(),
+            kind: DownloadTargetKind::File,
+            integrity: reazon_static_embedding_file_integrity(file_name),
+        });
+    }
+}
+
+fn push_parakeet_accuracy_download_targets(
+    targets: &mut Vec<DownloadTarget>,
+    asr_model_dir: &Path,
+    config: &ParapperConfig,
+    model: AsrModel,
+) {
+    if !parakeet_accuracy_assets_required(config, model) {
+        return;
+    }
+    push_missing_asr_file_targets(
+        targets,
+        asr_model_dir,
+        model,
+        parapper_models::asr::backend::parakeet_ja::HYBRID_REQUIRED_FILES,
+    );
 }
 
 fn push_language_id_download_targets(
@@ -460,7 +489,10 @@ fn push_language_id_download_targets(
     root: &Path,
     config: &ParapperConfig,
 ) -> Result<()> {
-    if !config.asr.multilingual_enabled {
+    if !stt_runtime_configs_for_model_management(config)
+        .iter()
+        .any(|runtime_config| runtime_config.asr.multilingual_enabled)
+    {
         return Ok(());
     }
 
@@ -512,6 +544,28 @@ fn push_missing_file_targets(
     push_missing_file_targets_with_query(targets, model_dir, file_names, base_url, true);
 }
 
+fn push_missing_asr_file_targets(
+    targets: &mut Vec<DownloadTarget>,
+    model_dir: &Path,
+    model: AsrModel,
+    file_names: &[&str],
+) {
+    let base_url = asr_model_base_url(model);
+    for file_name in file_names {
+        let output_path = model_dir.join(file_name);
+        if output_path.is_file() || target_output_already_scheduled(targets, &output_path) {
+            continue;
+        }
+        targets.push(DownloadTarget {
+            url: format!("{base_url}/{file_name}?download=true"),
+            output_path,
+            file_name: (*file_name).to_owned(),
+            kind: DownloadTargetKind::File,
+            integrity: asr_model_file_integrity(model, file_name),
+        });
+    }
+}
+
 fn push_missing_file_targets_with_query(
     targets: &mut Vec<DownloadTarget>,
     model_dir: &Path,
@@ -548,240 +602,53 @@ fn asr_model_installed_for(
     model: AsrModel,
     precision: AsrPrecision,
 ) -> bool {
-    asr_model_required_file_names(model, precision)
+    let required_files_present = asr_model_required_file_names(model, precision)
+        .iter()
+        .all(|file| model_dir.join(file).is_file());
+    required_files_present && current_nemotron_archive_installed(model_dir, model)
+}
+
+fn current_nemotron_archive_installed(model_dir: &Path, model: AsrModel) -> bool {
+    if !model.is_nemotron() {
+        return true;
+    }
+    let Some(expected) = asr_model_archive_integrity(model) else {
+        return false;
+    };
+    fs::read_to_string(model_dir.join(MODEL_ARCHIVE_SHA256_MARKER))
+        .is_ok_and(|value| value.trim() == expected.sha256)
+}
+
+fn reazon_accuracy_assets_required(config: &ParapperConfig, model: AsrModel) -> bool {
+    config.asr.mode == AsrMode::Accurate
+        && config.asr.model == AsrModel::ReazonSpeechK2V2
+        && model == AsrModel::ReazonSpeechK2V2
+}
+
+fn reazon_accuracy_assets_installed(asr_model_dir: &Path) -> bool {
+    let model_dir =
+        asr_model_dir.join(parapper_models::asr::backend::REAZON_STATIC_EMBEDDING_DIR_NAME);
+    parapper_models::asr::backend::REAZON_STATIC_EMBEDDING_REQUIRED_FILES
         .iter()
         .all(|file| model_dir.join(file).is_file())
+}
+
+fn parakeet_accuracy_assets_required(config: &ParapperConfig, model: AsrModel) -> bool {
+    config.asr.mode == AsrMode::Accurate
+        && config.asr.model == AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8
+        && model == AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8
+}
+
+fn parakeet_accuracy_assets_installed(asr_model_dir: &Path) -> bool {
+    parapper_models::asr::backend::parakeet_ja::HYBRID_REQUIRED_FILES
+        .iter()
+        .all(|file| asr_model_dir.join(file).is_file())
 }
 
 fn language_id_model_installed(model_dir: &std::path::Path) -> bool {
     language_id_model_files()
         .iter()
         .all(|file| model_dir.join(file).is_file())
-}
-
-fn japanese_morph_model_installed(model_dir: &Path) -> bool {
-    if let Err(err) = recover_interrupted_directory_replacement(model_dir) {
-        log::warn!(
-            "Failed to clean up interrupted Japanese morph dictionary replacement at {}: {err}",
-            model_dir.display()
-        );
-    }
-    japanese_morph_model_present_for_integrity(model_dir, vibrato_unidic_expanded_integrity())
-}
-
-fn japanese_morph_model_present_for_integrity(model_dir: &Path, expected: FileIntegrity) -> bool {
-    let dictionary_path = model_dir.join("system.dic");
-    japanese_morph_install_manifest_compatible(model_dir, expected)
-        && dictionary_path
-            .metadata()
-            .is_ok_and(|metadata| metadata.is_file() && metadata.len() == expected.size)
-}
-
-fn japanese_morph_model_installed_for_integrity(model_dir: &Path, expected: FileIntegrity) -> bool {
-    let dictionary_path = model_dir.join("system.dic");
-    japanese_morph_install_manifest_compatible(model_dir, expected)
-        && verify_file_integrity(
-            &dictionary_path,
-            expected,
-            "installed Japanese morph dictionary",
-        )
-        .is_ok()
-}
-
-fn japanese_morph_install_manifest_compatible(model_dir: &Path, expected: FileIntegrity) -> bool {
-    let Ok(contents) = fs::read(model_dir.join("manifest.json")) else {
-        return false;
-    };
-    let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&contents) else {
-        return false;
-    };
-    manifest
-        .get("schema_version")
-        .and_then(serde_json::Value::as_u64)
-        == Some(1)
-        && manifest
-            .get("dictionary_id")
-            .and_then(serde_json::Value::as_str)
-            == Some(vibrato_unidic_dir_name())
-        && manifest
-            .get("representation")
-            .and_then(serde_json::Value::as_str)
-            == Some("compact-raw")
-        && manifest
-            .get("feature_encoding")
-            .and_then(serde_json::Value::as_str)
-            == Some("[PP][S][F]")
-        && manifest
-            .pointer("/expanded_dictionary/size")
-            .and_then(serde_json::Value::as_u64)
-            == Some(expected.size)
-        && manifest
-            .pointer("/expanded_dictionary/sha256")
-            .and_then(serde_json::Value::as_str)
-            == Some(expected.sha256)
-}
-
-fn japanese_morph_model_preparing(model_dir: &Path) -> bool {
-    model_dir.with_extension("download").is_file()
-        || extraction_marker_is_active(&model_dir.with_extension("extracting"))
-}
-
-fn extraction_marker_is_active(path: &Path) -> bool {
-    if !path.is_dir() {
-        return false;
-    }
-    let Ok(metadata) = fs::metadata(path) else {
-        return false;
-    };
-    let Ok(modified) = metadata.modified() else {
-        return true;
-    };
-    let Ok(age) = SystemTime::now().duration_since(modified) else {
-        return true;
-    };
-    if age <= STALE_EXTRACTION_MARKER_AGE {
-        return true;
-    }
-    if let Err(err) = fs::remove_dir_all(path) {
-        log::warn!(
-            "Failed to remove stale model extraction marker {}: {err}",
-            path.display()
-        );
-    }
-    false
-}
-
-fn japanese_morph_dictionary_paths_from_model_dir(model_dir: &Path) -> Vec<PathBuf> {
-    vec![model_dir.join("system.dic")]
-}
-
-fn materialize_rkyv_japanese_morph_dictionary(model_dir: &Path) -> Result<()> {
-    let compressed_path = model_dir.join("system.dic.zst");
-    if !compressed_path.is_file() {
-        anyhow::bail!(
-            "Japanese morph archive did not contain expected dictionary: {}",
-            compressed_path.display()
-        );
-    }
-    let output_path = model_dir.join("system.dic");
-    materialize_zstd_japanese_morph_dictionary_as_rkyv(&compressed_path, &output_path)?;
-    Ok(())
-}
-
-fn materialize_zstd_japanese_morph_dictionary_as_rkyv(
-    compressed_path: &Path,
-    output_path: &Path,
-) -> Result<()> {
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "Failed to create Japanese morph dictionary dir: {}",
-                parent.display()
-            )
-        })?;
-    }
-    let temporary_path = output_path.with_extension("dic.transcoding");
-    decompress_zstd_dictionary_to_file(compressed_path, &temporary_path)?;
-    if japanese_morph_dictionary_compatible(&temporary_path)? {
-        fs::rename(&temporary_path, output_path).with_context(|| {
-            format!(
-                "Failed to move rkyv Japanese morph dictionary from {} to {}",
-                temporary_path.display(),
-                output_path.display()
-            )
-        })?;
-        return Ok(());
-    }
-    fs::remove_file(&temporary_path).ok();
-    anyhow::bail!(
-        "Japanese morph dictionary is not the expected Vibrato rkyv format: {}",
-        compressed_path.display()
-    )
-}
-
-fn decompress_zstd_dictionary_to_file(compressed_path: &Path, output_path: &Path) -> Result<()> {
-    let input = fs::File::open(compressed_path).with_context(|| {
-        format!(
-            "Failed to open compressed Japanese morph dictionary: {}",
-            compressed_path.display()
-        )
-    })?;
-    let mut decoder = zstd::Decoder::new(input).with_context(|| {
-        format!(
-            "Failed to decode Japanese morph dictionary: {}",
-            compressed_path.display()
-        )
-    })?;
-    let mut output = fs::File::create(output_path).with_context(|| {
-        format!(
-            "Failed to create rkyv Japanese morph dictionary: {}",
-            output_path.display()
-        )
-    })?;
-    std::io::copy(&mut decoder, &mut output).with_context(|| {
-        format!(
-            "Failed to write decompressed Japanese morph dictionary: {}",
-            output_path.display()
-        )
-    })?;
-    output.flush().with_context(|| {
-        format!(
-            "Failed to flush rkyv Japanese morph dictionary: {}",
-            output_path.display()
-        )
-    })?;
-    Ok(())
-}
-
-fn wait_for_rkyv_dictionary_mmap(path: &Path) -> Result<()> {
-    const ATTEMPTS: usize = 10;
-    const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(20);
-    const MAX_RETRY_DELAY: Duration = Duration::from_secs(1);
-
-    let mut last_error = None;
-    let mut retry_delay = INITIAL_RETRY_DELAY;
-    for attempt in 0..ATTEMPTS {
-        // Validate without writing Vibrato's global proof cache. Parallel installs can otherwise
-        // contend on the same metadata-derived cache file on Windows and report access denied.
-        match vibrato_rkyv::Dictionary::from_path(path, LoadMode::Validate) {
-            Ok(dictionary) => {
-                drop(dictionary);
-                return Ok(());
-            }
-            Err(err) => {
-                last_error = Some(err);
-                if attempt + 1 < ATTEMPTS {
-                    std::thread::sleep(retry_delay);
-                    retry_delay = retry_delay.saturating_mul(2).min(MAX_RETRY_DELAY);
-                }
-            }
-        }
-    }
-    Err(anyhow::anyhow!(
-        "Failed to mmap materialized Japanese morph dictionary {} after {ATTEMPTS} attempts: {}",
-        path.display(),
-        last_error.expect("at least one mmap attempt")
-    ))
-}
-
-fn japanese_morph_dictionary_compatible(path: &Path) -> Result<bool> {
-    if !path.is_file() {
-        return Ok(false);
-    }
-    let mut file = fs::File::open(path).with_context(|| {
-        format!(
-            "Failed to open Japanese morph dictionary: {}",
-            path.display()
-        )
-    })?;
-    let mut magic = vec![0; VIBRATO_MODEL_MAGIC.len()];
-    file.read_exact(&mut magic).with_context(|| {
-        format!(
-            "Failed to read Japanese morph dictionary: {}",
-            path.display()
-        )
-    })?;
-    Ok(magic == VIBRATO_MODEL_MAGIC)
 }
 
 fn japanese_morph_required(config: &ParapperConfig) -> bool {
@@ -841,33 +708,22 @@ fn push_local_tts_download_targets(
         let model_dir = local_tts_model_dir_from_root(root, voice);
         fs::create_dir_all(root)
             .with_context(|| format!("Failed to create model root dir: {}", root.display()))?;
-        if voice.family() == LocalTtsFamily::Supertonic {
-            let required_files = local_tts_model_required_file_names(voice);
-            if voice == LocalTtsVoice::Supertonic3OnnxQuantized {
-                push_missing_verified_local_tts_file_targets(
-                    targets,
-                    &model_dir,
-                    voice,
-                    &required_files,
-                    supertonic_tts_model_base_url(voice),
-                )?;
-            } else {
-                push_missing_file_targets(
-                    targets,
-                    &model_dir,
-                    &required_files,
-                    supertonic_tts_model_base_url(voice),
-                );
-            }
-        } else if !local_tts_model_archive_installed(&model_dir, voice) {
-            let archive_name = local_tts_model_archive_name(voice);
-            targets.push(DownloadTarget {
-                url: format!("{}/{}", local_tts_model_base_url(), archive_name),
-                output_path: model_dir,
-                file_name: archive_name,
-                kind: DownloadTargetKind::TarBz2Directory,
-                integrity: None,
-            });
+        let required_files = local_tts_model_required_file_names(voice);
+        if voice == LocalTtsVoice::Supertonic3OnnxQuantized {
+            push_missing_verified_local_tts_file_targets(
+                targets,
+                &model_dir,
+                voice,
+                &required_files,
+                supertonic_tts_model_base_url(voice),
+            )?;
+        } else {
+            push_missing_file_targets(
+                targets,
+                &model_dir,
+                &required_files,
+                supertonic_tts_model_base_url(voice),
+            );
         }
     }
     Ok(())
@@ -962,14 +818,8 @@ fn push_local_translation_model_download_targets(
         )
     })?;
     let required_files = local_translation_model_required_file_names(model);
-    if let Some(base_url) = local_translation_model_base_url(model) {
-        push_missing_local_translation_file_targets(
-            targets,
-            &model_dir,
-            model,
-            required_files,
-            base_url,
-        )?;
+    if local_translation_model_base_url(model).is_some() {
+        push_missing_local_translation_file_targets(targets, &model_dir, model, required_files)?;
     } else {
         let source_dir = local_source_dir(model)
             .with_context(|| format!("Local translation model {model:?} has no download source"))?;
@@ -983,7 +833,6 @@ fn push_missing_local_translation_file_targets(
     model_dir: &Path,
     model: LocalTranslationModel,
     file_names: &[&str],
-    base_url: &str,
 ) -> Result<()> {
     for file_name in file_names {
         let output_path = model_dir.join(file_name);
@@ -1017,8 +866,10 @@ fn push_missing_local_translation_file_targets(
         if target_output_already_scheduled(targets, &output_path) {
             continue;
         }
+        let file_base_url = local_translation_model_file_base_url(model, file_name)
+            .expect("downloadable local translation model file must have a source URL");
         targets.push(DownloadTarget {
-            url: format!("{base_url}/{file_name}?download=true"),
+            url: format!("{file_base_url}/{file_name}?download=true"),
             output_path,
             file_name: (*file_name).to_string(),
             kind: DownloadTargetKind::File,
@@ -1097,34 +948,65 @@ fn push_noise_cancellation_download_targets(
     root: &Path,
     config: &ParapperConfig,
 ) -> Result<()> {
-    if !config.noise_cancellation.enabled {
-        return Ok(());
+    for model in
+        noise_cancellation_models_for_stt_runtime(&stt_runtime_configs_for_model_management(config))
+    {
+        let model_dir = noise_cancellation_model_dir_from_root(root, model);
+        fs::create_dir_all(&model_dir).with_context(|| {
+            format!(
+                "Failed to create noise cancellation model dir: {}",
+                model_dir.display()
+            )
+        })?;
+        push_missing_file_targets_with_query(
+            targets,
+            &model_dir,
+            noise_cancellation_model_required_file_names(model),
+            noise_cancellation_model_base_url(model),
+            false,
+        );
     }
-
-    let model_dir = noise_cancellation_model_dir_from_root(root, config.noise_cancellation.model);
-    fs::create_dir_all(&model_dir).with_context(|| {
-        format!(
-            "Failed to create noise cancellation model dir: {}",
-            model_dir.display()
-        )
-    })?;
-    push_missing_file_targets_with_query(
-        targets,
-        &model_dir,
-        noise_cancellation_model_required_file_names(config.noise_cancellation.model),
-        noise_cancellation_model_base_url(config.noise_cancellation.model),
-        false,
-    );
     Ok(())
 }
 
-fn local_tts_model_archive_installed(model_dir: &Path, voice: LocalTtsVoice) -> bool {
-    local_tts_model_required_file_names(voice)
+fn stt_runtime_configs_for_model_management(config: &ParapperConfig) -> Vec<ParapperConfig> {
+    if config.stt_profiles.is_empty() {
+        return vec![config.clone()];
+    }
+    config
+        .stt_profiles
         .iter()
-        .all(|file| model_dir.join(file).is_file())
-        && local_tts_model_required_dir_names(voice)
-            .iter()
-            .all(|dir| model_dir.join(dir).is_dir())
+        .filter(|profile| profile.enabled)
+        .map(|profile| {
+            config
+                .config_for_stt_profile(&profile.id)
+                .expect("STT profile collected from this configuration must resolve")
+        })
+        .collect()
+}
+
+fn asr_model_dir_for_runtime_config(
+    root: &Path,
+    config: &ParapperConfig,
+    model: AsrModel,
+) -> PathBuf {
+    if model == config.asr.model {
+        asr_model_dir_from_root(root, config)
+    } else {
+        default_asr_model_dir_from_root(root, model)
+    }
+}
+
+fn noise_cancellation_models_for_stt_runtime(
+    runtime_configs: &[ParapperConfig],
+) -> Vec<NoiseCancellationModel> {
+    let mut models = Vec::new();
+    for config in runtime_configs {
+        if config.noise_cancellation.enabled && !models.contains(&config.noise_cancellation.model) {
+            models.push(config.noise_cancellation.model);
+        }
+    }
+    models
 }
 
 fn namo_turn_detector_models_for_config(config: &ParapperConfig) -> Vec<NamoTurnDetectorModel> {
@@ -1144,12 +1026,9 @@ fn local_tts_voices_for_config(config: &ParapperConfig) -> Vec<LocalTtsVoice> {
         .filter_map(|mapping| mapping.local_tts_voice)
         .collect::<Vec<_>>();
     voices.sort_by_key(|voice| match voice {
-        LocalTtsVoice::Kristin => 0,
-        LocalTtsVoice::John => 1,
-        LocalTtsVoice::Norman => 2,
-        LocalTtsVoice::Supertonic2Onnx => 3,
-        LocalTtsVoice::Supertonic3Onnx => 4,
-        LocalTtsVoice::Supertonic3OnnxQuantized => 5,
+        LocalTtsVoice::Supertonic2Onnx => 0,
+        LocalTtsVoice::Supertonic3Onnx => 1,
+        LocalTtsVoice::Supertonic3OnnxQuantized => 2,
     });
     voices.dedup();
     voices
@@ -1298,20 +1177,20 @@ fn cached_archive_available(target: &DownloadTarget, temporary_path: &Path) -> R
     if target.kind == DownloadTargetKind::File || !temporary_path.is_file() {
         return Ok(false);
     }
-    if let Some(integrity) = target.integrity {
-        if let Err(err) = verify_file_integrity(temporary_path, integrity, "cached model archive") {
-            log::warn!(
-                "Discarding invalid cached model archive {}: {err}",
+    if let Some(integrity) = target.integrity
+        && let Err(err) = verify_file_integrity(temporary_path, integrity, "cached model archive")
+    {
+        log::warn!(
+            "Discarding invalid cached model archive {}: {err}",
+            temporary_path.display()
+        );
+        fs::remove_file(temporary_path).with_context(|| {
+            format!(
+                "Failed to remove invalid cached model archive: {}",
                 temporary_path.display()
-            );
-            fs::remove_file(temporary_path).with_context(|| {
-                format!(
-                    "Failed to remove invalid cached model archive: {}",
-                    temporary_path.display()
-                )
-            })?;
-            return Ok(false);
-        }
+            )
+        })?;
+        return Ok(false);
     }
     Ok(true)
 }
@@ -1361,8 +1240,7 @@ fn install_downloaded_archive<R: tauri::Runtime>(
 ) -> Result<()> {
     let downloaded_bytes = temporary_path
         .metadata()
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
+        .map_or(0, |metadata| metadata.len());
     emit_download_progress(
         handle,
         &target.file_name,
@@ -1404,9 +1282,18 @@ fn install_downloaded_target(target: &DownloadTarget, temporary_path: &Path) -> 
         DownloadTargetKind::LocalFile => unreachable!("local files are not archive-installed"),
         DownloadTargetKind::TarBz2Directory => {
             extract_tar_bz2_directory(temporary_path, &target.output_path)?;
-        }
-        DownloadTargetKind::TarZstdJapaneseMorphDirectory => {
-            install_zstd_japanese_morph_directory(temporary_path, &target.output_path)?;
+            if let Some(integrity) = target.integrity {
+                fs::write(
+                    target.output_path.join(MODEL_ARCHIVE_SHA256_MARKER),
+                    integrity.sha256,
+                )
+                .with_context(|| {
+                    format!(
+                        "Failed to record installed model archive revision: {}",
+                        target.output_path.display()
+                    )
+                })?;
+            }
         }
     }
     Ok(())
@@ -1460,160 +1347,6 @@ fn extract_tar_bz2_directory(archive_path: &Path, output_path: &Path) -> Result<
         .with_context(|| format!("Failed to open TTS archive: {}", archive_path.display()))?;
     let decoder = BzDecoder::new(file);
     extract_tar_directory(decoder, archive_path, output_path, "TTS")
-}
-
-fn install_zstd_japanese_morph_directory(archive_path: &Path, output_path: &Path) -> Result<()> {
-    recover_interrupted_directory_replacement(output_path)?;
-
-    let temp_dir = output_path.with_extension("extracting");
-    if temp_dir.is_dir() {
-        fs::remove_dir_all(&temp_dir).with_context(|| {
-            format!(
-                "Failed to remove temporary Japanese morph extraction dir: {}",
-                temp_dir.display()
-            )
-        })?;
-    }
-    fs::create_dir_all(&temp_dir).with_context(|| {
-        format!(
-            "Failed to create temporary Japanese morph extraction dir: {}",
-            temp_dir.display()
-        )
-    })?;
-
-    let file = fs::File::open(archive_path).with_context(|| {
-        format!(
-            "Failed to open Japanese morph dictionary archive: {}",
-            archive_path.display()
-        )
-    })?;
-    let decoder = zstd::Decoder::new(file).with_context(|| {
-        format!(
-            "Failed to decode Japanese morph dictionary archive: {}",
-            archive_path.display()
-        )
-    })?;
-    let mut archive = Archive::new(decoder);
-    unpack_tar_entries_within(&mut archive, &temp_dir, "Japanese morph dictionary").with_context(
-        || {
-            format!(
-                "Failed to extract Japanese morph dictionary archive: {}",
-                archive_path.display()
-            )
-        },
-    )?;
-
-    let extracted_dir = temp_dir.join(vibrato_unidic_dir_name());
-    if !extracted_dir.is_dir() {
-        anyhow::bail!(
-            "Japanese morph archive did not contain expected directory: {}",
-            extracted_dir.display()
-        );
-    }
-    materialize_rkyv_japanese_morph_dictionary(&extracted_dir)?;
-    let expanded_path = extracted_dir.join("system.dic");
-    verify_file_integrity(
-        &expanded_path,
-        vibrato_unidic_expanded_integrity(),
-        "expanded Japanese morph dictionary",
-    )?;
-    wait_for_rkyv_dictionary_mmap(&expanded_path)?;
-
-    replace_directory_with_staged(&extracted_dir, output_path)?;
-    fs::remove_dir_all(&temp_dir).ok();
-    fs::remove_file(archive_path).ok();
-    Ok(())
-}
-
-fn replacement_backup_path(output_path: &Path) -> PathBuf {
-    output_path.with_extension("replacing")
-}
-
-fn recover_interrupted_directory_replacement(output_path: &Path) -> Result<()> {
-    recover_interrupted_directory_replacement_with(output_path, |path| {
-        japanese_morph_model_installed_for_integrity(path, vibrato_unidic_expanded_integrity())
-    })
-}
-
-fn recover_interrupted_directory_replacement_with(
-    output_path: &Path,
-    output_is_valid: impl FnOnce(&Path) -> bool,
-) -> Result<()> {
-    let backup_path = replacement_backup_path(output_path);
-    if !backup_path.is_dir() {
-        return Ok(());
-    }
-    if output_path.is_dir() {
-        if output_is_valid(output_path) {
-            fs::remove_dir_all(&backup_path).with_context(|| {
-                format!(
-                    "Failed to remove stale Japanese morph backup: {}",
-                    backup_path.display()
-                )
-            })?;
-        } else {
-            fs::remove_dir_all(output_path).with_context(|| {
-                format!(
-                    "Failed to remove incomplete Japanese morph dictionary: {}",
-                    output_path.display()
-                )
-            })?;
-            fs::rename(&backup_path, output_path).with_context(|| {
-                format!(
-                    "Failed to restore Japanese morph dictionary from {} to {}",
-                    backup_path.display(),
-                    output_path.display()
-                )
-            })?;
-        }
-    } else {
-        fs::rename(&backup_path, output_path).with_context(|| {
-            format!(
-                "Failed to restore Japanese morph dictionary from {} to {}",
-                backup_path.display(),
-                output_path.display()
-            )
-        })?;
-    }
-    Ok(())
-}
-
-fn replace_directory_with_staged(staged_path: &Path, output_path: &Path) -> Result<()> {
-    let backup_path = replacement_backup_path(output_path);
-    let had_existing = output_path.is_dir();
-    if had_existing {
-        fs::rename(output_path, &backup_path).with_context(|| {
-            format!(
-                "Failed to preserve existing Japanese morph dictionary at {}",
-                output_path.display()
-            )
-        })?;
-    }
-
-    if let Err(err) = fs::rename(staged_path, output_path) {
-        if had_existing {
-            fs::rename(&backup_path, output_path).with_context(|| {
-                format!(
-                    "Failed to restore existing Japanese morph dictionary after install error: {err}"
-                )
-            })?;
-        }
-        return Err(err).with_context(|| {
-            format!(
-                "Failed to install Japanese morph dictionary from {} to {}",
-                staged_path.display(),
-                output_path.display()
-            )
-        });
-    }
-
-    if had_existing && let Err(err) = fs::remove_dir_all(&backup_path) {
-        log::warn!(
-            "Failed to remove replaced Japanese morph dictionary {}: {err}",
-            backup_path.display()
-        );
-    }
-    Ok(())
 }
 
 fn extract_tar_directory(
@@ -1788,359 +1521,43 @@ fn emit_download_progress<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        DownloadTarget, DownloadTargetKind, NamoTurnDetectorModel, cached_archive_available,
-        contained_tar_entry_path, default_asr_model_dir_from_root, download_file,
-        install_zstd_japanese_morph_directory, japanese_morph_dictionary_compatible,
-        japanese_morph_dictionary_paths_from_model_dir, japanese_morph_model_installed,
-        japanese_morph_model_installed_for_integrity, japanese_morph_model_present_for_integrity,
+        DownloadTarget, DownloadTargetKind, MODEL_ARCHIVE_SHA256_MARKER, NamoTurnDetectorModel,
+        asr_model_installed_for, contained_tar_entry_path, default_asr_model_dir_from_root,
         local_translation_model_dir_from_root, local_translation_model_local_source_dir,
-        local_translation_models_for_config, local_tts_voices_for_config,
-        materialize_rkyv_japanese_morph_dictionary, model_status_from_root,
-        namo_turn_detector_models_for_config, push_japanese_morph_download_targets,
+        local_translation_models_for_config, local_tts_voices_for_config, model_status_from_root,
+        namo_turn_detector_models_for_config, noise_cancellation_model_dir_from_root,
+        push_asr_download_targets_from_root,
         push_local_translation_download_targets_with_source_resolver,
-        push_local_tts_download_targets, recover_interrupted_directory_replacement,
-        recover_interrupted_directory_replacement_with, replace_directory_with_staged,
-        replacement_backup_path, sha256_file, verify_file_integrity,
+        push_local_tts_download_targets, push_noise_cancellation_download_targets,
+        push_reazon_accuracy_download_targets,
     };
     use crate::config::{
-        AsrModel, AsrPrecision, LocalTranslationModel, LocalTtsVoice, NoiseCancellationModel,
-        ParapperConfig, SpeechBackend, SpeechMapping, SpeechSourceKind, TranslationBackend,
-        TranslationLanguage, TranslationMapping, TurnDetector,
+        AsrConfig, AsrMode, AsrModel, AsrPrecision, LocalTranslationModel, LocalTtsVoice,
+        NoiseCancellationConfig, NoiseCancellationModel, ParapperConfig, SegmentationConfig,
+        SpeechBackend, SpeechMapping, SpeechSourceKind, SttProfileConfig, SttProfileDisplayColor,
+        SttProfileInputConfig, TranslationBackend, TranslationLanguage, TranslationMapping,
+        TurnConfig, TurnDetector,
     };
     use crate::model::catalog::{
-        VIBRATO_MODEL_MAGIC, asr_model_archive_name, asr_model_required_file_names,
+        asr_model_archive_integrity, asr_model_archive_name, asr_model_required_file_names,
         local_translation_model_required_file_names, local_tts_model_required_file_names,
-        vibrato_unidic_archive_integrity, vibrato_unidic_archive_name, vibrato_unidic_archive_url,
-        vibrato_unidic_expanded_integrity,
+        noise_cancellation_model_required_file_names,
     };
-    use std::{
-        fs,
-        path::Path,
-        time::{Duration, SystemTime},
-    };
-    use tauri::Manager as _;
+    use std::{fs, path::Path, time::SystemTime};
 
     #[test]
-    fn japanese_morph_download_uses_public_parapper_asr_release_asset() {
-        let root = unique_test_models_root("japanese-morph-public-release-target");
+    fn japanese_morph_is_ready_without_installed_files() {
+        let root = unique_test_models_root("japanese-morph-built-in");
         let config = parapper_config! {
-            turn_detector: TurnDetector::Namo,
+            turn_detector: TurnDetector::Morph,
             ..ParapperConfig::default()
         };
-        let mut targets = Vec::new();
 
-        push_japanese_morph_download_targets(&mut targets, &root, &config)
-            .expect("Japanese morph download target should be created");
-
-        assert_eq!(targets.len(), 1);
-        assert_eq!(
-            targets[0].url,
-            "https://github.com/Parakeet-Inc/Parapper-ASR/releases/download/morph-dictionary-unidic-cwj-3.1.1-v1/parapper-unidic-cwj-3_1_1-compact-raw-v1.tar.zst"
-        );
-        assert_eq!(
-            targets[0].file_name,
-            "parapper-unidic-cwj-3_1_1-compact-raw-v1.tar.zst"
-        );
-        assert_eq!(
-            targets[0].kind,
-            DownloadTargetKind::TarZstdJapaneseMorphDirectory
-        );
-        assert_eq!(
-            targets[0].integrity,
-            Some(crate::model::catalog::FileIntegrity {
-                size: 7_434_191,
-                sha256: "a1dd0e62ae87f4631ade3aa46cf00b7fdbed1827893dd1d1bde2765009e125ea",
-            })
-        );
-    }
-
-    #[test]
-    fn invalid_compact_raw_payload_does_not_replace_existing_dictionary() {
-        let root = unique_test_models_root("japanese-morph-invalid-package");
-        let model_dir = root.join("unidic-cwj-3_1_1");
-        fs::create_dir_all(&model_dir).expect("failed to create existing dictionary dir");
-        fs::write(model_dir.join("system.dic"), b"known working dictionary")
-            .expect("failed to write existing dictionary");
-        fs::write(model_dir.join("keep.txt"), b"keep this installation")
-            .expect("failed to write existing installation sentinel");
-
-        let archive_path = root.join("invalid-compact-raw.tar.zst");
-        write_invalid_compact_raw_archive(&archive_path);
-
-        install_zstd_japanese_morph_directory(&archive_path, &model_dir)
-            .expect_err("non-published dictionary payload must be rejected");
-        assert_eq!(
-            fs::read(model_dir.join("system.dic"))
-                .expect("existing dictionary should still be readable"),
-            b"known working dictionary"
-        );
-        assert_eq!(
-            fs::read(model_dir.join("keep.txt"))
-                .expect("existing installation sentinel should still exist"),
-            b"keep this installation"
-        );
-        assert!(!root.join("unidic-cwj-3_1_1.replacing").exists());
-    }
-
-    #[test]
-    fn cached_archive_is_retained_on_install_failure_and_removed_only_on_integrity_failure() {
-        let root = unique_test_models_root("japanese-morph-cached-archive-policy");
-        fs::create_dir_all(&*root).expect("failed to create cached archive test dir");
-        let model_dir = root.join("unidic-cwj-3_1_1");
-        fs::create_dir_all(&model_dir).expect("failed to create existing dictionary dir");
-        fs::write(model_dir.join("keep.txt"), b"known working dictionary")
-            .expect("failed to write existing dictionary sentinel");
-        let archive_path = model_dir.with_extension("download");
-        write_invalid_compact_raw_archive(&archive_path);
-        let sha256 =
-            sha256_file(&archive_path, "test cached archive").expect("failed to hash test archive");
-        let target = DownloadTarget {
-            url: "https://example.invalid/dictionary.tar.zst".to_string(),
-            output_path: model_dir.clone(),
-            file_name: "dictionary.tar.zst".to_string(),
-            kind: DownloadTargetKind::TarZstdJapaneseMorphDirectory,
-            integrity: Some(crate::model::catalog::FileIntegrity {
-                size: archive_path
-                    .metadata()
-                    .expect("failed to inspect test archive")
-                    .len(),
-                sha256: Box::leak(sha256.into_boxed_str()),
-            }),
-        };
-        assert!(
-            cached_archive_available(&target, &archive_path)
-                .expect("valid cache inspection should succeed")
-        );
-        install_zstd_japanese_morph_directory(&archive_path, &model_dir)
-            .expect_err("inner dictionary contract should make installation fail");
-        assert!(
-            archive_path.is_file(),
-            "a hash-valid cache should survive a temporary installation failure"
-        );
-        assert_eq!(
-            fs::read(model_dir.join("keep.txt"))
-                .expect("existing dictionary should survive cached install failure"),
-            b"known working dictionary"
-        );
-
-        let mut corrupted = fs::read(&archive_path).expect("failed to read cached archive");
-        corrupted[0] ^= 0xff;
-        fs::write(&archive_path, corrupted).expect("failed to corrupt cached archive");
-        assert!(
-            !cached_archive_available(&target, &archive_path)
-                .expect("integrity mismatch should be handled as a cache miss")
-        );
-        assert!(
-            !archive_path.exists(),
-            "only an integrity-invalid cached archive should be discarded"
-        );
-    }
-
-    #[tokio::test]
-    async fn model_download_path_requests_only_configured_url_and_preserves_existing_dictionary() {
-        let root = unique_test_models_root("japanese-morph-http-download-contract");
-        fs::create_dir_all(&*root).expect("failed to create HTTP download test dir");
-        let source_archive = root.join("server-response.tar.zst");
-        write_invalid_compact_raw_archive(&source_archive);
-        let response_bytes =
-            fs::read(&source_archive).expect("failed to read HTTP response fixture");
-        let response_size =
-            u64::try_from(response_bytes.len()).expect("HTTP response size should fit u64");
-        fs::remove_file(&source_archive).expect("failed to remove HTTP response fixture");
-        let response_sha256 = {
-            let path = root.join("hash-input.tar.zst");
-            fs::write(&path, &response_bytes).expect("failed to write hash input");
-            let sha256 =
-                sha256_file(&path, "HTTP response fixture").expect("failed to hash HTTP response");
-            fs::remove_file(path).expect("failed to remove hash input");
-            sha256
-        };
-
-        let server =
-            tiny_http::Server::http(("127.0.0.1", 0)).expect("test server should bind locally");
-        let address = server
-            .server_addr()
-            .to_ip()
-            .expect("test server should use an IP address");
-        let server_thread = std::thread::spawn(move || {
-            let request = server
-                .recv_timeout(Duration::from_secs(2))
-                .expect("test server receive should succeed")
-                .expect("production download should issue one request");
-            let requested_path = request.url().to_string();
-            request
-                .respond(tiny_http::Response::from_data(response_bytes))
-                .expect("test server should respond");
-            let extra_request = server
-                .recv_timeout(Duration::from_millis(300))
-                .expect("extra request check should succeed")
-                .map(|request| request.url().to_string());
-            (requested_path, extra_request)
-        });
-
-        let model_dir = root.join("unidic-cwj-3_1_1");
-        fs::create_dir_all(&model_dir).expect("failed to create existing dictionary dir");
-        fs::write(model_dir.join("keep.txt"), b"known working dictionary")
-            .expect("failed to write existing dictionary sentinel");
-        let target = DownloadTarget {
-            url: format!("http://{address}/only-this-dictionary.tar.zst"),
-            output_path: model_dir.clone(),
-            file_name: "only-this-dictionary.tar.zst".to_string(),
-            kind: DownloadTargetKind::TarZstdJapaneseMorphDirectory,
-            integrity: Some(crate::model::catalog::FileIntegrity {
-                size: response_size,
-                sha256: Box::leak(response_sha256.into_boxed_str()),
-            }),
-        };
-        let app = tauri::test::mock_builder()
-            .build(tauri::test::mock_context(tauri::test::noop_assets()))
-            .expect("failed to build test app");
-
-        download_file(app.handle(), &target, 0, 1)
-            .await
-            .expect_err("inner dictionary identity should reject the HTTP fixture");
-        let (requested_path, extra_request) =
-            server_thread.join().expect("test server should stop");
-
-        assert_eq!(requested_path, "/only-this-dictionary.tar.zst");
-        assert_eq!(extra_request, None, "download must not try a fallback URL");
-        assert_eq!(
-            fs::read(model_dir.join("keep.txt"))
-                .expect("existing dictionary should survive failed HTTP install"),
-            b"known working dictionary"
-        );
-    }
-
-    #[test]
-    fn failed_final_directory_swap_restores_existing_dictionary() {
-        let root = unique_test_models_root("japanese-morph-swap-rollback");
-        let model_dir = root.join("unidic-cwj-3_1_1");
-        fs::create_dir_all(&model_dir).expect("failed to create existing dictionary dir");
-        fs::write(model_dir.join("keep.txt"), b"known working dictionary")
-            .expect("failed to write existing dictionary sentinel");
-        let missing_staged_dir = root.join("missing-staged-dictionary");
-
-        replace_directory_with_staged(&missing_staged_dir, &model_dir)
-            .expect_err("missing staged directory should make final rename fail");
-
-        assert_eq!(
-            fs::read(model_dir.join("keep.txt"))
-                .expect("existing dictionary should be restored after swap failure"),
-            b"known working dictionary"
-        );
-        assert!(
-            !replacement_backup_path(&model_dir).exists(),
-            "rollback should consume the temporary backup"
-        );
-    }
-
-    #[test]
-    fn interrupted_dictionary_swap_restores_backup_when_new_output_is_incomplete() {
-        for output_exists in [false, true] {
-            let root =
-                unique_test_models_root(&format!("japanese-morph-swap-recovery-{output_exists}"));
-            let model_dir = root.join("unidic-cwj-3_1_1");
-            let backup_dir = replacement_backup_path(&model_dir);
-            fs::create_dir_all(&backup_dir).expect("failed to create interrupted backup");
-            fs::write(backup_dir.join("state.txt"), b"old")
-                .expect("failed to write old backup state");
-            if output_exists {
-                fs::create_dir_all(&model_dir).expect("failed to create new install");
-                fs::write(model_dir.join("state.txt"), b"new")
-                    .expect("failed to write new install state");
-            }
-
-            recover_interrupted_directory_replacement(&model_dir)
-                .expect("interrupted replacement should recover deterministically");
-
-            assert_eq!(
-                fs::read(model_dir.join("state.txt"))
-                    .expect("recovered dictionary state should exist"),
-                b"old"
-            );
-            assert!(
-                !backup_dir.exists(),
-                "recovery should leave a single canonical dictionary directory"
-            );
-        }
-    }
-
-    #[test]
-    fn interrupted_dictionary_swap_discards_backup_only_after_new_output_is_valid() {
-        let root = unique_test_models_root("japanese-morph-swap-valid-output");
-        let model_dir = root.join("unidic-cwj-3_1_1");
-        let backup_dir = replacement_backup_path(&model_dir);
-        fs::create_dir_all(&backup_dir).expect("failed to create interrupted backup");
-        fs::write(backup_dir.join("state.txt"), b"old").expect("failed to write old backup");
-        fs::create_dir_all(&model_dir).expect("failed to create new install");
-        fs::write(model_dir.join("state.txt"), b"new").expect("failed to write new install");
-
-        recover_interrupted_directory_replacement_with(&model_dir, |path| {
-            fs::read(path.join("state.txt")).is_ok_and(|state| state == b"new")
-        })
-        .expect("valid new output should complete interrupted replacement");
-
-        assert_eq!(
-            fs::read(model_dir.join("state.txt")).expect("new dictionary should remain"),
-            b"new"
-        );
-        assert!(!backup_dir.exists());
-    }
-
-    #[tokio::test]
-    #[ignore = "downloads the published GitHub Release asset"]
-    async fn published_compact_raw_v1_asset_installs_and_mmap_loads() {
-        let root = unique_test_models_root("japanese-morph-published-package");
-        fs::create_dir_all(&*root).expect("failed to create published package test dir");
-        let archive_path = root.join(vibrato_unidic_archive_name());
-        let response = reqwest::get(vibrato_unidic_archive_url())
-            .await
-            .expect("published dictionary download should start")
-            .error_for_status()
-            .expect("published dictionary URL should return success");
-        assert_eq!(
-            response.content_length(),
-            Some(vibrato_unidic_archive_integrity().size)
-        );
-        let bytes = response
-            .bytes()
-            .await
-            .expect("published dictionary body should download");
-        fs::write(&archive_path, &bytes).expect("downloaded archive should be saved");
-
-        verify_file_integrity(
-            &archive_path,
-            vibrato_unidic_archive_integrity(),
-            "published Japanese morph archive",
-        )
-        .expect("published archive should match the pinned release identity");
-        let model_dir = root.join("unidic-cwj-3_1_1");
-        install_zstd_japanese_morph_directory(&archive_path, &model_dir)
-            .expect("published compact Raw dictionary should install");
-
-        let dictionary_path = model_dir.join("system.dic");
-        verify_file_integrity(
-            &dictionary_path,
-            vibrato_unidic_expanded_integrity(),
-            "installed Japanese morph dictionary",
-        )
-        .expect("installed dictionary should match the pinned expanded identity");
-        assert!(
-            ["AUTHORS", "BSD", "NOTICE", "manifest.json", "SHA256SUMS"]
-                .iter()
-                .all(|name| model_dir.join(name).is_file()),
-            "license, attribution, manifest, and checksums should remain beside the dictionary"
-        );
-        let dictionary = vibrato_rkyv::Dictionary::from_path(
-            &dictionary_path,
-            vibrato_rkyv::LoadMode::TrustCache,
-        )
-        .expect("installed dictionary should mmap-load through vibrato-rkyv");
-        drop(dictionary);
-        assert!(
-            japanese_morph_model_installed(&model_dir),
-            "the installed public release should satisfy production status checks"
-        );
+        let status = model_status_from_root(&root, &config)
+            .japanese_morph
+            .expect("Morph mode should report its built-in dictionary");
+        assert!(status.installed);
+        assert!(!status.preparing);
     }
 
     #[test]
@@ -2212,239 +1629,6 @@ mod tests {
     }
 
     #[test]
-    fn explicit_japanese_morph_integrity_check_rejects_same_size_dictionary_corruption() {
-        let root = unique_test_models_root("model-status-japanese-morph");
-        let model_dir = root.join("unidic-cwj-3_1_1");
-        let expected = write_installed_compact_raw_dictionary(&model_dir);
-        assert!(
-            japanese_morph_model_installed_for_integrity(&model_dir, expected),
-            "exact dictionary and manifest should be installed"
-        );
-
-        let dictionary_path = model_dir.join("system.dic");
-        let mut corrupted =
-            fs::read(&dictionary_path).expect("failed to read dictionary for corruption test");
-        let last = corrupted
-            .last_mut()
-            .expect("test dictionary should not be empty");
-        *last ^= 0xff;
-        fs::write(&dictionary_path, corrupted)
-            .expect("failed to write same-size corrupted dictionary");
-
-        assert!(
-            !japanese_morph_model_installed_for_integrity(&model_dir, expected),
-            "same-size corruption must not be accepted from manifest and magic alone"
-        );
-    }
-
-    #[test]
-    fn japanese_morph_status_uses_verified_manifest_and_file_size() {
-        let root = unique_test_models_root("model-status-japanese-morph-fast-check");
-        let model_dir = root.join("unidic-cwj-3_1_1");
-        let expected = write_installed_compact_raw_dictionary(&model_dir);
-
-        let dictionary_path = model_dir.join("system.dic");
-        let mut changed =
-            fs::read(&dictionary_path).expect("failed to read dictionary for status test");
-        changed[0] ^= 0xff;
-        fs::write(&dictionary_path, &changed)
-            .expect("failed to write same-size dictionary for status test");
-
-        assert!(
-            japanese_morph_model_present_for_integrity(&model_dir, expected),
-            "routine status checks should trust the verified manifest and exact file size"
-        );
-        assert!(
-            !japanese_morph_model_installed_for_integrity(&model_dir, expected),
-            "the explicit integrity check must still detect same-size corruption"
-        );
-
-        fs::write(&dictionary_path, &changed[..changed.len() - 1])
-            .expect("failed to truncate dictionary for status test");
-        assert!(
-            !japanese_morph_model_present_for_integrity(&model_dir, expected),
-            "routine status checks must reject a dictionary with the wrong size"
-        );
-    }
-
-    #[test]
-    fn magic_only_legacy_dictionary_without_compact_raw_marker_schedules_upgrade() {
-        let root = unique_test_models_root("model-status-japanese-morph-legacy");
-        let model_dir = root.join("unidic-cwj-3_1_1");
-        let dictionary_path = model_dir.join("system.dic");
-        fs::create_dir_all(&model_dir).expect("failed to create dictionary parent");
-        fs::write(&dictionary_path, VIBRATO_MODEL_MAGIC)
-            .expect("failed to write legacy dictionary marker");
-        let config = parapper_config! {
-            turn_detector: TurnDetector::Namo,
-            ..ParapperConfig::default()
-        };
-
-        let status = model_status_from_root(&root, &config);
-        assert_eq!(
-            status
-                .japanese_morph
-                .as_ref()
-                .map(|status| status.installed),
-            Some(false)
-        );
-
-        let mut targets = Vec::new();
-        push_japanese_morph_download_targets(&mut targets, &root, &config)
-            .expect("legacy dictionary should schedule a compact Raw upgrade");
-        assert_eq!(targets.len(), 1);
-        assert_eq!(
-            targets[0].kind,
-            DownloadTargetKind::TarZstdJapaneseMorphDirectory
-        );
-    }
-
-    #[test]
-    fn japanese_morph_status_rejects_compressed_dictionary_without_rkyv_system_dic() {
-        let root = unique_test_models_root("model-status-japanese-morph-compressed-only");
-        let config = parapper_config! {
-            turn_detector: TurnDetector::Namo,
-            ..ParapperConfig::default()
-        };
-        let dictionary_path = root.join("unidic-cwj-3_1_1").join("system.dic.zst");
-        fs::create_dir_all(
-            dictionary_path
-                .parent()
-                .expect("dictionary path should have parent"),
-        )
-        .expect("failed to create dictionary parent");
-        write_zstd_vibrato_dictionary_marker(&dictionary_path);
-
-        let status = model_status_from_root(&root, &config);
-        assert_eq!(
-            status
-                .japanese_morph
-                .as_ref()
-                .map(|status| status.installed),
-            Some(false),
-            "runtime should not accept compressed dictionaries as installed"
-        );
-    }
-
-    #[test]
-    fn japanese_morph_dictionary_paths_only_include_rkyv_dictionary() {
-        let model_dir = Path::new("unidic-cwj-3_1_1");
-        let paths = japanese_morph_dictionary_paths_from_model_dir(model_dir);
-
-        assert_eq!(paths, vec![model_dir.join("system.dic")]);
-    }
-
-    #[test]
-    fn japanese_morph_download_materializes_rkyv_dictionary_from_zst() {
-        let root = unique_test_models_root("model-status-japanese-morph-transcode");
-        let model_dir = root.join("unidic-cwj-3_1_1");
-        let compressed_path = model_dir.join("system.dic.zst");
-        let rkyv_path = model_dir.join("system.dic");
-        fs::create_dir_all(&model_dir).expect("failed to create dictionary parent");
-        write_zstd_rkyv_vibrato_dictionary(&compressed_path);
-
-        materialize_rkyv_japanese_morph_dictionary(&model_dir)
-            .expect("zstd dictionary should materialize during model installation");
-
-        assert!(
-            compressed_path.is_file(),
-            "release checksum inputs should remain beside the expanded dictionary"
-        );
-        assert!(
-            japanese_morph_dictionary_compatible(&rkyv_path)
-                .expect("rkyv dictionary should be readable"),
-            "installed dictionary must be a compatible Vibrato rkyv dictionary"
-        );
-        let dictionary =
-            vibrato_rkyv::Dictionary::from_path(&rkyv_path, vibrato_rkyv::LoadMode::Validate)
-                .expect("installed dictionary should mmap-load through vibrato-rkyv");
-        let tokenizer = vibrato_rkyv::Tokenizer::new(dictionary);
-        let mut worker = tokenizer.new_worker();
-        worker.reset_sentence("京都東京都");
-        worker.tokenize();
-        assert_eq!(worker.num_tokens(), 2);
-    }
-
-    #[test]
-    fn japanese_morph_status_rejects_non_rkyv_system_dictionary() {
-        let root = unique_test_models_root("model-status-japanese-morph-non-rkyv");
-        let config = parapper_config! {
-            turn_detector: TurnDetector::Namo,
-            ..ParapperConfig::default()
-        };
-        let dictionary_path = root.join("unidic-cwj-3_1_1").join("system.dic");
-        fs::create_dir_all(
-            dictionary_path
-                .parent()
-                .expect("dictionary path should have parent"),
-        )
-        .expect("failed to create dictionary parent");
-        fs::write(&dictionary_path, b"legacy vibrato dictionary")
-            .expect("failed to write incompatible dictionary");
-
-        let status = model_status_from_root(&root, &config);
-        let morph = status
-            .japanese_morph
-            .as_ref()
-            .expect("Japanese morph status should be present for Namo Japanese");
-        assert!(
-            !morph.installed,
-            "non-rkyv dictionaries must be redownloaded or reinstalled as rkyv"
-        );
-        assert!(
-            !morph.preparing,
-            "an incompatible installed file should be treated as missing, not as an active download"
-        );
-    }
-
-    #[test]
-    fn japanese_morph_status_marks_partial_archive_as_preparing_not_installed() {
-        for (case, marker_path) in [
-            (
-                "downloaded archive",
-                Path::new("unidic-cwj-3_1_1.download").to_path_buf(),
-            ),
-            (
-                "extracting directory",
-                Path::new("unidic-cwj-3_1_1.extracting").to_path_buf(),
-            ),
-        ] {
-            let root = unique_test_models_root(&format!("model-status-japanese-morph-{case}"));
-            let config = parapper_config! {
-                turn_detector: TurnDetector::Namo,
-                ..ParapperConfig::default()
-            };
-            let marker_path = root.join(marker_path);
-            if marker_path
-                .extension()
-                .is_some_and(|ext| ext == "extracting")
-            {
-                fs::create_dir_all(&marker_path).expect("failed to create extracting marker");
-            } else {
-                fs::create_dir_all(
-                    marker_path
-                        .parent()
-                        .expect("marker path should have parent"),
-                )
-                .expect("failed to create marker parent");
-                fs::write(&marker_path, b"partial archive")
-                    .expect("failed to write download marker");
-            }
-
-            let status = model_status_from_root(&root, &config);
-            let morph = status
-                .japanese_morph
-                .as_ref()
-                .expect("Japanese morph status should be present for Namo Japanese");
-            assert!(
-                !morph.installed,
-                "{case} must not allow recognition to start before the dictionary is available"
-            );
-            assert!(morph.preparing, "{case} should be shown as downloading");
-        }
-    }
-
-    #[test]
     fn noise_cancellation_status_only_appears_when_enabled() {
         let disabled =
             model_status_from_root(std::path::Path::new("models"), &ParapperConfig::default());
@@ -2459,6 +1643,162 @@ mod tests {
             },
         );
         assert!(enabled.noise_cancellation.is_some());
+    }
+
+    #[test]
+    fn profile_model_status_requires_each_profiles_asr_precision_and_nested_noise_model() {
+        let root = unique_test_models_root("profile-model-status-assets");
+        let mut first = stt_profile_for_model_assets("first", AsrModel::ReazonSpeechK2V2);
+        first.asr.precision = AsrPrecision::Float32;
+        let mut second =
+            stt_profile_for_model_assets("second", AsrModel::NemoParakeetTdt0_6BV2Int8);
+        second.asr.precision = AsrPrecision::Int8;
+        second.noise_cancellation = NoiseCancellationConfig {
+            enabled: true,
+            model: NoiseCancellationModel::UlUnas,
+            ..NoiseCancellationConfig::default()
+        };
+        let config = ParapperConfig {
+            stt_profiles: vec![first.clone(), second.clone()],
+            ..ParapperConfig::default()
+        };
+
+        write_required_asr_model_files(&root, first.asr.model, first.asr.precision);
+        let status = model_status_from_root(&root, &config);
+        assert!(
+            !status.asr.installed,
+            "a downloaded first profile model must not hide a missing second profile ASR asset"
+        );
+        assert!(
+            status
+                .noise_cancellation
+                .as_ref()
+                .is_some_and(|asset| !asset.installed),
+            "nested profile NC must be reported even if global NC is disabled"
+        );
+
+        write_required_asr_model_files(&root, second.asr.model, second.asr.precision);
+        let nc_dir = noise_cancellation_model_dir_from_root(&root, NoiseCancellationModel::UlUnas);
+        fs::create_dir_all(&nc_dir).expect("failed to create nested NC model directory");
+        for file in noise_cancellation_model_required_file_names(NoiseCancellationModel::UlUnas) {
+            fs::write(nc_dir.join(file), b"model").expect("failed to write nested NC model file");
+        }
+
+        let status = model_status_from_root(&root, &config);
+        assert!(status.asr.installed);
+        assert!(
+            status
+                .noise_cancellation
+                .as_ref()
+                .is_some_and(|asset| asset.installed),
+            "all nested profile assets installed must make the aggregate status ready"
+        );
+    }
+
+    #[test]
+    fn disabled_stt_profile_assets_are_not_reported_or_requested() {
+        let root = unique_test_models_root("disabled-profile-assets");
+        let enabled = stt_profile_for_model_assets("enabled", AsrModel::ReazonSpeechK2V2);
+        let mut disabled =
+            stt_profile_for_model_assets("disabled", AsrModel::NemoParakeetTdt0_6BV2Int8);
+        disabled.enabled = false;
+        disabled.noise_cancellation = NoiseCancellationConfig {
+            enabled: true,
+            model: NoiseCancellationModel::UlUnas,
+            ..NoiseCancellationConfig::default()
+        };
+        let config = ParapperConfig {
+            stt_profiles: vec![enabled.clone(), disabled],
+            ..ParapperConfig::default()
+        };
+        write_required_asr_model_files(&root, enabled.asr.model, enabled.asr.precision);
+
+        let status = model_status_from_root(&root, &config);
+        assert!(status.asr.installed);
+        assert!(status.noise_cancellation.is_none());
+
+        let mut targets = Vec::new();
+        push_asr_download_targets_from_root(&mut targets, &root, &config)
+            .expect("disabled profile assets must not be requested");
+        push_noise_cancellation_download_targets(&mut targets, &root, &config)
+            .expect("disabled profile noise-cancellation assets must not be requested");
+        assert!(
+            targets.is_empty(),
+            "only missing disabled-profile ASR and NC assets remain"
+        );
+    }
+
+    #[test]
+    fn profile_asr_download_deduplicates_a_shared_archive_target() {
+        let root = unique_test_models_root("profile-asr-archive-dedup");
+        let model = AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8;
+        assert!(
+            asr_model_archive_name(model).is_some(),
+            "this regression requires a catalog model downloaded as an archive"
+        );
+        let mut first = stt_profile_for_model_assets("first", AsrModel::ReazonSpeechK2V2);
+        first.asr.interim_model = Some(model);
+        let mut second = stt_profile_for_model_assets("second", AsrModel::ReazonSpeechK2V2);
+        second.asr.interim_model = Some(AsrModel::Nemotron3_5AsrStreaming0_6B1120MsInt8);
+        let config = ParapperConfig {
+            stt_profiles: vec![first, second],
+            ..ParapperConfig::default()
+        };
+        let mut targets = Vec::new();
+
+        push_asr_download_targets_from_root(&mut targets, &root, &config)
+            .expect("profile ASR targets should be collected");
+
+        assert_eq!(
+            targets
+                .iter()
+                .filter(|target| target.kind == DownloadTargetKind::TarBz2Directory)
+                .count(),
+            1,
+            "different runtime latencies from one Nemotron family must enqueue one base archive"
+        );
+    }
+
+    #[test]
+    fn profile_asr_download_unions_required_files_for_same_model_with_different_precisions() {
+        let root = unique_test_models_root("profile-asr-precision-union");
+        let model = AsrModel::ReazonSpeechK2V2;
+        assert!(
+            asr_model_archive_name(model).is_none(),
+            "this regression requires a catalog model downloaded as individual files"
+        );
+        let mut float = stt_profile_for_model_assets("float", model);
+        float.asr.precision = AsrPrecision::Float32;
+        let mut quantized = stt_profile_for_model_assets("int8", model);
+        quantized.asr.precision = AsrPrecision::Int8;
+        let config = ParapperConfig {
+            stt_profiles: vec![float, quantized],
+            ..ParapperConfig::default()
+        };
+        let mut targets = Vec::new();
+
+        push_asr_download_targets_from_root(&mut targets, &root, &config)
+            .expect("profile ASR targets should be collected");
+
+        let model_dir = default_asr_model_dir_from_root(&root, model);
+        let expected = asr_model_required_file_names(model, AsrPrecision::Float32)
+            .iter()
+            .chain(asr_model_required_file_names(model, AsrPrecision::Int8))
+            .map(|file| model_dir.join(file))
+            .collect::<std::collections::HashSet<_>>();
+        let actual = targets
+            .iter()
+            .map(|target| target.output_path.clone())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            actual, expected,
+            "same-model profile precisions must download the union of their required files exactly once"
+        );
+        assert_eq!(
+            targets.len(),
+            actual.len(),
+            "shared files must be deduplicated by concrete output path"
+        );
     }
 
     #[test]
@@ -2478,99 +1818,6 @@ mod tests {
             contained_tar_entry_path(root, Path::new("/absolute/path")).is_err(),
             "absolute paths must not escape extraction dir"
         );
-    }
-
-    fn write_zstd_vibrato_dictionary_marker(path: &Path) {
-        write_zstd_dictionary_marker(path, VIBRATO_MODEL_MAGIC);
-    }
-
-    fn write_zstd_rkyv_vibrato_dictionary(path: &Path) {
-        let lexicon_csv = "京都,4,4,5,京都,名詞,固有名詞,地名,一般,*,*,キョウト,京都,*,A,*,*,*,1/5\n東京都,5,5,9,東京都,名詞,固有名詞,地名,一般,*,*,トウキョウト,東京都,*,B,5/9,*,5/9,*";
-        let matrix_def = "10 10\n0 4 -5\n0 5 -9";
-        let char_def = "DEFAULT 0 1 0";
-        let unk_def = "DEFAULT,5,5,-1000,DEFAULT,名詞,普通名詞,*,*,*,*,*,*,*,*,*,*,*,*";
-        let dictionary = vibrato_rkyv::SystemDictionaryBuilder::from_readers(
-            lexicon_csv.as_bytes(),
-            matrix_def.as_bytes(),
-            char_def.as_bytes(),
-            unk_def.as_bytes(),
-        )
-        .expect("failed to build rkyv test dictionary");
-        let mut rkyv_bytes = Vec::new();
-        dictionary
-            .write(&mut rkyv_bytes)
-            .expect("failed to write rkyv test dictionary");
-        write_zstd_dictionary_marker(path, &rkyv_bytes);
-    }
-
-    fn write_zstd_dictionary_marker(path: &Path, bytes: &[u8]) {
-        let mut encoder = zstd::Encoder::new(Vec::new(), 0).expect("failed to create zstd encoder");
-        std::io::Write::write_all(&mut encoder, bytes)
-            .expect("failed to write zstd dictionary marker");
-        let compressed = encoder.finish().expect("failed to finish zstd marker");
-        fs::write(path, compressed).expect("failed to write dictionary marker");
-    }
-
-    fn write_invalid_compact_raw_archive(path: &Path) {
-        let archive_file = fs::File::create(path).expect("failed to create test archive");
-        let encoder =
-            zstd::Encoder::new(archive_file, 0).expect("failed to create test zstd encoder");
-        let mut archive = tar::Builder::new(encoder);
-        let invalid_dictionary = b"not the published compact Raw dictionary";
-        let mut header = tar::Header::new_gnu();
-        header.set_size(
-            u64::try_from(invalid_dictionary.len()).expect("test dictionary size should fit u64"),
-        );
-        header.set_mode(0o644);
-        header.set_cksum();
-        archive
-            .append_data(
-                &mut header,
-                "unidic-cwj-3_1_1/system.dic.zst",
-                invalid_dictionary.as_slice(),
-            )
-            .expect("failed to add invalid dictionary to test archive");
-        let encoder = archive
-            .into_inner()
-            .expect("failed to finish test tar archive");
-        encoder
-            .finish()
-            .expect("failed to finish test zstd archive");
-    }
-
-    fn write_installed_compact_raw_dictionary(
-        model_dir: &Path,
-    ) -> crate::model::catalog::FileIntegrity {
-        fs::create_dir_all(model_dir).expect("failed to create compact Raw dictionary dir");
-        let dictionary_path = model_dir.join("system.dic");
-        let mut dictionary = VIBRATO_MODEL_MAGIC.to_vec();
-        dictionary.extend_from_slice(b"compact Raw integrity fixture");
-        fs::write(&dictionary_path, &dictionary).expect("failed to write compact Raw dictionary");
-        let sha256 = sha256_file(&dictionary_path, "test compact Raw dictionary")
-            .expect("failed to hash compact Raw dictionary");
-        let sha256 = Box::leak(sha256.into_boxed_str());
-        let expected = crate::model::catalog::FileIntegrity {
-            size: u64::try_from(dictionary.len()).expect("test dictionary size should fit u64"),
-            sha256,
-        };
-        fs::write(
-            model_dir.join("manifest.json"),
-            format!(
-                r#"{{
-                "schema_version": 1,
-                "dictionary_id": "unidic-cwj-3_1_1",
-                "representation": "compact-raw",
-                "feature_encoding": "[PP][S][F]",
-                "expanded_dictionary": {{
-                    "size": {},
-                    "sha256": "{}"
-                }}
-            }}"#,
-                expected.size, expected.sha256
-            ),
-        )
-        .expect("failed to write compact Raw install manifest");
-        expected
     }
 
     #[test]
@@ -2607,22 +1854,200 @@ mod tests {
     }
 
     #[test]
-    fn nemotron_asr_status_uses_selected_archive_required_files() {
+    fn reazon_accuracy_status_requires_static_reranker_assets_only_when_enabled() {
+        let root = unique_test_models_root("model-status-reazon-accuracy");
+        let mut config = parapper_config! {
+            asr_model: AsrModel::ReazonSpeechK2V2,
+            asr_precision: AsrPrecision::Int8Float32,
+            ..ParapperConfig::default()
+        };
+        write_required_asr_model_files(
+            &root,
+            AsrModel::ReazonSpeechK2V2,
+            AsrPrecision::Int8Float32,
+        );
+
+        assert!(model_status_from_root(&root, &config).asr.installed);
+
+        config.asr.mode = AsrMode::Accurate;
+        assert!(!model_status_from_root(&root, &config).asr.installed);
+
+        let reranker_dir = default_asr_model_dir_from_root(&root, AsrModel::ReazonSpeechK2V2)
+            .join(parapper_models::asr::backend::REAZON_STATIC_EMBEDDING_DIR_NAME);
+        for file in parapper_models::asr::backend::REAZON_STATIC_EMBEDDING_REQUIRED_FILES {
+            let path = reranker_dir.join(file);
+            fs::create_dir_all(path.parent().expect("reranker file has a parent"))
+                .expect("failed to create reranker test dir");
+            fs::write(path, b"installed").expect("failed to create reranker test file");
+        }
+
+        assert!(model_status_from_root(&root, &config).asr.installed);
+    }
+
+    #[test]
+    fn parakeet_status_uses_split_ctc_for_fast_and_adds_tdt_files_for_accurate() {
+        use parapper_models::asr::backend::parakeet_ja::{
+            HYBRID_REQUIRED_FILES, SHARED_CTC_REQUIRED_FILES,
+        };
+
+        let root = unique_test_models_root("model-status-parakeet-accuracy");
+        let mut config = ParapperConfig::default();
+        config.asr.model = AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8;
+        config.asr.precision = AsrPrecision::Int8;
+        let dir =
+            default_asr_model_dir_from_root(&root, AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8);
+        fs::create_dir_all(&dir).expect("create Parakeet fixture directory");
+        fs::write(dir.join("model.int8.onnx"), b"legacy").expect("write legacy model fixture");
+        fs::write(dir.join("tokens.txt"), b"legacy").expect("write legacy tokens fixture");
+        assert!(
+            !model_status_from_root(&root, &config).asr.installed,
+            "legacy monolithic CTC files must not satisfy fast mode"
+        );
+
+        for file in SHARED_CTC_REQUIRED_FILES {
+            fs::write(dir.join(file), b"shared CTC").expect("write shared CTC fixture");
+        }
+        assert!(model_status_from_root(&root, &config).asr.installed);
+
+        config.asr.mode = AsrMode::Accurate;
+        assert!(!model_status_from_root(&root, &config).asr.installed);
+        for file in HYBRID_REQUIRED_FILES {
+            fs::write(dir.join(file), b"hybrid TDT").expect("write hybrid TDT fixture");
+        }
+        assert!(model_status_from_root(&root, &config).asr.installed);
+    }
+
+    #[test]
+    fn parakeet_split_bundle_downloads_the_files_for_each_mode_from_the_pinned_hf_release() {
+        use parapper_models::asr::backend::parakeet_ja::{
+            HYBRID_REQUIRED_FILES, SHARED_CTC_REQUIRED_FILES,
+        };
+
+        let root = unique_test_models_root("parakeet-split-download-published");
+        let model = AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8;
+        let model_dir = default_asr_model_dir_from_root(&root, model);
+        let base_url = "https://huggingface.co/nadare/parakeet-tdt_ctc-0.6b-ja-onnx-dynamic-int8/resolve/ab9073e4b457a4eb3df4e362946404be8adc0b1e";
+
+        for (mode, additional_files) in [
+            (AsrMode::Fast, &[][..]),
+            (AsrMode::Accurate, HYBRID_REQUIRED_FILES),
+        ] {
+            let config = parapper_config! {
+                asr_model: model,
+                asr_precision: AsrPrecision::Int8,
+                asr_mode: mode,
+                ..ParapperConfig::default()
+            };
+            let mut targets = Vec::new();
+
+            push_asr_download_targets_from_root(&mut targets, &root, &config)
+                .expect("published Parakeet files must be scheduled");
+
+            let expected_files = SHARED_CTC_REQUIRED_FILES
+                .iter()
+                .chain(additional_files)
+                .copied()
+                .collect::<std::collections::HashSet<_>>();
+            let actual_files = targets
+                .iter()
+                .filter(|target| target.output_path.starts_with(&model_dir))
+                .map(|target| target.file_name.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(actual_files, expected_files, "mode={mode:?}");
+            assert!(
+                targets
+                    .iter()
+                    .filter(|target| target.output_path.starts_with(&model_dir))
+                    .all(|target| {
+                        target.kind == DownloadTargetKind::File
+                            && target.integrity.is_some()
+                            && target.url
+                                == format!("{base_url}/{}?download=true", target.file_name)
+                    }),
+                "mode={mode:?}: every Parakeet file must come from the pinned public release"
+            );
+        }
+    }
+
+    #[test]
+    fn reazon_accuracy_downloads_only_the_two_files_from_the_pinned_snapshot() {
+        let mut config = ParapperConfig::default();
+        config.asr.model = AsrModel::ReazonSpeechK2V2;
+        let model_dir = Path::new("reazon-model");
+        let mut targets = Vec::new();
+
+        push_reazon_accuracy_download_targets(
+            &mut targets,
+            model_dir,
+            &config,
+            AsrModel::ReazonSpeechK2V2,
+        );
+        assert!(targets.is_empty());
+
+        config.asr.mode = AsrMode::Accurate;
+        push_reazon_accuracy_download_targets(
+            &mut targets,
+            model_dir,
+            &config,
+            AsrModel::ReazonSpeechK2V2,
+        );
+
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().all(|target| {
+            target.url.starts_with("https://huggingface.co/hotchpotch/static-embedding-japanese/resolve/95b3d9c80a7ccf604e2b5daee7b1b3eed6b1a9d3/")
+                && target.kind == DownloadTargetKind::File
+                && target.output_path.starts_with(model_dir.join("static-embedding-japanese"))
+                && target.integrity.is_some()
+        }));
+    }
+
+    #[test]
+    fn nemotron_asr_status_reuses_one_560ms_archive_for_every_runtime_latency() {
         for (model, archive_name) in [
             (
+                AsrModel::NemotronSpeechStreamingEn0_6B80MsInt8,
+                "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2",
+            ),
+            (
+                AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8,
+                "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2",
+            ),
+            (
+                AsrModel::NemotronSpeechStreamingEn0_6B320MsInt8,
+                "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2",
+            ),
+            (
+                AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8,
+                "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2",
+            ),
+            (
+                AsrModel::NemotronSpeechStreamingEn0_6B1120MsInt8,
+                "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2",
+            ),
+            (
+                AsrModel::Nemotron3_5AsrStreaming0_6B80MsInt8,
+                "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11.tar.bz2",
+            ),
+            (
                 AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8,
-                "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-160ms-int8-2026-06-11.tar.bz2",
+                "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11.tar.bz2",
+            ),
+            (
+                AsrModel::Nemotron3_5AsrStreaming0_6B320MsInt8,
+                "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11.tar.bz2",
             ),
             (
                 AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8,
                 "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11.tar.bz2",
             ),
+            (
+                AsrModel::Nemotron3_5AsrStreaming0_6B1120MsInt8,
+                "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11.tar.bz2",
+            ),
         ] {
             let root = unique_test_models_root("model-status-nemotron-asr");
             let config = parapper_config! {
-                asr_language: crate::config::AsrLanguage::Multilingual,
-                asr_model: model,
-                asr_precision: AsrPrecision::Int8,
+                interim_asr_model: Some(model),
                 ..ParapperConfig::default()
             }
             .normalized();
@@ -2633,15 +2058,39 @@ mod tests {
             assert!(!missing.asr.installed);
 
             write_required_asr_model_files(&root, model, AsrPrecision::Int8);
-            write_required_asr_model_files(
-                &root,
-                config.completion_asr_model(),
-                config.asr_precision_for(config.completion_asr_model()),
-            );
+            write_required_asr_model_files(&root, config.asr.model, config.asr.precision);
+            let integrity = asr_model_archive_integrity(model).unwrap();
+            fs::write(
+                default_asr_model_dir_from_root(&root, model).join(MODEL_ARCHIVE_SHA256_MARKER),
+                integrity.sha256,
+            )
+            .unwrap();
 
             let installed = model_status_from_root(&root, &config);
             assert!(installed.asr.installed);
         }
+    }
+
+    #[test]
+    fn multilingual_nemotron_without_current_archive_marker_is_not_installed() {
+        let root = unique_test_models_root("nemotron-current-archive-marker");
+        let model = AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8;
+        write_required_asr_model_files(&root, model, AsrPrecision::Int8);
+        let model_dir = default_asr_model_dir_from_root(&root, model);
+
+        assert!(!asr_model_installed_for(
+            &model_dir,
+            model,
+            AsrPrecision::Int8
+        ));
+
+        let expected = asr_model_archive_integrity(model).unwrap();
+        fs::write(model_dir.join(MODEL_ARCHIVE_SHA256_MARKER), expected.sha256).unwrap();
+        assert!(asr_model_installed_for(
+            &model_dir,
+            model,
+            AsrPrecision::Int8
+        ));
     }
 
     struct TestModelsRoot {
@@ -2685,6 +2134,35 @@ mod tests {
         }
     }
 
+    fn stt_profile_for_model_assets(id: &str, model: AsrModel) -> SttProfileConfig {
+        let mut asr = AsrConfig::default();
+        asr.language = model.language();
+        asr.model = model;
+        asr.precision = model.default_precision();
+        asr.enabled_models = vec![model];
+        SttProfileConfig {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            enabled: true,
+            neo_http_enabled: true,
+            developer_http_enabled: true,
+            display_color: SttProfileDisplayColor::Green,
+            input: SttProfileInputConfig {
+                device_host: None,
+                device_id: None,
+                device_name: None,
+                channel_index: 0,
+                volume_percent: 100,
+                muted: false,
+            },
+            noise_cancellation: NoiseCancellationConfig::default(),
+            segmentation: SegmentationConfig::default(),
+            turn: TurnConfig::default(),
+            asr,
+            delivery_profile_id: None,
+        }
+    }
+
     #[test]
     fn local_tts_models_follow_speech_mappings() {
         let config = parapper_config! {
@@ -2696,7 +2174,7 @@ mod tests {
                     target_lang: None,
                     backend: SpeechBackend::LocalTts,
                     talker: String::new(),
-                    local_tts_voice: Some(LocalTtsVoice::Kristin),
+                    local_tts_voice: Some(LocalTtsVoice::Supertonic2Onnx),
                     local_tts_language: None,
                     local_tts_speaker_id: None,
                     output_device_id: None,
@@ -2712,7 +2190,7 @@ mod tests {
                     target_lang: Some("en_US".to_string()),
                     backend: SpeechBackend::LocalTts,
                     talker: String::new(),
-                    local_tts_voice: Some(LocalTtsVoice::Kristin),
+                    local_tts_voice: Some(LocalTtsVoice::Supertonic2Onnx),
                     local_tts_language: None,
                     local_tts_speaker_id: None,
                     output_device_id: None,
@@ -2728,7 +2206,7 @@ mod tests {
                     target_lang: Some("en_US".to_string()),
                     backend: SpeechBackend::LocalTts,
                     talker: String::new(),
-                    local_tts_voice: Some(LocalTtsVoice::Supertonic2Onnx),
+                    local_tts_voice: Some(LocalTtsVoice::Supertonic3Onnx),
                     local_tts_language: Some("en".to_string()),
                     local_tts_speaker_id: Some(0),
                     output_device_id: None,
@@ -2759,7 +2237,10 @@ mod tests {
 
         assert_eq!(
             local_tts_voices_for_config(&config),
-            vec![LocalTtsVoice::Kristin, LocalTtsVoice::Supertonic2Onnx]
+            vec![
+                LocalTtsVoice::Supertonic2Onnx,
+                LocalTtsVoice::Supertonic3Onnx
+            ]
         );
         assert_eq!(
             model_status_from_root(std::path::Path::new("models"), &config)
@@ -2901,9 +2382,23 @@ mod tests {
                 .iter()
                 .all(|target| target.kind == DownloadTargetKind::File)
         );
-        assert!(targets.iter().all(|target| target.url.starts_with(
-            "https://huggingface.co/onnx-community/LFM2-350M-ENJP-MT-ONNX/resolve/main/"
-        )));
+        assert!(
+            targets
+                .iter()
+                .filter(|target| target.file_name != "LICENSE")
+                .all(|target| target.url.starts_with(
+                    "https://huggingface.co/onnx-community/LFM2-350M-ENJP-MT-ONNX/resolve/main/"
+                ))
+        );
+        assert_eq!(
+            targets
+                .iter()
+                .find(|target| target.file_name == "LICENSE")
+                .map(|target| target.url.as_str()),
+            Some(
+                "https://huggingface.co/LiquidAI/LFM2-350M-ENJP-MT/resolve/80367784d525777ad7565b24534ba5810eeac59f/LICENSE?download=true"
+            )
+        );
     }
 
     #[test]

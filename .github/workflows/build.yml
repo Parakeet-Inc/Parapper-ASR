@@ -21,9 +21,15 @@ jobs:
       CARGO_TERM_COLOR: always
       RUST_VERSION: 1.97.1
       TARGET_TRIPLE: x86_64-pc-windows-msvc
-      SHERPA_ONNX_VERSION: 1.13.3
-      SHERPA_PREBUILT_DIR: sherpa-onnx-v1.13.3-win-x64-shared-MT-Release-lib
-      SHERPA_PREBUILT_URL: https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/sherpa-onnx-v1.13.3-win-x64-shared-MT-Release-lib.tar.bz2
+      ONNXRUNTIME_VERSION: 1.24.4
+      ONNXRUNTIME_PREBUILT_DIR: onnxruntime-win-x64-1.24.4
+      ONNXRUNTIME_PREBUILT_URL: https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip
+      ONNXRUNTIME_PREBUILT_SIZE: 74442783
+      ONNXRUNTIME_PREBUILT_SHA256: d2319fddfb6ea4db99ccc4b60c85c517bcd855721f5daa6a06d40d7cb2ee2357
+      ONNXRUNTIME_DLL_SIZE: 14203464
+      ONNXRUNTIME_DLL_SHA256: b95efb2113b603bbbf3f191061c5516a871ed546893c820e4f3b7b6c358dbf2a
+      ONNXRUNTIME_PROVIDERS_SHARED_DLL_SIZE: 22088
+      ONNXRUNTIME_PROVIDERS_SHARED_DLL_SHA256: f2540b89707b47895c2a732bfd04e34a695c580d22301ef44c0f01f09b001673
 
     steps:
       - name: Checkout
@@ -55,25 +61,52 @@ jobs:
           shared-key: ${{ env.TARGET_TRIPLE }}
           cache-on-failure: true
 
-      - name: Cache sherpa-onnx runtime DLLs
-        id: sherpa-cache
+      - name: Cache Microsoft ONNX Runtime DLLs
+        id: onnxruntime-cache
         uses: actions/cache@v4
         with:
-          path: target/sherpa-onnx-prebuilt
-          key: sherpa-onnx-${{ env.SHERPA_ONNX_VERSION }}-${{ env.TARGET_TRIPLE }}-${{ env.SHERPA_PREBUILT_DIR }}
+          path: target/onnxruntime-prebuilt
+          key: onnxruntime-${{ env.ONNXRUNTIME_VERSION }}-${{ env.TARGET_TRIPLE }}-${{ env.ONNXRUNTIME_PREBUILT_SHA256 }}
 
-      - name: Download sherpa-onnx runtime DLLs
-        if: steps.sherpa-cache.outputs.cache-hit != 'true'
+      - name: Download Microsoft ONNX Runtime DLLs
+        if: steps.onnxruntime-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          $destination = Join-Path $env:GITHUB_WORKSPACE 'target/sherpa-onnx-prebuilt'
+          $destination = Join-Path $env:GITHUB_WORKSPACE 'target/onnxruntime-prebuilt'
           New-Item -ItemType Directory -Force -Path $destination | Out-Null
-          $archive = Join-Path $env:RUNNER_TEMP 'sherpa-onnx.tar.bz2'
-          curl.exe -L -f -o $archive $env:SHERPA_PREBUILT_URL
-          tar.exe -xjf $archive -C $destination
-          $libDir = Join-Path $destination "$env:SHERPA_PREBUILT_DIR/lib"
+          $archive = Join-Path $env:RUNNER_TEMP 'onnxruntime-win-x64.zip'
+          curl.exe -L -f -o $archive $env:ONNXRUNTIME_PREBUILT_URL
+          if ((Get-Item -LiteralPath $archive).Length -ne [int64]$env:ONNXRUNTIME_PREBUILT_SIZE) {
+            Write-Error "Unexpected Microsoft ONNX Runtime archive size"
+          }
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $env:ONNXRUNTIME_PREBUILT_SHA256) {
+            Write-Error "Unexpected Microsoft ONNX Runtime archive digest"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force
+          $libDir = Join-Path $destination "$env:ONNXRUNTIME_PREBUILT_DIR/lib"
           if (!(Test-Path $libDir)) {
-            Write-Error "sherpa-onnx runtime DLL dir not found: $libDir"
+            Write-Error "Microsoft ONNX Runtime DLL dir not found: $libDir"
+          }
+
+      - name: Verify Microsoft ONNX Runtime identity
+        shell: pwsh
+        run: |
+          $libDir = Join-Path $env:GITHUB_WORKSPACE "target/onnxruntime-prebuilt/$env:ONNXRUNTIME_PREBUILT_DIR/lib"
+          $libraries = @(
+            @{ Name = 'onnxruntime.dll'; Size = [int64]$env:ONNXRUNTIME_DLL_SIZE; Sha256 = $env:ONNXRUNTIME_DLL_SHA256 },
+            @{ Name = 'onnxruntime_providers_shared.dll'; Size = [int64]$env:ONNXRUNTIME_PROVIDERS_SHARED_DLL_SIZE; Sha256 = $env:ONNXRUNTIME_PROVIDERS_SHARED_DLL_SHA256 }
+          )
+          foreach ($library in $libraries) {
+            $path = Join-Path $libDir $library.Name
+            if (!(Test-Path -LiteralPath $path)) {
+              Write-Error "$($library.Name) not found: $path"
+            }
+            if ((Get-Item -LiteralPath $path).Length -ne $library.Size) {
+              Write-Error "Unexpected $($library.Name) size"
+            }
+            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $library.Sha256) {
+              Write-Error "Unexpected $($library.Name) digest"
+            }
           }
 
       - name: Cache cargo-about
@@ -98,16 +131,51 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Rust check
-        run: cargo check -p parapper -p parapper-morph-dictionary
+        run: cargo check --workspace --all-targets --all-features
+
+      - name: STT crate dependency boundaries
+        shell: pwsh
+        run: |
+          $workspaceTree = cargo tree --workspace
+          $sherpaDependencies = $workspaceTree | Select-String -Pattern '^[\s│├└─]*sherpa-onnx(?:-sys)?\s+v'
+          if ($sherpaDependencies) {
+            $sherpaDependencies | Write-Output
+            Write-Error 'The workspace must not depend on sherpa-onnx'
+          }
+          $pattern = '^[\s│├└─]*(?:tauri(?:-[^\s]+)?|ort(?:-[^\s]+)?|sherpa-onnx(?:-sys)?|vibrato(?:-rkyv)?|cpal|tokio(?:-[^\s]+)?|reqwest)\s+v'
+          foreach ($package in @('parapper-stt-engine', 'parapper-stt-server')) {
+            $tree = cargo tree -p $package
+            $forbidden = $tree | Select-String -Pattern $pattern
+            if ($forbidden) {
+              $forbidden | Write-Output
+              Write-Error "$package contains a forbidden host, runtime, or model dependency"
+            }
+          }
 
       - name: Rust clippy
-        run: cargo clippy -p parapper -p parapper-morph-dictionary --all-targets
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Rust tests
-        run: cargo test -p parapper -p parapper-morph-dictionary
+        run: cargo test --workspace
+
+      - name: Compile real ASR contracts
+        run: cargo test -p parapper-models --features real-asr-tests --test real_models --no-run
 
       - name: Frontend lint
         run: pnpm exec eslint ./src
+
+      - name: Frontend tests
+        run: pnpm test:frontend
+
+      - name: Tauri-free web preview
+        shell: pwsh
+        run: |
+          pnpm build:web-preview
+          $matches = Get-ChildItem -LiteralPath dist-web-preview -Recurse -File | Select-String -Pattern '@tauri-apps|__TAURI_INTERNALS__'
+          if ($matches) {
+            $matches | Write-Output
+            Write-Error 'Tauri code leaked into web preview bundle'
+          }
 
       - name: Frontend build
         run: pnpm build

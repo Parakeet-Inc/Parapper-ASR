@@ -5,7 +5,7 @@
 //!
 //! Usage: `cargo run -p parapper-diagnostics
 //! --bin streaming_recognition_smoke_server -- [bind_addr] [api_key]`
-//! (default bind_addr is `127.0.0.1:0`, i.e. an OS-assigned port).
+//! (default `bind_addr` is `127.0.0.1:0`, i.e. an OS-assigned port).
 //!
 //! Prints `LISTENING <host>:<port>` once bound, then blocks until stdin
 //! closes (EOF). The test harness terminates it by closing the pipe rather

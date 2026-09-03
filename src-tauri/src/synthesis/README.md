@@ -10,31 +10,21 @@ synthesis/
 ├── mod.rs             公開入口
 ├── request.rs         QueuedSpeechRequest の生成
 ├── queue.rs           stale 除去と送信順序
-├── manager.rs         TTS worker
-├── artifact.rs        TtsArtifact
-├── local/             local TTS voice 別生成キュー
-│   ├── mod.rs
-│   ├── queue.rs       voice 別キュー / worker
-│   ├── engine.rs      Sherpa / Supertonic adapter
-│   ├── playback.rs    生成済み PCM を playback へ渡す
-│   ├── audio.rs       生成済み音声 item
-│   └── key.rs         キュー key
-├── clients/
-│   └── ync_speech.rs  YNC speech HTTP client
-└── engines/
-    ├── sherpa_onnx.rs  cfg(test) stub を内部に持つ
-    └── supertonic_onnx.rs
+├── dispatch.rs        worker、YNC/local振り分け、Tauri event
+└── local.rs           voice別生成キューとplayback接続
 ```
 
 ## 方針
 
 - `synthesis::submit_recognized_text` は認識結果から TTS request を作る
 - `translation` から翻訳結果 TTS を起動する場合は `build_speech_requests_with_source_meta` と `spawn_speech_requests` を使う
-- YNC speech は `clients/ync_speech.rs` で HTTP request を送る
+- YNC speech は `dispatch.rs` からplugin HTTP clientへ渡す
 - YNC speech は相手側 plugin のキューに渡すため、送信順だけを守り、ローカル再生完了は待たない
 - local TTS は voice 別キューで並列生成する
 - local TTS の生成後 PCM は `playback::PlaybackManager` へ渡し、再生は直列にする
-- ローカル推論エンジンは `engines/`、外部 API は `clients/` に置く
+- Sherpa/SupertonicのSession選択、モデル固有の話者状態、生成PCM契約は
+  `parapper-models::tts::LocalTtsEngine` が所有する
+- `local.rs` はTauriのmodel path解決、voice別worker、再生キュー、event接続だけを所有する
 
 ## 所有しない責務
 

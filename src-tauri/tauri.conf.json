@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Parapper",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "identifier": "com.parakeet-inc.parapper",
   "build": {
     "frontendDist": "../dist",
@@ -34,6 +34,14 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "targets": "all"
+    "targets": "all",
+    "resources": {
+      "resources/hotword-reading/NOTICE.md": "licenses/hotword-reading/NOTICE.md",
+      "../public/licenses/hotword-reading/LICENSE-APACHE-2.0.txt": "licenses/hotword-reading/LICENSE-APACHE-2.0.txt",
+      "../public/licenses/THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
+      "resources/morph/NOTICE": "licenses/morph/NOTICE",
+      "resources/morph/BSD": "licenses/morph/BSD",
+      "resources/morph/AUTHORS": "licenses/morph/AUTHORS"
+    }
   }
 }

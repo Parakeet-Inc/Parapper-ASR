@@ -1,69 +1,70 @@
-# recognition モジュール俯瞰
+# recognitionモジュール俯瞰
 
-`recognition/` は、AI 部品名ではなく pipeline stage で読む。
+recognitionは、再利用可能なSTT coreとdesktop host adapterの2層で構成する。
 
 ```text
-recognition/
-  control/
-  segmentation/
-  transcription/
-  turn/
+crates/parapper-stt-engine/src/
+  asr.rs                 ASR model registry / request実行 / streaming lifecycle
+  segmentation/          VAD frame -> Segment event
+  transcription/         request planning / route / result reduction / preprocessing
+  turn/                  Turn state / grammar / Namo / silence / timeout
+  session.rs             STT runtime stateとport
+  driver.rs              non-blocking step priority
+
+src-tauri/src/recognition/
+  config.rs              ParapperConfig -> SttEngineConfig
+  session.rs             composition root
+  driver.rs              blocking loop / shutdown deadline
+  model_factory.rs       Tauri path解決とnative model構築
+  asr_worker.rs          ASR worker thread / queue / clock / warning event
+  language_adapter.rs    SLIの構築とwarning adapter
+  turn_adapter.rs        Namo/Morphの構築とport adapter
+  input.rs               audio/network入力処理
+  input_source.rs        bounded inputと切断policy
+  output_sink.rs         desktop/WebSocket output接続
+  events.rs              Tauri event DTOとemit
+  streaming.rs           parapper-stt-serverのdesktop adapter
 ```
+
+## 依存とデータフロー
 
 ```mermaid
 flowchart TD
-    input[control::input\nouter loop] --> driver[control::driver\nRecognitionDriver]
-    driver --> segmentation[segmentation::flow\nVAD frame -> SegmentEvent]
-    segmentation --> session[control::session\nRecognitionSession]
-
-    session --> transcription[transcription::flow\nASR request/result workflow]
-    transcription --> planner[transcription::planner\nrequest planning]
-    transcription --> reducer[transcription::reducer\nresult reduction]
-    transcription --> asr[transcription::asr\nASR engine/runner/task]
-    transcription --> route[transcription::route\nroute selection / SLI]
-
-    transcription --> transcript[turn::transcript\nTurnDraft mutation]
-    session --> turn_flow[turn::flow\nopen/continue/final/timeout/output]
-    turn_flow --> boundary_flow[turn::boundary_flow\ngrammar boundary decision flow]
-
-    boundary_flow --> boundary[turn::boundary\ncandidate generation]
-    turn_flow --> policy[turn::policy\ncompletion/silence/timeout/grammar]
-    turn_flow --> decision[turn::decision\nTD contract / Namo]
-    turn_flow --> domain[turn::domain\nTurnDraft / TurnConfirmed]
-    domain --> output[turn::port\nTurnOutputSink]
-    output --> delivery[delivery\nrecognized text fanout]
-
-    classDef control fill:#e8f2ff,stroke:#4d7fb8,color:#10243d
-    classDef stage fill:#ecf8ee,stroke:#4f9a61,color:#103719
-    classDef decision fill:#fff4df,stroke:#bd8733,color:#3b2705
-    classDef io fill:#ffecec,stroke:#b85c5c,color:#451515
-
-    class input,driver,session control
-    class segmentation,transcription,transcript,turn_flow,boundary_flow stage
-    class planner,reducer,route,boundary,policy,decision,domain decision
-    class asr,output,delivery io
+    input["src-tauri input / input_source"] --> hostDriver["src-tauri driver<br/>thread・shutdown"]
+    hostDriver --> engineDriver["parapper-stt-engine<br/>RecognitionDriver"]
+    engineDriver --> segment["Segment state machine"]
+    segment --> transcription["ASR planning / reduction"]
+    transcription --> asrRuntime["AsrExecutionRuntime<br/>registry・stream lifecycle・padding"]
+    asrRuntime --> models["parapper-models::asr<br/>ORT Session・model cache・decoder"]
+    transcription --> turn["Turn lifecycle / TD policy"]
+    turn --> output["host-neutral RecognitionOutput"]
+    output --> sink["src-tauri output_sink"]
+    sink --> delivery["desktop delivery"]
+    sink --> websocket["WebSocket output"]
 ```
 
-## 境界
+依存は`src-tauri -> parapper-stt-engine -> parapper-models`の一方向とする。`parapper-stt-engine`はTauri型、生のORT Session、filesystem path、worker threadを参照しない。
 
-- `control/`: production orchestration、session state、driver priority。runtime config は dirty bit で差分を分類し、audio / VAD / driver の必要な経路だけへ反映する。
-- `segmentation/`: audio stream / VAD frame から segment event を作る。
-- `transcription/`: segment / turn audio を ASR に投げ、result を workflow action として処理する。
-- `turn/`: transcript を Turn 状態へ反映し、continue / final / output を決める。debug badge のような表示用 payload は runtime event contract に含めない。
+## 状態の所有権
+
+- AIモデル固有のアルゴリズム状態（ORT Session、cache tensor、decoder state）: `parapper-models`
+- STTとしてmodelを使うアルゴリズム状態（registry、STT/model Session ID対応、streaming lifecycle、先頭padding、request policy）: `parapper-stt-engine`
+- OS/Tauri/thread/resourceとの接続（path解決、model構築、queue、clock、event、shutdown）: `src-tauri`
+
+desktopはrecognition開始時に必要なmodelを構築してengineへ注入する。request処理中に新しいmodel Sessionを遅延生成しない。停止後のmodel再構築と、実行中に許可するparameter更新の詳細は独立したconfig変更で扱う。
 
 ## 不変条件
 
-- ASR in-flight は 1 件だけ。
-- pending turn check は queue ではなく 1 slot。新しい check は stale 判定用 epoch を持つ現在値として扱う。
-- ASR result は request identity が一致してから適用する。
-- stale ASR result / stale output は downstream へ流さない。
-- Namo Continue 後の発話 activity 中は timeout final しない。
-- grammar boundary は completion ASR の末尾候補だけを Turn 完了に使い、途中候補では Turn を open のまま維持する。
+- ASR in-flightは1件だけ。
+- pending turn checkはqueueではなく1 slotで、stale判定用epochを持つ。
+- ASR resultはrequest identityが一致してから適用する。
+- stale ASR result / stale outputをdownstreamへ流さない。
+- Namo Continue後のspeech activity中はtimeout finalしない。
+- Nemotronのinterim streamは明示的にstartし、completion、reset、shutdown、失敗時にcancelする。
+- completionはstreamのfinish結果ではなく、source audioに対するfull offline ASRを使用する。
 
-## 設計判断
+## テスト所有権
 
-- `RecognitionDriverHandle` は `control/input.rs` が使う boxed driver interface として残す。audio worker と recognition driver の境界を狭く保つため。
-- `transcription/asr/task.rs` の request metadata は、workflow-level と engine-only に過剰分割しない。2 つ目以降の concrete engine 差分が明確になった時点で分ける。
-- route / SLI の session tests は `control/tests` 配下に置く。`RecognitionSession` の state mutation と production harness 上の event order を合わせて見るため。
-- `TurnDecision` は `is_end_of_turn` と `confidence` の最小契約にする。Namo response label や tokenizer details は engine 固有実装に閉じる。
-- turn lifecycle から ASR rerecognition dispatch へ進む bridge は `RecognitionSession` に置く。turn stage が request queue の内部構造を直接所有しないため。
+Segment/Turn、request planning、streaming lifecycle、padding、route、reducerの回帰テストは`parapper-stt-engine`に置く。`src-tauri`側はnative resourceの構築、worker/queue、inputとshutdown、Tauri event、desktop/WebSocket outputの接続だけをテストする。
+
+詳細な境界は[05-parapper-engine-boundary.md](05-parapper-engine-boundary.md)を参照。

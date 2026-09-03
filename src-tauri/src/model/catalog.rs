@@ -1,47 +1,36 @@
-use crate::config::{
-    AsrLanguage, AsrModel, LocalTranslationModel, LocalTtsFamily, LocalTtsVoice,
-    NoiseCancellationModel,
-};
+use crate::config::{AsrModel, LocalTranslationModel, LocalTtsVoice, NoiseCancellationModel};
+pub use parapper_stt_engine::NamoTurnDetectorModel;
 
 pub(crate) const VAD_MODEL_URL: &str =
     "https://github.com/snakers4/silero-vad/raw/refs/tags/v6.0/src/silero_vad/data/silero_vad.onnx";
-const VIBRATO_UNIDIC_CWJ_3_1_1_URL: &str = "https://github.com/Parakeet-Inc/Parapper-ASR/releases/download/morph-dictionary-unidic-cwj-3.1.1-v1/parapper-unidic-cwj-3_1_1-compact-raw-v1.tar.zst";
-const VIBRATO_UNIDIC_CWJ_3_1_1_ARCHIVE_NAME: &str =
-    "parapper-unidic-cwj-3_1_1-compact-raw-v1.tar.zst";
-const VIBRATO_UNIDIC_CWJ_3_1_1_DIR_NAME: &str = "unidic-cwj-3_1_1";
-const VIBRATO_UNIDIC_CWJ_3_1_1_ARCHIVE_INTEGRITY: FileIntegrity = FileIntegrity {
-    size: 7_434_191,
-    sha256: "a1dd0e62ae87f4631ade3aa46cf00b7fdbed1827893dd1d1bde2765009e125ea",
-};
-const VIBRATO_UNIDIC_CWJ_3_1_1_EXPANDED_INTEGRITY: FileIntegrity = FileIntegrity {
-    size: 44_497_344,
-    sha256: "1d7f0a194ae1f296f740fdb08433ef1fce81c0a353e7ce3585146b295ca87ef6",
-};
-pub(crate) const VIBRATO_MODEL_MAGIC: &[u8] = b"VibratoTokenizerRkyv 0.6\n";
-const ASR_MODEL_BASE_URL: &str =
-    "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/main";
+const ASR_MODEL_BASE_URL: &str = "https://huggingface.co/reazon-research/reazonspeech-k2-v2/resolve/291488c8151be24d7da4bf7af26e533fad96e407";
 const ASR_MODEL_DIR_NAME_JA: &str = "sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01";
-const ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_CTC_0_6B_JA_35000_INT8: &str = "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8/resolve/main";
+const REAZON_STATIC_EMBEDDING_BASE_URL: &str = "https://huggingface.co/hotchpotch/static-embedding-japanese/resolve/95b3d9c80a7ccf604e2b5daee7b1b3eed6b1a9d3";
+const ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_CTC_0_6B_JA_35000_INT8: &str = "https://huggingface.co/nadare/parakeet-tdt_ctc-0.6b-ja-onnx-dynamic-int8/resolve/ab9073e4b457a4eb3df4e362946404be8adc0b1e";
 const ASR_MODEL_DIR_NAME_NEMO_PARAKEET_TDT_CTC_0_6B_JA_35000_INT8: &str =
     "sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8";
-const ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_0_6B_V2_INT8: &str =
-    "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/main";
+const ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_0_6B_V2_INT8: &str = "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/1ab9323565ddb038682214b292f588070a538ce2";
 const ASR_MODEL_DIR_NAME_NEMO_PARAKEET_TDT_0_6B_V2_INT8: &str =
     "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
-const ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_0_6B_V3_INT8: &str =
-    "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main";
+const ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_0_6B_V3_INT8: &str = "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78";
 const ASR_MODEL_DIR_NAME_NEMO_PARAKEET_TDT_0_6B_V3_INT8: &str =
     "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8";
 const ASR_MODEL_BASE_URL_SHERPA_ONNX_RELEASES: &str =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
-const ASR_MODEL_DIR_NAME_NEMOTRON_SPEECH_STREAMING_EN_0_6B_160MS_INT8: &str =
-    "sherpa-onnx-nemotron-speech-streaming-en-0.6b-160ms-int8-2026-04-25";
 const ASR_MODEL_DIR_NAME_NEMOTRON_SPEECH_STREAMING_EN_0_6B_560MS_INT8: &str =
     "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25";
-const ASR_MODEL_DIR_NAME_NEMOTRON_3_5_ASR_STREAMING_0_6B_160MS_INT8: &str =
-    "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-160ms-int8-2026-06-11";
 const ASR_MODEL_DIR_NAME_NEMOTRON_3_5_ASR_STREAMING_0_6B_560MS_INT8: &str =
     "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11";
+const ASR_MODEL_ARCHIVE_INTEGRITY_NEMOTRON_SPEECH_STREAMING_EN_0_6B_560MS_INT8: FileIntegrity =
+    FileIntegrity {
+        size: 463_945_051,
+        sha256: "78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358",
+    };
+const ASR_MODEL_ARCHIVE_INTEGRITY_NEMOTRON_3_5_ASR_STREAMING_0_6B_560MS_INT8: FileIntegrity =
+    FileIntegrity {
+        size: 475_271_763,
+        sha256: "c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a",
+    };
 const SPEECHBRAIN_ECAPA_MODEL_DIR: &str = "speechbrain-lang-id-voxlingua107-ecapa-onnx";
 const SPEECHBRAIN_ECAPA_BASE_URL: &str =
     "https://huggingface.co/drakulavich/SpeechBrain-coreml/resolve/main";
@@ -75,8 +64,6 @@ const NAMO_TURN_DETECTOR_FILES_MULTILINGUAL: &[&str] = &[
     "tokenizer.json",
     "tokenizer_config.json",
 ];
-const LOCAL_TTS_MODEL_BASE_URL: &str =
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models";
 const SUPERTONIC2_MODEL_BASE_URL: &str =
     "https://huggingface.co/Supertone/supertonic-2/resolve/main";
 const SUPERTONIC3_MODEL_BASE_URL: &str =
@@ -84,6 +71,7 @@ const SUPERTONIC3_MODEL_BASE_URL: &str =
 const SUPERTONIC3_QUANTIZED_MODEL_BASE_URL: &str = "https://huggingface.co/nadare/supertonic-3-onnx-q4/resolve/0831a17d4f7de14ade46364ec447d50e24ff1f82";
 const LOCAL_TRANSLATION_MODEL_BASE_URL_LFM2_Q4: Option<&str> =
     Some("https://huggingface.co/onnx-community/LFM2-350M-ENJP-MT-ONNX/resolve/main");
+const LOCAL_TRANSLATION_MODEL_BASE_URL_LFM2_LICENSE: &str = "https://huggingface.co/LiquidAI/LFM2-350M-ENJP-MT/resolve/80367784d525777ad7565b24534ba5810eeac59f";
 const LOCAL_TRANSLATION_MODEL_BASE_URL_CAT_TRANSLATE_0_8B_Q4_K_QUANT: Option<&str> = Some(
     "https://huggingface.co/nadare/CAT-Translate-0.8b-onnx-q4-k-quant/resolve/a6369bfcaa1f7c9a8df7294c6b2011286e5dc843",
 );
@@ -91,6 +79,7 @@ const LOCAL_TRANSLATION_MODEL_DIR_NAME_LFM2_Q4: &str = "lfm2-350m-enjp-mt-onnx-q
 const LOCAL_TRANSLATION_MODEL_DIR_NAME_CAT_TRANSLATE_0_8B_Q4_K_QUANT: &str =
     "cat-translate-0.8b-onnx-q4-k-quant";
 const LOCAL_TRANSLATION_MODEL_FILES_LFM2_Q4: &[&str] = &[
+    "LICENSE",
     "chat_template.jinja",
     "config.json",
     "generation_config.json",
@@ -116,8 +105,8 @@ const LOCAL_TRANSLATION_MODEL_FILES_CAT_TRANSLATE_0_8B_Q4_K_QUANT: &[&str] = &[
     "distribution-manifest.json",
     "SHA256SUMS",
 ];
-const LOCAL_TTS_MODEL_REQUIRED_FILES: &[&str] = &["tokens.txt"];
 const SUPERTONIC_ONNX_TTS_REQUIRED_FILES: &[&str] = &[
+    "LICENSE",
     "onnx/duration_predictor.onnx",
     "onnx/text_encoder.onnx",
     "onnx/vector_estimator.onnx",
@@ -170,10 +159,16 @@ pub(crate) const ALL_ASR_MODELS: &[AsrModel] = &[
     AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8,
     AsrModel::NemoParakeetTdt0_6BV2Int8,
     AsrModel::NemoParakeetTdt0_6BV3Int8,
+    AsrModel::NemotronSpeechStreamingEn0_6B80MsInt8,
     AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8,
+    AsrModel::NemotronSpeechStreamingEn0_6B320MsInt8,
     AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8,
+    AsrModel::NemotronSpeechStreamingEn0_6B1120MsInt8,
+    AsrModel::Nemotron3_5AsrStreaming0_6B80MsInt8,
     AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8,
+    AsrModel::Nemotron3_5AsrStreaming0_6B320MsInt8,
     AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8,
+    AsrModel::Nemotron3_5AsrStreaming0_6B1120MsInt8,
 ];
 
 pub(crate) const ALL_NAMO_TURN_DETECTOR_MODELS: &[NamoTurnDetectorModel] = &[
@@ -195,23 +190,6 @@ pub(crate) struct FileIntegrity {
     pub sha256: &'static str,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum NamoTurnDetectorModel {
-    Japanese,
-    English,
-    Multilingual,
-}
-
-impl NamoTurnDetectorModel {
-    pub fn for_asr_language(language: AsrLanguage) -> Self {
-        match language {
-            AsrLanguage::Japanese => Self::Japanese,
-            AsrLanguage::English => Self::English,
-            AsrLanguage::EuropeanMultilingual | AsrLanguage::Multilingual => Self::Multilingual,
-        }
-    }
-}
-
 pub(crate) fn asr_model_base_url(model: AsrModel) -> &'static str {
     match model {
         AsrModel::ReazonSpeechK2V2 => ASR_MODEL_BASE_URL,
@@ -220,10 +198,18 @@ pub(crate) fn asr_model_base_url(model: AsrModel) -> &'static str {
         }
         AsrModel::NemoParakeetTdt0_6BV2Int8 => ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_0_6B_V2_INT8,
         AsrModel::NemoParakeetTdt0_6BV3Int8 => ASR_MODEL_BASE_URL_NEMO_PARAKEET_TDT_0_6B_V3_INT8,
-        AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8
+        AsrModel::NemotronSpeechStreamingEn0_6B80MsInt8
+        | AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8
+        | AsrModel::NemotronSpeechStreamingEn0_6B320MsInt8
         | AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8
+        | AsrModel::NemotronSpeechStreamingEn0_6B1120MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B80MsInt8
         | AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8
-        | AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8 => ASR_MODEL_BASE_URL_SHERPA_ONNX_RELEASES,
+        | AsrModel::Nemotron3_5AsrStreaming0_6B320MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B1120MsInt8 => {
+            ASR_MODEL_BASE_URL_SHERPA_ONNX_RELEASES
+        }
     }
 }
 
@@ -235,16 +221,18 @@ pub(crate) fn asr_model_dir_name(model: AsrModel) -> &'static str {
         }
         AsrModel::NemoParakeetTdt0_6BV2Int8 => ASR_MODEL_DIR_NAME_NEMO_PARAKEET_TDT_0_6B_V2_INT8,
         AsrModel::NemoParakeetTdt0_6BV3Int8 => ASR_MODEL_DIR_NAME_NEMO_PARAKEET_TDT_0_6B_V3_INT8,
-        AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8 => {
-            ASR_MODEL_DIR_NAME_NEMOTRON_SPEECH_STREAMING_EN_0_6B_160MS_INT8
-        }
-        AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8 => {
+        AsrModel::NemotronSpeechStreamingEn0_6B80MsInt8
+        | AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8
+        | AsrModel::NemotronSpeechStreamingEn0_6B320MsInt8
+        | AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8
+        | AsrModel::NemotronSpeechStreamingEn0_6B1120MsInt8 => {
             ASR_MODEL_DIR_NAME_NEMOTRON_SPEECH_STREAMING_EN_0_6B_560MS_INT8
         }
-        AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8 => {
-            ASR_MODEL_DIR_NAME_NEMOTRON_3_5_ASR_STREAMING_0_6B_160MS_INT8
-        }
-        AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8 => {
+        AsrModel::Nemotron3_5AsrStreaming0_6B80MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B320MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B1120MsInt8 => {
             ASR_MODEL_DIR_NAME_NEMOTRON_3_5_ASR_STREAMING_0_6B_560MS_INT8
         }
     }
@@ -256,43 +244,85 @@ pub(crate) fn asr_model_archive_name(model: AsrModel) -> Option<String> {
         .then(|| format!("{}.tar.bz2", asr_model_dir_name(model)))
 }
 
+pub(crate) fn asr_model_archive_integrity(model: AsrModel) -> Option<FileIntegrity> {
+    match model {
+        AsrModel::NemotronSpeechStreamingEn0_6B80MsInt8
+        | AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8
+        | AsrModel::NemotronSpeechStreamingEn0_6B320MsInt8
+        | AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8
+        | AsrModel::NemotronSpeechStreamingEn0_6B1120MsInt8 => {
+            Some(ASR_MODEL_ARCHIVE_INTEGRITY_NEMOTRON_SPEECH_STREAMING_EN_0_6B_560MS_INT8)
+        }
+        AsrModel::Nemotron3_5AsrStreaming0_6B80MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B320MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8
+        | AsrModel::Nemotron3_5AsrStreaming0_6B1120MsInt8 => {
+            Some(ASR_MODEL_ARCHIVE_INTEGRITY_NEMOTRON_3_5_ASR_STREAMING_0_6B_560MS_INT8)
+        }
+        AsrModel::ReazonSpeechK2V2
+        | AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8
+        | AsrModel::NemoParakeetTdt0_6BV2Int8
+        | AsrModel::NemoParakeetTdt0_6BV3Int8 => None,
+    }
+}
+
 pub(crate) fn asr_model_required_file_names(
     model: AsrModel,
     precision: crate::config::AsrPrecision,
 ) -> &'static [&'static str] {
-    match model {
-        AsrModel::ReazonSpeechK2V2 => match precision {
-            crate::config::AsrPrecision::Int8 => &[
-                "encoder-epoch-99-avg-1.int8.onnx",
-                "decoder-epoch-99-avg-1.int8.onnx",
-                "joiner-epoch-99-avg-1.int8.onnx",
-                "tokens.txt",
-            ],
-            crate::config::AsrPrecision::Int8Float32 => &[
-                "encoder-epoch-99-avg-1.int8.onnx",
-                "decoder-epoch-99-avg-1.onnx",
-                "joiner-epoch-99-avg-1.int8.onnx",
-                "tokens.txt",
-            ],
-            crate::config::AsrPrecision::Float32 => &[
-                "encoder-epoch-99-avg-1.onnx",
-                "decoder-epoch-99-avg-1.onnx",
-                "joiner-epoch-99-avg-1.onnx",
-                "tokens.txt",
-            ],
+    parapper_models::asr::backend::required_model_file_names(model, precision)
+}
+
+pub(crate) fn asr_model_file_integrity(model: AsrModel, file_name: &str) -> Option<FileIntegrity> {
+    if model != AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8 {
+        return None;
+    }
+    let integrity = match file_name {
+        "encoder-model.int8.onnx" => FileIntegrity {
+            size: 3_387_454,
+            sha256: "3c4f14996c134b1e6ca2853230ccc0d36c66085af0b6272e002dfba0f25c5f5a",
         },
-        AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8 => &["model.int8.onnx", "tokens.txt"],
-        AsrModel::NemoParakeetTdt0_6BV2Int8
-        | AsrModel::NemoParakeetTdt0_6BV3Int8
-        | AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8
-        | AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8
-        | AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8
-        | AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8 => &[
-            "encoder.int8.onnx",
-            "decoder.int8.onnx",
-            "joiner.int8.onnx",
-            "tokens.txt",
-        ],
+        "encoder-model.int8.onnx.data" => FileIntegrity {
+            size: 878_444_544,
+            sha256: "a39578a7c16db2d7024dbe8f90ae99892cef69a8bb833b5d1223f9122a7e87bc",
+        },
+        "decoder_joint-model.onnx" => FileIntegrity {
+            size: 46_286_012,
+            sha256: "64e64c50b7df62707dc7ac1e8b1ea804b9f590db88d84e4abcdf4d1188cf9b8a",
+        },
+        "ctc-head-model.onnx" => FileIntegrity {
+            size: 959,
+            sha256: "23f65702c75a984fa16c95bd284b66b60f9d6693bf1169dc2947b56734cc72d9",
+        },
+        "ctc-head-model.onnx_data" => FileIntegrity {
+            size: 12_599_300,
+            sha256: "662b5f6b91dd4987ac9d139cc185501979b4de51947b5ba47b4d09cae75287b9",
+        },
+        "vocab.txt" => FileIntegrity {
+            size: 28_557,
+            sha256: "732f64c53909f2620c713f4106b487d92e6f54a6915b3cd3d1dbd32f9f4f392a",
+        },
+        _ => return None,
+    };
+    Some(integrity)
+}
+
+pub(crate) const fn reazon_static_embedding_base_url() -> &'static str {
+    REAZON_STATIC_EMBEDDING_BASE_URL
+}
+
+pub(crate) fn reazon_static_embedding_file_integrity(file_name: &str) -> Option<FileIntegrity> {
+    match file_name {
+        "0_StaticEmbedding/tokenizer.json" => Some(FileIntegrity {
+            size: 2_127_941,
+            sha256: "833add01c9eb44e78ffb2d9195caace320de0fcf64d1f4d95bc541b6e30a9fc9",
+        }),
+        "0_StaticEmbedding/model.safetensors" => Some(FileIntegrity {
+            size: 134_217_824,
+            sha256: "f0c60b3d2952fb89e67a063ac4aa558ff4b02facaac5fd674d637b9e2c52ccca",
+        }),
+        _ => None,
     }
 }
 
@@ -306,26 +336,6 @@ pub(crate) fn language_id_model_base_url() -> &'static str {
 
 pub(crate) fn language_id_model_files() -> &'static [&'static str] {
     SPEECHBRAIN_ECAPA_FILES
-}
-
-pub(crate) fn vibrato_unidic_archive_url() -> &'static str {
-    VIBRATO_UNIDIC_CWJ_3_1_1_URL
-}
-
-pub(crate) fn vibrato_unidic_archive_name() -> &'static str {
-    VIBRATO_UNIDIC_CWJ_3_1_1_ARCHIVE_NAME
-}
-
-pub(crate) fn vibrato_unidic_archive_integrity() -> FileIntegrity {
-    VIBRATO_UNIDIC_CWJ_3_1_1_ARCHIVE_INTEGRITY
-}
-
-pub(crate) fn vibrato_unidic_expanded_integrity() -> FileIntegrity {
-    VIBRATO_UNIDIC_CWJ_3_1_1_EXPANDED_INTEGRITY
-}
-
-pub(crate) fn vibrato_unidic_dir_name() -> &'static str {
-    VIBRATO_UNIDIC_CWJ_3_1_1_DIR_NAME
 }
 
 pub(crate) fn namo_turn_detector_base_url(model: NamoTurnDetectorModel) -> &'static str {
@@ -352,37 +362,19 @@ pub(crate) fn namo_turn_detector_files(model: NamoTurnDetectorModel) -> &'static
     }
 }
 
-pub(crate) fn local_tts_model_base_url() -> &'static str {
-    LOCAL_TTS_MODEL_BASE_URL
-}
-
 pub(crate) fn supertonic_tts_model_base_url(voice: LocalTtsVoice) -> &'static str {
     match voice {
         LocalTtsVoice::Supertonic2Onnx => SUPERTONIC2_MODEL_BASE_URL,
         LocalTtsVoice::Supertonic3Onnx => SUPERTONIC3_MODEL_BASE_URL,
         LocalTtsVoice::Supertonic3OnnxQuantized => SUPERTONIC3_QUANTIZED_MODEL_BASE_URL,
-        LocalTtsVoice::Kristin | LocalTtsVoice::John | LocalTtsVoice::Norman => {
-            unreachable!("non-Supertonic voice has no Supertonic model URL")
-        }
     }
-}
-
-pub(crate) fn local_tts_model_archive_name(voice: LocalTtsVoice) -> String {
-    format!("{}.tar.bz2", voice.dir_name())
 }
 
 pub(crate) fn local_tts_model_required_file_names(voice: LocalTtsVoice) -> Vec<&'static str> {
     if voice == LocalTtsVoice::Supertonic3OnnxQuantized {
         return SUPERTONIC3_QUANTIZED_ONNX_TTS_REQUIRED_FILES.to_vec();
     }
-    if voice.family() == LocalTtsFamily::Supertonic {
-        return SUPERTONIC_ONNX_TTS_REQUIRED_FILES.to_vec();
-    }
-
-    let mut files = Vec::with_capacity(LOCAL_TTS_MODEL_REQUIRED_FILES.len() + 1);
-    files.push(voice.onnx_file_name());
-    files.extend_from_slice(LOCAL_TTS_MODEL_REQUIRED_FILES);
-    files
+    SUPERTONIC_ONNX_TTS_REQUIRED_FILES.to_vec()
 }
 
 // This is a direct, auditable mapping of every file in the immutable release manifest.
@@ -496,11 +488,10 @@ pub(crate) fn local_tts_model_file_integrity(
     Some(integrity)
 }
 
-pub(crate) fn local_tts_model_required_dir_names(voice: LocalTtsVoice) -> &'static [&'static str] {
-    match voice.family() {
-        LocalTtsFamily::Vits => &["espeak-ng-data"],
-        LocalTtsFamily::Supertonic => &[],
-    }
+pub(crate) const fn local_tts_model_required_dir_names(
+    _voice: LocalTtsVoice,
+) -> &'static [&'static str] {
+    &[]
 }
 
 pub(crate) fn local_translation_model_base_url(
@@ -511,6 +502,18 @@ pub(crate) fn local_translation_model_base_url(
         LocalTranslationModel::CatTranslate0_8BQ4KQuant => {
             LOCAL_TRANSLATION_MODEL_BASE_URL_CAT_TRANSLATE_0_8B_Q4_K_QUANT
         }
+    }
+}
+
+pub(crate) fn local_translation_model_file_base_url(
+    model: LocalTranslationModel,
+    file_name: &str,
+) -> Option<&'static str> {
+    match (model, file_name) {
+        (LocalTranslationModel::Lfm2Q4, "LICENSE") => {
+            Some(LOCAL_TRANSLATION_MODEL_BASE_URL_LFM2_LICENSE)
+        }
+        _ => local_translation_model_base_url(model),
     }
 }
 
@@ -621,5 +624,195 @@ pub(crate) fn noise_cancellation_model_required_file_names(
 ) -> &'static [&'static str] {
     match model {
         NoiseCancellationModel::UlUnas => NOISE_CANCELLATION_MODEL_FILES_UL_UNAS,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        asr_model_archive_integrity, asr_model_base_url,
+        local_translation_model_required_file_names, local_tts_model_required_file_names,
+        reazon_static_embedding_base_url, reazon_static_embedding_file_integrity,
+    };
+    use crate::config::{AsrModel, LocalTranslationModel, LocalTtsVoice};
+
+    #[test]
+    fn hugging_face_asr_downloads_resolve_an_immutable_revision() {
+        for model in [
+            AsrModel::ReazonSpeechK2V2,
+            AsrModel::NemoParakeetTdtCtc0_6BJa35000Int8,
+            AsrModel::NemoParakeetTdt0_6BV2Int8,
+            AsrModel::NemoParakeetTdt0_6BV3Int8,
+        ] {
+            let url = asr_model_base_url(model);
+            assert!(!url.ends_with("/resolve/main"), "unpinned ASR URL: {url}");
+            let revision = url
+                .rsplit_once("/resolve/")
+                .expect("Hugging Face ASR URL must include a revision")
+                .1;
+            assert_eq!(revision.len(), 40, "ASR revision must be a full SHA");
+            assert!(revision.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        }
+    }
+
+    #[test]
+    fn reazon_static_reranker_download_resolves_the_evaluated_revision() {
+        assert_eq!(
+            reazon_static_embedding_base_url(),
+            "https://huggingface.co/hotchpotch/static-embedding-japanese/resolve/95b3d9c80a7ccf604e2b5daee7b1b3eed6b1a9d3"
+        );
+        assert!(
+            parapper_models::asr::backend::REAZON_STATIC_EMBEDDING_REQUIRED_FILES
+                .iter()
+                .all(|file| reazon_static_embedding_file_integrity(file).is_some())
+        );
+    }
+
+    #[test]
+    fn every_nemotron_archive_has_a_pinned_size_and_digest() {
+        for model in [
+            AsrModel::NemotronSpeechStreamingEn0_6B80MsInt8,
+            AsrModel::NemotronSpeechStreamingEn0_6B160MsInt8,
+            AsrModel::NemotronSpeechStreamingEn0_6B320MsInt8,
+            AsrModel::NemotronSpeechStreamingEn0_6B560MsInt8,
+            AsrModel::NemotronSpeechStreamingEn0_6B1120MsInt8,
+            AsrModel::Nemotron3_5AsrStreaming0_6B80MsInt8,
+            AsrModel::Nemotron3_5AsrStreaming0_6B160MsInt8,
+            AsrModel::Nemotron3_5AsrStreaming0_6B320MsInt8,
+            AsrModel::Nemotron3_5AsrStreaming0_6B560MsInt8,
+            AsrModel::Nemotron3_5AsrStreaming0_6B1120MsInt8,
+        ] {
+            let integrity = asr_model_archive_integrity(model)
+                .expect("Nemotron release assets must have an integrity contract");
+            assert!(integrity.size > 0);
+            assert_eq!(integrity.sha256.len(), 64);
+            assert!(
+                integrity
+                    .sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+            );
+        }
+    }
+
+    #[test]
+    fn downloaded_model_distributions_include_their_required_license_documents() {
+        assert!(
+            local_translation_model_required_file_names(LocalTranslationModel::Lfm2Q4)
+                .contains(&"LICENSE"),
+            "the LFM2 distribution must retain its license beside the downloaded model"
+        );
+
+        for voice in [
+            LocalTtsVoice::Supertonic2Onnx,
+            LocalTtsVoice::Supertonic3Onnx,
+        ] {
+            assert!(
+                local_tts_model_required_file_names(voice).contains(&"LICENSE"),
+                "{voice:?} must retain its OpenRAIL-M license beside the downloaded model"
+            );
+        }
+    }
+
+    #[test]
+    fn upstream_asr_attributions_reach_every_public_license_surface() {
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("src-tauri must have a repository parent");
+        let japanese_readme = std::fs::read_to_string(repository_root.join("README.md"))
+            .expect("Japanese README must be readable");
+        let english_readme =
+            std::fs::read_to_string(repository_root.join("documents/README.en.md"))
+                .expect("English README must be readable");
+        let license_ui =
+            std::fs::read_to_string(repository_root.join("src/components/ui/licenses.tsx"))
+                .expect("application license UI must be readable");
+        let notice_path = repository_root.join("public/licenses/THIRD_PARTY_NOTICES.md");
+        let notice = std::fs::read_to_string(&notice_path)
+            .expect("third-party notice must be shipped as an application asset");
+        let bundle_config = include_str!("../../tauri.conf.json");
+        let macos_bundle_config = include_str!("../../tauri.macos.conf.json");
+
+        for (name, surface) in [
+            ("Japanese README", japanese_readme.as_str()),
+            ("English README", english_readme.as_str()),
+            ("application license UI", license_ui.as_str()),
+            ("third-party notice", notice.as_str()),
+        ] {
+            for upstream in [
+                "https://huggingface.co/nvidia/parakeet-tdt_ctc-0.6b-ja",
+                "https://github.com/NVIDIA/NeMo",
+                "https://github.com/k2-fsa/sherpa-onnx",
+            ] {
+                assert!(surface.contains(upstream), "{name} omits {upstream}");
+            }
+        }
+        assert!(notice.contains("CC-BY-4.0"));
+        assert!(notice.contains("Apache-2.0"));
+        assert!(license_ui.contains("/licenses/THIRD_PARTY_NOTICES.md"));
+        for config in [bundle_config, macos_bundle_config] {
+            assert!(config.contains("../public/licenses/THIRD_PARTY_NOTICES.md"));
+            assert!(config.contains("licenses/THIRD_PARTY_NOTICES.md"));
+        }
+    }
+
+    #[test]
+    fn every_embedded_dictionary_license_reaches_the_installer_and_application() {
+        let bundled_notice = include_str!("../../resources/hotword-reading/NOTICE.md");
+        let displayed_notice = include_str!("../../../public/licenses/hotword-reading/NOTICE.md");
+        let apache_license =
+            include_str!("../../../public/licenses/hotword-reading/LICENSE-APACHE-2.0.txt");
+        let bundled_morph_notice = include_str!("../../resources/morph/NOTICE");
+        let bundled_morph_bsd = include_str!("../../resources/morph/BSD");
+        let bundled_morph_authors = include_str!("../../resources/morph/AUTHORS");
+        let displayed_morph_notice = include_str!("../../../public/licenses/morph/NOTICE");
+        let displayed_morph_bsd = include_str!("../../../public/licenses/morph/BSD");
+        let displayed_morph_authors = include_str!("../../../public/licenses/morph/AUTHORS");
+        let bundle_config = include_str!("../../tauri.conf.json");
+        let macos_bundle_config = include_str!("../../tauri.macos.conf.json");
+
+        for notice in [bundled_notice, displayed_notice] {
+            assert!(notice.contains("SudachiDict"));
+            assert!(notice.contains("UniDic Consortium"));
+            assert!(notice.contains("Carnegie Mellon Pronouncing"));
+        }
+        // `include_str!` preserves checkout line endings. `str::lines` accepts
+        // both the LF form in the repository and a CRLF checkout on Windows.
+        assert_eq!(
+            apache_license.lines().next(),
+            Some("Apache License"),
+            "the bundled hotword dictionary license must be the Apache License 2.0 text"
+        );
+        assert!(apache_license.contains("TERMS AND CONDITIONS FOR USE"));
+        assert_eq!(bundled_morph_notice, displayed_morph_notice);
+        assert_eq!(bundled_morph_bsd, displayed_morph_bsd);
+        assert_eq!(bundled_morph_authors, displayed_morph_authors);
+        assert!(bundled_morph_notice.contains("UniDic for Contemporary"));
+        assert!(bundled_morph_notice.contains("Written Japanese 3.1.1"));
+        assert!(bundled_morph_bsd.contains("Redistribution and use in source and binary forms"));
+        assert!(bundled_morph_authors.contains("The UniDic Consortium"));
+
+        for config in [bundle_config, macos_bundle_config] {
+            let config: serde_json::Value =
+                serde_json::from_str(config).expect("bundle configuration must be valid JSON");
+            let resources = config
+                .pointer("/bundle/resources")
+                .and_then(serde_json::Value::as_object)
+                .expect("bundle configuration must declare installed resources");
+            for installed_document in [
+                "licenses/hotword-reading/NOTICE.md",
+                "licenses/hotword-reading/LICENSE-APACHE-2.0.txt",
+                "licenses/morph/NOTICE",
+                "licenses/morph/BSD",
+                "licenses/morph/AUTHORS",
+            ] {
+                assert!(
+                    resources
+                        .values()
+                        .any(|destination| destination.as_str() == Some(installed_document)),
+                    "bundle configuration must install {installed_document}"
+                );
+            }
+        }
     }
 }

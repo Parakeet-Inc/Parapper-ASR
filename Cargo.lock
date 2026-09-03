@@ -2083,6 +2083,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec9d92d097f4749b64e8cc33d924d9f40a2d4eb91402b458014b781f5733d60f"
 
 [[package]]
+name = "hound"
+version = "3.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
+
+[[package]]
 name = "html5ever"
 version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2183,7 +2189,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.4",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -3397,6 +3403,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "onnx-protobuf"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c82bcd4b77209b2f1e3de24e71272dffa46670e36ee0bc29d28d60f4e376d08"
+dependencies = [
+ "protobuf",
+]
+
+[[package]]
 name = "openssl"
 version = "0.10.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3467,7 +3482,7 @@ dependencies = [
  "ort-sys",
  "smallvec",
  "tracing",
- "ureq 3.1.4",
+ "ureq",
 ]
 
 [[package]]
@@ -3478,7 +3493,7 @@ checksum = "d7b497d21a8b6fbb4b5a544f8fadb77e801a09ae0add9e411d31c6f89e3c1e90"
 dependencies = [
  "hmac-sha256",
  "lzma-rust2",
- "ureq 3.1.4",
+ "ureq",
 ]
 
 [[package]]
@@ -3508,7 +3523,7 @@ dependencies = [
 
 [[package]]
 name = "parapper"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -3516,35 +3531,30 @@ dependencies = [
  "chrono",
  "cpal",
  "dasp_sample",
+ "hound",
  "libloading 0.7.4",
  "log",
  "mdns-sd",
- "ndarray",
- "num-complex",
  "objc2-core-foundation",
  "ort",
- "rand 0.9.2",
- "realfft",
- "regex",
+ "parapper-models",
+ "parapper-stt-engine",
+ "parapper-stt-server",
  "reqwest",
  "rubato",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "sherpa-onnx",
- "sherpa-onnx-sys",
  "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-log",
  "tiny_http",
- "tokenizers",
  "tokio",
  "tungstenite",
  "unicode-normalization",
  "uuid",
- "vibrato-rkyv",
  "zstd",
 ]
 
@@ -3558,12 +3568,35 @@ dependencies = [
  "dasp_sample",
  "ort",
  "parapper",
+ "parapper-models",
+ "parapper-stt-engine",
  "reqwest",
  "rubato",
  "serde",
  "serde_json",
- "sherpa-onnx",
+ "sha2 0.10.9",
  "unicode-normalization",
+ "vibrato-rkyv",
+]
+
+[[package]]
+name = "parapper-models"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ndarray",
+ "num-complex",
+ "onnx-protobuf",
+ "ort",
+ "protobuf",
+ "rand 0.9.2",
+ "realfft",
+ "regex",
+ "serde",
+ "serde_json",
+ "tokenizers",
+ "unicode-normalization",
+ "vibrato-rkyv",
 ]
 
 [[package]]
@@ -3577,9 +3610,32 @@ dependencies = [
  "sha2 0.10.9",
  "tar",
  "tempfile",
+ "unicode-normalization",
  "vibrato",
  "vibrato-rkyv",
  "zstd",
+]
+
+[[package]]
+name = "parapper-stt-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "parapper-models",
+ "serde",
+]
+
+[[package]]
+name = "parapper-stt-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "parapper-stt-engine",
+ "serde",
+ "serde_json",
+ "tungstenite",
 ]
 
 [[package]]
@@ -3930,6 +3986,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ee95bc4ef87b8d5ba32e8b7714ccc834865276eab0aed5c9958d00ec45f49e8"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "protobuf"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58678a64de2fced2bdec6bca052a6716a0efe692d6e3f53d1bda6a1def64cfc0"
+dependencies = [
+ "once_cell",
+ "protobuf-support",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "protobuf-support"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1ed294a835b0f30810e13616b1cd34943c6d1e84a8f3b0dcfe466d256c3e7e7"
+dependencies = [
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4372,7 +4448,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
- "webpki-roots 1.0.4",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -4567,7 +4643,6 @@ version = "0.23.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "533f54bc6a7d4f647e46ad909549eda97bf5afc1585190ef692b4286b198bd8f"
 dependencies = [
- "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -4952,28 +5027,6 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "digest 0.11.3",
-]
-
-[[package]]
-name = "sherpa-onnx"
-version = "1.13.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98baa63be165cc1bccd418c210269c68bcdd0c279195ecce0140645bc6e520f4"
-dependencies = [
- "serde",
- "serde_json",
- "sherpa-onnx-sys",
-]
-
-[[package]]
-name = "sherpa-onnx-sys"
-version = "1.13.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21ac2c3342f826069bbf0be3578f9601f3802a1bff50bbced8230a15ec9eed8f"
-dependencies = [
- "bzip2",
- "tar",
- "ureq 2.12.1",
 ]
 
 [[package]]
@@ -6238,22 +6291,6 @@ checksum = "6d49784317cd0d1ee7ec5c716dd598ec5b4483ea832a2dced265471cc0f690ae"
 
 [[package]]
 name = "ureq"
-version = "2.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
-dependencies = [
- "base64 0.22.1",
- "flate2",
- "log",
- "once_cell",
- "rustls",
- "rustls-pki-types",
- "url",
- "webpki-roots 0.26.11",
-]
-
-[[package]]
-name = "ureq"
 version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d39cb1dbab692d82a977c0392ffac19e188bd9186a9f32806f0aaa859d75585a"
@@ -6680,15 +6717,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee3e3b5f5e80bc89f30ce8d0343bf4e5f12341c51f3e26cbeecbc7c85443e85b"
 dependencies = [
  "rustls-pki-types",
-]
-
-[[package]]
-name = "webpki-roots"
-version = "0.26.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
-dependencies = [
- "webpki-roots 1.0.4",
 ]
 
 [[package]]

@@ -31,3 +31,16 @@ export const buildNoiseCancellationModelOptions = (
 ): SelectOption[] => [
   { label: t("options.noiseCancellationModel.ulUnas"), value: "ul_unas" },
 ];
+
+export const buildNoiseCancellationTargetOptions = (
+  t: (key: string) => string,
+): SelectOption[] => [
+  {
+    label: t("options.noiseCancellationTarget.vadOnly"),
+    value: "vad_only",
+  },
+  {
+    label: t("options.noiseCancellationTarget.vadAndAsr"),
+    value: "vad_and_asr",
+  },
+];

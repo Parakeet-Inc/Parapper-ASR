@@ -1,6 +1,6 @@
 [package]
 name = "parapper"
-version = "0.4.0"
+version = "0.5.0"
 description = "YukariNet and Yukari Connect NEO ASR bridge"
 authors = ["Parakeet"]
 license = "MIT"
@@ -14,12 +14,12 @@ autobins = false
 workspace = true
 
 [features]
-real-asr-tests = []
+real-asr-tests = ["parapper-models/real-asr-tests"]
 # Off by default; never part of the shipped application. Used by the
 # diagnostics package's streaming_recognition_smoke_server binary, which runs
 # the streaming recognition WebSocket server against a deterministic fake
 # recognition backend for external protocol-client end-to-end tests.
-smoke-server = []
+smoke-server = ["parapper-stt-server/smoke-server"]
 
 [lib]
 name = "app_lib"
@@ -39,40 +39,33 @@ tauri-build = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
+parapper-models = { path = "../crates/parapper-models", features = ["native-models"] }
+parapper-stt-engine = { path = "../crates/parapper-stt-engine" }
+parapper-stt-server = { path = "../crates/parapper-stt-server" }
 bzip2 = "0.4.4"
 chrono = { workspace = true }
 cpal = "0.17.3"
 dasp_sample = "0.11.0"
 log = { workspace = true }
-ndarray = "0.17.2"
-num-complex = "0.4.6"
 ort = { version = "=2.0.0-rc.12", features = ["load-dynamic"] }
-rand = "0.9.0"
-realfft = "3.5.0"
-regex = "1.10"
 reqwest = { workspace = true }
 rubato = "1.0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10"
-sherpa-onnx = { version = "=1.13.3", default-features = false, features = ["shared"] }
-sherpa-onnx-sys = { version = "=1.13.3", default-features = false, features = ["shared"] }
 tauri = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
 tauri-plugin-log = { workspace = true }
 tar = "0.4.44"
 tokio = { workspace = true }
 tiny_http = "0.12"
-unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
-vibrato-rkyv = { version = "0.7.8", default-features = false, features = ["legacy"] }
+unicode-normalization = "0.1"
 zstd = "0.13"
-# Keep tokenizers pinned with ort's current dependency graph to avoid native
-# feature drift while loading Namo tokenizer.json files.
-tokenizers = { version = "=0.22.2", default-features = false, features = ["onig"] }
 tungstenite = "0.29.0"
 
 [dev-dependencies]
+hound = "3.5.1"
 tauri = { workspace = true, features = ["test"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]

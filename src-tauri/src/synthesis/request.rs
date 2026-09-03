@@ -1,5 +1,8 @@
 use crate::{
-    config::{AsrModel, LocalTtsVoice, ParapperConfig, SpeechBackend, SpeechSourceKind},
+    config::{
+        AsrModel, DeliveryRouteSnapshot, LocalTtsVoice, ParapperConfig, SpeechBackend,
+        SpeechSourceKind,
+    },
     delivery::{
         RecognitionSourceMeta, RecognizedTextOutput,
         common::{
@@ -116,6 +119,7 @@ pub(crate) fn build_speech_requests(
 #[cfg(test)]
 fn test_source_meta(source_event_id: &str, output_sequence: u64) -> RecognitionSourceMeta {
     RecognitionSourceMeta {
+        identity: parapper_stt_engine::SourceIdentitySnapshot::legacy_single_source(),
         turn_session_id: test_source_hash(source_event_id),
         turn_id: output_sequence,
         turn_revision: 0,
@@ -136,12 +140,20 @@ fn test_source_hash(source_event_id: &str) -> u64 {
 
 pub(crate) fn speech_requests_for_recognized_text(
     config: &ParapperConfig,
+    delivery_route: &DeliveryRouteSnapshot,
     recognized_text_id: &str,
     output: &RecognizedTextOutput,
 ) -> Vec<QueuedSpeechRequest> {
+    let mut scoped_config = config.clone();
+    scoped_config.speech.mappings.retain(|mapping| {
+        delivery_route
+            .speech_mapping_ids
+            .iter()
+            .any(|id| id == &mapping.id)
+    });
     let text = trim_continuation_marker(output.text.trim()).to_string();
     build_speech_requests_with_source_meta(
-        config,
+        &scoped_config,
         recognized_text_id,
         output.meta.source(),
         SpeechTextSource::Recognition,

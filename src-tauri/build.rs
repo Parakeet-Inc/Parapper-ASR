@@ -1,17 +1,18 @@
 fn main() {
-    copy_sherpa_onnx_runtime_dlls();
-    copy_macos_sherpa_runtime_libraries();
+    copy_onnx_runtime_dlls();
+    copy_macos_onnx_runtime_libraries();
     configure_macos_runtime_library_path();
     configure_windows_common_controls_manifest();
     tauri_build::try_build(tauri_build_attributes()).expect("failed to run tauri build helpers");
 }
 
 #[cfg(windows)]
-fn copy_sherpa_onnx_runtime_dlls() {
+fn copy_onnx_runtime_dlls() {
     use std::{env, fs, path::PathBuf};
 
-    const SHERPA_ONNX_VERSION: &str = "1.13.3";
-    const SHERPA_PREBUILT_DIR: &str = "sherpa-onnx-v1.13.3-win-x64-shared-MT-Release-lib";
+    const ONNX_RUNTIME_VERSION: &str = "1.24.4";
+    const ONNX_RUNTIME_PREBUILT_DIR: &str = "onnxruntime-win-x64-1.24.4";
+    const LIBRARIES: &[&str] = &["onnxruntime.dll", "onnxruntime_providers_shared.dll"];
 
     let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") else {
         return;
@@ -23,8 +24,8 @@ fn copy_sherpa_onnx_runtime_dlls() {
 
     let source_dir = workspace_root
         .join("target")
-        .join("sherpa-onnx-prebuilt")
-        .join(SHERPA_PREBUILT_DIR)
+        .join("onnxruntime-prebuilt")
+        .join(ONNX_RUNTIME_PREBUILT_DIR)
         .join("lib");
     let Some(profile_dir) = target_profile_dir() else {
         return;
@@ -33,25 +34,11 @@ fn copy_sherpa_onnx_runtime_dlls() {
     println!("cargo:rerun-if-changed={}", source_dir.display());
     if !source_dir.is_dir() {
         println!(
-            "cargo:warning=sherpa-onnx {SHERPA_ONNX_VERSION} runtime DLL dir not found: {}",
+            "cargo:warning=Microsoft ONNX Runtime {ONNX_RUNTIME_VERSION} DLL dir not found: {}",
             source_dir.display()
         );
         return;
     }
-
-    let dlls: Vec<_> = match fs::read_dir(&source_dir) {
-        Ok(entries) => entries
-            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|path| path.extension().is_some_and(|ext| ext == "dll"))
-            .collect(),
-        Err(err) => {
-            println!(
-                "cargo:warning=failed to read sherpa-onnx runtime DLL dir {}: {err}",
-                source_dir.display()
-            );
-            return;
-        }
-    };
 
     for dest_dir in [&profile_dir, &profile_dir.join("deps")] {
         if let Err(err) = fs::create_dir_all(dest_dir) {
@@ -61,12 +48,17 @@ fn copy_sherpa_onnx_runtime_dlls() {
             );
             continue;
         }
-        for source in &dlls {
-            let Some(dll_name) = source.file_name() else {
+        for library in LIBRARIES {
+            let source = source_dir.join(library);
+            if !source.is_file() {
+                println!(
+                    "cargo:warning=Microsoft ONNX Runtime library not found: {}",
+                    source.display()
+                );
                 continue;
-            };
-            let destination = dest_dir.join(dll_name);
-            if let Err(err) = fs::copy(source, &destination) {
+            }
+            let destination = dest_dir.join(library);
+            if let Err(err) = fs::copy(&source, &destination) {
                 println!(
                     "cargo:warning=failed to copy {} to {}: {err}",
                     source.display(),
@@ -84,19 +76,14 @@ fn target_profile_dir() -> Option<std::path::PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn copy_sherpa_onnx_runtime_dlls() {}
+fn copy_onnx_runtime_dlls() {}
 
 #[cfg(target_os = "macos")]
-fn copy_macos_sherpa_runtime_libraries() {
+fn copy_macos_onnx_runtime_libraries() {
     use std::{env, fs, path::PathBuf};
 
-    const SHERPA_PREBUILT_DIR: &str = "sherpa-onnx-v1.13.3-osx-arm64-shared-lib";
-    const LIBRARIES: &[&str] = &[
-        "libsherpa-onnx-c-api.dylib",
-        "libsherpa-onnx-cxx-api.dylib",
-        "libonnxruntime.dylib",
-        "libonnxruntime.1.24.4.dylib",
-    ];
+    const ONNX_RUNTIME_PREBUILT_DIR: &str = "onnxruntime-osx-arm64-1.24.4";
+    const LIBRARIES: &[&str] = &["libonnxruntime.dylib", "libonnxruntime.1.24.4.dylib"];
 
     let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") else {
         return;
@@ -138,8 +125,8 @@ fn copy_macos_sherpa_runtime_libraries() {
     source_dirs.push(
         workspace_root
             .join("target")
-            .join("sherpa-onnx-prebuilt")
-            .join(SHERPA_PREBUILT_DIR)
+            .join("onnxruntime-prebuilt")
+            .join(ONNX_RUNTIME_PREBUILT_DIR)
             .join("lib"),
     );
 
@@ -164,7 +151,7 @@ fn copy_macos_sherpa_runtime_libraries() {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn copy_macos_sherpa_runtime_libraries() {}
+fn copy_macos_onnx_runtime_libraries() {}
 
 #[cfg(target_os = "macos")]
 fn configure_macos_runtime_library_path() {

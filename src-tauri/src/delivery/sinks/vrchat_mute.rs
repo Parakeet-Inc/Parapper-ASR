@@ -6,7 +6,7 @@ use crate::{
     config::ParapperConfig,
     connect::query_current_mute_state,
     delivery::sinks::ui_event::emit_connection_state,
-    recognition::control::events::{ConnectionTarget, OscMuteStateEvent},
+    recognition::events::{ConnectionTarget, OscMuteStateEvent},
 };
 
 pub(crate) fn spawn_mute_check_if_needed(

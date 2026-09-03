@@ -3,40 +3,19 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ExternalLink } from "./external-link";
+import type { RustLicensesDocument } from "../../application/frontend-services";
 
-type CargoAboutCrate = {
-  name: string;
-  version: string;
-};
-
-type CargoAboutUsedBy = {
-  crate: CargoAboutCrate;
-};
-
-type CargoAboutLicense = {
-  name: string;
-  text: string;
-  used_by: CargoAboutUsedBy[];
-};
-
-type CargoAboutOutput = {
-  licenses: CargoAboutLicense[];
-};
-
-const RustLicenses: React.FC = () => {
+const RustLicenses: React.FC<{
+  onOpenExternalUrl: (url: string) => Promise<void>;
+  onLoadRustLicenses: () => Promise<RustLicensesDocument>;
+}> = ({ onOpenExternalUrl, onLoadRustLicenses }) => {
   const { t } = useTranslation();
   const [rustLicenseData, setRustLicenseData] =
-    useState<CargoAboutOutput | null>(null);
+    useState<RustLicensesDocument | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/licenses/rust.json")
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Failed to load Rust licenses: ${response.status}`);
-        }
-        return response.json() as Promise<CargoAboutOutput>;
-      })
+    void onLoadRustLicenses()
       .then((data) => {
         if (!cancelled) {
           setRustLicenseData(data);
@@ -52,7 +31,7 @@ const RustLicenses: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [onLoadRustLicenses]);
 
   if (!rustLicenseData) {
     return <Text>{t("licenses.loadingRustLicenses")}</Text>;
@@ -74,6 +53,7 @@ const RustLicenses: React.FC = () => {
                 -{" "}
                 <ExternalLink
                   href={`https://crates.io/crates/${usedBy.crate.name}`}
+                  onOpen={onOpenExternalUrl}
                 >
                   {usedBy.crate.name}
                 </ExternalLink>

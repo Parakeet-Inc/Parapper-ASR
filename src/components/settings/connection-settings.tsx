@@ -1,326 +1,307 @@
 import {
-  Accordion,
-  Button,
-  Code,
-  Collapse,
+  ActionIcon,
+  Checkbox,
+  ColorSwatch,
   Group,
-  NumberInput,
-  Paper,
-  PasswordInput,
-  SegmentedControl,
+  Select,
   Stack,
-  Switch,
   Text,
   TextInput,
+  Tooltip,
 } from "@mantine/core";
-import { notifications } from "@mantine/notifications";
-import { invoke } from "@tauri-apps/api/core";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { isMacOs } from "../../lib/platform";
-import { notificationColor } from "../../lib/theme";
+import {
+  buildAudioDeviceOptions,
+  isLoopbackHost,
+} from "../../lib/audio-devices";
+import { STT_PROFILE_DISPLAY_COLOR_CSS } from "../../lib/stt-profile-colors";
+import {
+  availableInputChannelForProfile,
+  buildInputChannelRows,
+  resolveSttProfileNameEdit,
+  STT_PROFILE_DISPLAY_COLORS,
+} from "../../lib/stt-profiles";
 import type {
-  DeveloperConnectionMode,
-  ParapperConfig,
-  StreamingRecognitionOutputMode,
+  AudioDeviceInfo,
+  SttProfileConfig,
+  SttProfileInputConfig,
 } from "../../lib/types";
+import { DisabledReasonTooltip, settingLabel } from "../ui/display";
+
+import IconRefresh from "~icons/material-symbols/refresh";
 
 type ConnectionSettingsProps = {
-  config: ParapperConfig;
-  runtimeLocked: boolean;
-  onUpdateConfig: <K extends keyof ParapperConfig>(
-    key: K,
-    value: ParapperConfig[K],
+  input: SttProfileInputConfig;
+  profiles: readonly SttProfileConfig[];
+  selectedProfileId: string;
+  profile: SttProfileConfig;
+  onUpdateProfile: (
+    profileId: string,
+    update: (profile: SttProfileConfig) => SttProfileConfig,
   ) => void;
+  inputAudioDevices: readonly AudioDeviceInfo[];
+  runtimeLocked: boolean;
+  localAudioDevicesAvailable: boolean;
+  refreshingAudioDevices: boolean;
+  onRefreshAudioDevices: () => void;
+  onRequestLoopbackPermission: () => Promise<void>;
+  onChange: (input: SttProfileInputConfig) => void;
 };
 
 export const ConnectionSettings: React.FC<ConnectionSettingsProps> = ({
-  config,
+  input,
+  profiles,
+  selectedProfileId,
+  profile,
+  onUpdateProfile,
+  inputAudioDevices,
   runtimeLocked,
-  onUpdateConfig,
+  localAudioDevicesAvailable,
+  refreshingAudioDevices,
+  onRefreshAudioDevices,
+  onRequestLoopbackPermission,
+  onChange,
 }) => {
   const { t } = useTranslation();
-  const [detectingNeoPort, setDetectingNeoPort] = useState(false);
-  const [detectingPluginPort, setDetectingPluginPort] = useState(false);
-  const nativeConnectionsDisabled = isMacOs();
-  const neoEnabled = !nativeConnectionsDisabled && config.neo_http_enabled;
-  const developerEnabled = config.streaming_recognition_enabled;
-
-  const findPort = async (
-    command: "find_neo_http_port" | "find_ync_plugin_http_port",
-    key: "neo_http_port" | "ync_plugin_port",
-    notificationKey: "neoPort" | "pluginPort",
-    setDetecting: (value: boolean) => void,
-  ) => {
-    setDetecting(true);
-    try {
-      const port = await invoke<number | null>(command);
-      if (!port) {
-        notifications.show({
-          title: t(`notifications.${notificationKey}NotFound.title`),
-          message: t(`notifications.${notificationKey}NotFound.message`),
-          color: notificationColor.warn,
-        });
-        return;
-      }
-      onUpdateConfig(key, port);
-      notifications.show({
-        title: t(`notifications.${notificationKey}Detected.title`),
-        message: t(`notifications.${notificationKey}Detected.message`, {
-          port,
-        }),
-      });
-    } finally {
-      setDetecting(false);
+  const displayColor = profile.display_color;
+  const profileName =
+    profile.name === profile.id
+      ? t("sttProfiles.defaultName", {
+          number: Number(profile.id.replace("stt-profile-", "")),
+        })
+      : profile.name;
+  const [nameDraft, setNameDraft] = useState(profileName);
+  useEffect(() => setNameDraft(profileName), [profileName]);
+  const commitName = () => {
+    const name = resolveSttProfileNameEdit(
+      profiles,
+      profile,
+      nameDraft,
+      (number) => t("sttProfiles.defaultName", { number }),
+    );
+    if (!name) {
+      setNameDraft(profileName);
+      return;
     }
+    onUpdateProfile(profile.id, (current) => ({ ...current, name }));
   };
+  const inputAudioDeviceOptions = useMemo(
+    () =>
+      buildAudioDeviceOptions(
+        [...inputAudioDevices],
+        t("settings.inputAudioDevice.loopbackGroup"),
+      ),
+    [inputAudioDevices, t],
+  );
+  const selectedDevice =
+    input.device_host && input.device_id
+      ? `${input.device_host}\u0000${input.device_id}`
+      : null;
+  const device = inputAudioDevices.find(
+    (candidate) =>
+      candidate.host === input.device_host && candidate.id === input.device_id,
+  );
+  const channelRows = device
+    ? buildInputChannelRows(profiles, selectedProfileId, device)
+    : [];
 
   return (
-    <Stack gap="md">
-      <ConnectionSection
-        enabled={neoEnabled}
-        title={t("connectionSettings.neoEnabled")}
-        disabled={nativeConnectionsDisabled || runtimeLocked}
-        onToggle={(enabled) => onUpdateConfig("neo_http_enabled", enabled)}
-      >
-        <PortSetting
-          label={t("settings.neoHttpPort.label")}
-          value={config.neo_http_port}
-          loading={detectingNeoPort}
-          disabled={runtimeLocked}
-          findLabel={t("common.search")}
-          onChange={(port) => onUpdateConfig("neo_http_port", port)}
-          onFind={() =>
-            void findPort(
-              "find_neo_http_port",
-              "neo_http_port",
-              "neoPort",
-              setDetectingNeoPort,
-            )
-          }
-        />
-        <PortSetting
-          label={t("settings.translationPluginHttpPort.label")}
-          value={config.ync_plugin_port}
-          loading={detectingPluginPort}
-          disabled={runtimeLocked}
-          findLabel={t("common.search")}
-          onChange={(port) => onUpdateConfig("ync_plugin_port", port)}
-          onFind={() =>
-            void findPort(
-              "find_ync_plugin_http_port",
-              "ync_plugin_port",
-              "pluginPort",
-              setDetectingPluginPort,
-            )
-          }
-        />
-        <Switch
-          label={t("settings.oscQuery.muteSyncLabel")}
-          checked={!nativeConnectionsDisabled && config.vrc_osc_micmute}
-          disabled={nativeConnectionsDisabled || runtimeLocked}
-          onChange={(event) =>
-            onUpdateConfig("vrc_osc_micmute", event.currentTarget.checked)
-          }
-        />
-      </ConnectionSection>
-
-      <ConnectionSection
-        enabled={developerEnabled}
-        title={t("connectionSettings.developerEnabled")}
+    <Stack gap="sm">
+      <TextInput
+        label={t("sttProfiles.name")}
+        value={nameDraft}
         disabled={runtimeLocked}
-        onToggle={(enabled) =>
-          onUpdateConfig("streaming_recognition_enabled", enabled)
-        }
-      >
-        <Stack gap={6}>
-          <Text size="sm" fw={500}>
-            {t("connectionSettings.connectionMode")}
-          </Text>
-          <SegmentedControl
-            fullWidth
-            value={config.developer_connection_mode}
-            disabled={runtimeLocked}
-            data={[
-              { value: "http", label: "HTTP" },
-              { value: "web_socket", label: "WebSocket" },
-            ]}
-            onChange={(value) =>
-              onUpdateConfig(
-                "developer_connection_mode",
-                value as DeveloperConnectionMode,
-              )
-            }
-          />
-        </Stack>
-
-        {config.developer_connection_mode === "http" ? (
-          <>
-            <TextInput
-              label={t("connectionSettings.httpUrl")}
-              value={config.developer_http_url}
+        onChange={(event) => {
+          setNameDraft(event.currentTarget.value);
+        }}
+        onBlur={commitName}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commitName();
+          }
+        }}
+      />
+      <Stack gap={4}>
+        <Text size="sm" fw={500}>
+          {t("sttProfiles.color")}
+        </Text>
+        <Group gap="xs" role="radiogroup" aria-label={t("sttProfiles.color")}>
+          {STT_PROFILE_DISPLAY_COLORS.map((color) => (
+            <ActionIcon
+              key={color}
+              variant="subtle"
+              color={color}
+              aria-label={color}
+              role="radio"
+              aria-checked={displayColor === color}
               disabled={runtimeLocked}
-              onChange={(event) =>
-                onUpdateConfig("developer_http_url", event.currentTarget.value)
+              style={{
+                border:
+                  displayColor === color
+                    ? "2px solid var(--mantine-color-text)"
+                    : "2px solid transparent",
+                backgroundColor: "transparent",
+              }}
+              onClick={() =>
+                onUpdateProfile(profile.id, (current) => ({
+                  ...current,
+                  display_color: color,
+                }))
               }
-            />
-            <Accordion variant="contained">
-              <Accordion.Item value="http-payload-example">
-                <Accordion.Control>
-                  {t("connectionSettings.httpPayloadExample")}
-                </Accordion.Control>
-                <Accordion.Panel>
-                  <Code block>{developerHttpPayloadExample}</Code>
-                </Accordion.Panel>
-              </Accordion.Item>
-            </Accordion>
-          </>
-        ) : (
-          <>
-            <TextInput
-              label={t("connectionSettings.bindAddress")}
-              value={config.streaming_recognition_bind_address}
-              disabled={runtimeLocked}
-              onChange={(event) =>
-                onUpdateConfig(
-                  "streaming_recognition_bind_address",
-                  event.currentTarget.value,
-                )
-              }
-            />
-            <NumberInput
-              label={t("connectionSettings.port")}
-              value={config.streaming_recognition_port}
-              min={1}
-              max={65535}
-              disabled={runtimeLocked}
-              onChange={(value) =>
-                onUpdateConfig(
-                  "streaming_recognition_port",
-                  typeof value === "number" ? value : 18082,
-                )
-              }
-            />
-            <PasswordInput
-              label={t("connectionSettings.apiKey")}
-              placeholder={t("connectionSettings.apiKeyPlaceholder")}
-              value={config.streaming_recognition_api_key ?? ""}
-              disabled={runtimeLocked}
-              onChange={(event) =>
-                onUpdateConfig(
-                  "streaming_recognition_api_key",
-                  event.currentTarget.value || null,
-                )
-              }
-            />
-            <Stack gap={4}>
-              <Text size="sm" fw={500}>
-                {t("connectionSettings.outputMode")}
-              </Text>
-              <SegmentedControl
-                value={config.streaming_recognition_output_mode}
-                disabled={runtimeLocked}
-                data={[
-                  {
-                    value: "web_socket_only",
-                    label: t("connectionSettings.webSocketOnly"),
-                  },
-                  {
-                    value: "web_socket_and_desktop",
-                    label: t("connectionSettings.webSocketAndDesktop"),
-                  },
-                ]}
-                onChange={(value) =>
-                  onUpdateConfig(
-                    "streaming_recognition_output_mode",
-                    value as StreamingRecognitionOutputMode,
-                  )
-                }
+            >
+              <ColorSwatch
+                color={STT_PROFILE_DISPLAY_COLOR_CSS[color]}
+                size={18}
+                style={{
+                  border: "1px solid var(--mantine-color-default-border)",
+                }}
               />
-            </Stack>
-            <Text size="xs" c="dimmed">
-              {t("connectionSettings.endpoint", {
-                address: config.streaming_recognition_bind_address,
-                port: config.streaming_recognition_port,
+            </ActionIcon>
+          ))}
+        </Group>
+      </Stack>
+      <DisabledReasonTooltip
+        disabled={runtimeLocked}
+        label={t("tooltip.runtimeLocked")}
+      >
+        <Group align="end" gap="xs" wrap="nowrap">
+          <Select
+            label={settingLabel(
+              t("settings.inputAudioDevice.label"),
+              t("settings.inputAudioDevice.description"),
+            )}
+            placeholder={t("settings.inputAudioDevice.placeholder")}
+            data={inputAudioDeviceOptions}
+            value={selectedDevice}
+            clearable={profiles.length === 1}
+            searchable
+            maxDropdownHeight={180}
+            disabled={runtimeLocked || !localAudioDevicesAvailable}
+            style={{ flex: 1 }}
+            onChange={(value) => {
+              if (!value) {
+                if (profiles.length !== 1) return;
+                onChange({
+                  ...input,
+                  device_host: null,
+                  device_id: null,
+                  device_name: null,
+                  channel_index: 0,
+                });
+                return;
+              }
+              const [host, id] = value.split("\u0000");
+              const nextDevice = inputAudioDevices.find(
+                (candidate) => candidate.host === host && candidate.id === id,
+              );
+              if (!nextDevice) return;
+              const channelIndex = availableInputChannelForProfile(
+                profiles,
+                selectedProfileId,
+                nextDevice,
+              );
+              if (channelIndex === null) return;
+              onChange({
+                ...input,
+                device_host: host,
+                device_id: id,
+                device_name: nextDevice.display_name,
+                channel_index: channelIndex,
+              });
+              if (isLoopbackHost(host)) {
+                void onRequestLoopbackPermission();
+              }
+            }}
+          />
+          <Tooltip label={t("settings.audioDevice.refreshTooltip")} withArrow>
+            <span>
+              <ActionIcon
+                aria-label={t("settings.audioDevice.refreshAriaLabel")}
+                variant="light"
+                size="lg"
+                loading={refreshingAudioDevices}
+                disabled={runtimeLocked || !localAudioDevicesAvailable}
+                onClick={onRefreshAudioDevices}
+              >
+                <IconRefresh />
+              </ActionIcon>
+            </span>
+          </Tooltip>
+        </Group>
+      </DisabledReasonTooltip>
+      {device && device.channels >= 2 ? (
+        <Stack
+          gap={4}
+          role="radiogroup"
+          aria-label={t("settings.inputAudioDevice.channelLabel")}
+        >
+          <Text size="sm" fw={500}>
+            {t("settings.inputAudioDevice.channelLabel")}
+          </Text>
+          {channelRows.map((row, rowIndex) => (
+            <ActionIcon.Group key={rowIndex}>
+              {row.map(({ channelIndex, occupied }) => {
+                const selected = channelIndex === input.channel_index;
+                const disabled = runtimeLocked || occupied;
+
+                return (
+                  <ActionIcon
+                    key={channelIndex}
+                    role="radio"
+                    aria-checked={selected}
+                    aria-label={t("settings.inputAudioDevice.channel", {
+                      number: channelIndex + 1,
+                    })}
+                    aria-disabled={disabled || undefined}
+                    tabIndex={disabled ? -1 : selected ? 0 : -1}
+                    variant={selected ? "filled" : "default"}
+                    color={selected ? "blue" : undefined}
+                    disabled={disabled}
+                    onClick={() => {
+                      if (!disabled) {
+                        onChange({ ...input, channel_index: channelIndex });
+                      }
+                    }}
+                  >
+                    {channelIndex + 1}
+                  </ActionIcon>
+                );
               })}
-            </Text>
-          </>
+            </ActionIcon.Group>
+          ))}
+        </Stack>
+      ) : null}
+      <Checkbox
+        label={settingLabel(
+          t("sttProfiles.neoHttpEnabled"),
+          t("sttProfiles.neoHttpEnabledDescription"),
         )}
-      </ConnectionSection>
+        checked={profile.neo_http_enabled}
+        disabled={runtimeLocked}
+        onChange={(event) =>
+          onUpdateProfile(profile.id, (current) => ({
+            ...current,
+            neo_http_enabled: event.currentTarget.checked,
+          }))
+        }
+      />
+      <Checkbox
+        label={settingLabel(
+          t("sttProfiles.developerHttpEnabled"),
+          t("sttProfiles.developerHttpEnabledDescription"),
+        )}
+        checked={profile.developer_http_enabled}
+        disabled={runtimeLocked}
+        onChange={(event) =>
+          onUpdateProfile(profile.id, (current) => ({
+            ...current,
+            developer_http_enabled: event.currentTarget.checked,
+          }))
+        }
+      />
     </Stack>
   );
 };
-
-const ConnectionSection: React.FC<{
-  enabled: boolean;
-  title: string;
-  disabled: boolean;
-  onToggle: (enabled: boolean) => void;
-  children: React.ReactNode;
-}> = ({ enabled, title, disabled, onToggle, children }) => (
-  <Paper withBorder radius="md" p="md">
-    <Stack gap="sm">
-      <Switch
-        checked={enabled}
-        disabled={disabled}
-        label={<Text fw={600}>{title}</Text>}
-        onChange={(event) => onToggle(event.currentTarget.checked)}
-      />
-      <Collapse in={enabled}>
-        <Stack gap="sm" pt="xs">
-          {children}
-        </Stack>
-      </Collapse>
-    </Stack>
-  </Paper>
-);
-
-const developerHttpPayloadExample = `{
-  "version": 1,
-  "type": "turn.final",
-  "id": "turn-3",
-  "text": "こんにちは。",
-  "turn_session_id": 7,
-  "turn_id": 3,
-  "revision": 2,
-  "output_sequence": 4,
-  "segment_id": 8,
-  "previous_segment_id": 7,
-  "source_asr_model": "reazonspeech_k2_v2",
-  "source_language": "japanese",
-  "detected_language": null,
-  "recognized_at_ms": 1000,
-  "elapsed_ms": 96,
-  "audio_duration_ms": 1280
-}`;
-
-const PortSetting: React.FC<{
-  label: string;
-  value: number;
-  loading: boolean;
-  disabled: boolean;
-  findLabel: string;
-  onChange: (value: number) => void;
-  onFind: () => void;
-}> = ({ label, value, loading, disabled, findLabel, onChange, onFind }) => (
-  <Group align="end" gap="xs" wrap="nowrap">
-    <NumberInput
-      label={label}
-      value={value}
-      min={1}
-      max={65535}
-      disabled={disabled}
-      style={{ flex: 1 }}
-      onChange={(next) => onChange(typeof next === "number" ? next : value)}
-    />
-    <Button
-      variant="light"
-      loading={loading}
-      disabled={disabled}
-      onClick={onFind}
-    >
-      {findLabel}
-    </Button>
-  </Group>
-);

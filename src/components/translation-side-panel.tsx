@@ -1,5 +1,5 @@
 import { Badge, Box, Group, Paper, Stack, Text, Title } from "@mantine/core";
-import { useEffect, useMemo, useRef } from "react";
+import { type ReactNode, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -7,7 +7,9 @@ import {
   zeroMinHeight,
   zeroMinWidth,
 } from "../lib/layout-styles";
+import { resolveRecognitionLogSourceMetaColor } from "../lib/recognition-log-source";
 import { recognitionSourceRowId } from "../lib/recognition-source";
+import { STT_PROFILE_DISPLAY_COLOR_CSS } from "../lib/stt-profile-colors";
 import { notificationColor } from "../lib/theme";
 import type {
   AsrLanguage,
@@ -15,6 +17,7 @@ import type {
   ParapperConfig,
   RecognitionSourceMeta,
   RecognizedTextEvent,
+  SttProfileConfig,
   TranslationLanguage,
   TranslationMapping,
   TranslationTextEvent,
@@ -24,12 +27,14 @@ type TranslationSidePanelProps = {
   config: ParapperConfig;
   recognizedTexts: RecognizedTextEvent[];
   translatedTexts: TranslationTextEvent[];
+  profiles: SttProfileConfig[];
 };
 
 export const TranslationSidePanel: React.FC<TranslationSidePanelProps> = ({
   config,
   recognizedTexts,
   translatedTexts,
+  profiles,
 }) => {
   return (
     <Stack gap="md" style={fullSizeZeroMin}>
@@ -37,6 +42,7 @@ export const TranslationSidePanel: React.FC<TranslationSidePanelProps> = ({
         config={config}
         recognizedTexts={recognizedTexts}
         translatedTexts={translatedTexts}
+        profiles={profiles}
       />
     </Stack>
   );
@@ -67,14 +73,49 @@ type TranslationLogEntry =
 
 type TranslationLogRow = {
   rowId: string;
+  source: RecognitionSourceMeta;
   entries: TranslationLogEntry[];
 };
+
+export const TranslationLogSourceCard: React.FC<{
+  rowId: string;
+  source: RecognitionSourceMeta;
+  profiles: SttProfileConfig[];
+  children?: ReactNode;
+}> = ({ rowId, source, profiles, children }) => (
+  <Paper
+    data-log-row-id={rowId}
+    p="xs"
+    withBorder
+    radius="sm"
+    pos="relative"
+    style={{ overflow: "hidden" }}
+  >
+    <Box
+      aria-hidden
+      data-translation-source-color
+      pos="absolute"
+      top={0}
+      bottom={0}
+      left={0}
+      w={3}
+      style={{
+        backgroundColor:
+          STT_PROFILE_DISPLAY_COLOR_CSS[
+            resolveRecognitionLogSourceMetaColor(profiles, source)
+          ],
+      }}
+    />
+    {children}
+  </Paper>
+);
 
 const TranslationLogPanel: React.FC<{
   config: ParapperConfig;
   recognizedTexts: RecognizedTextEvent[];
   translatedTexts: TranslationTextEvent[];
-}> = ({ config, recognizedTexts, translatedTexts }) => {
+  profiles: SttProfileConfig[];
+}> = ({ config, recognizedTexts, translatedTexts, profiles }) => {
   const { t } = useTranslation();
   const logRef = useRef<HTMLDivElement | null>(null);
   const rows = useMemo(
@@ -116,12 +157,11 @@ const TranslationLogPanel: React.FC<{
               </Text>
             ) : (
               rows.map((row) => (
-                <Paper
+                <TranslationLogSourceCard
                   key={row.rowId}
-                  data-log-row-id={row.rowId}
-                  p="xs"
-                  withBorder
-                  radius="sm"
+                  rowId={row.rowId}
+                  source={row.source}
+                  profiles={profiles}
                 >
                   <Stack gap={4}>
                     {row.entries.map((entry) => (
@@ -131,7 +171,7 @@ const TranslationLogPanel: React.FC<{
                       />
                     ))}
                   </Stack>
-                </Paper>
+                </TranslationLogSourceCard>
               ))
             )}
           </Stack>
@@ -195,7 +235,7 @@ const TranslationLogEntryRow: React.FC<{ entry: TranslationLogEntry }> = ({
   );
 };
 
-const buildTranslationLogRows = (
+export const buildTranslationLogRows = (
   config: ParapperConfig,
   recognizedTexts: RecognizedTextEvent[],
   translatedTexts: TranslationTextEvent[],
@@ -218,6 +258,7 @@ const buildTranslationLogRows = (
         return [
           {
             rowId: recognitionSourceRowId(recognized.source),
+            source: recognized.source,
             entries: [
               {
                 kind: "placeholder",
@@ -261,32 +302,41 @@ const buildTranslationLogRows = (
         return [
           {
             rowId,
+            source: recognized.source,
             entries: [{ kind: "placeholder", id: `${rowId}|placeholder` }],
           },
         ];
       }
       return [];
     }
-    return [{ rowId, entries }];
+    return [{ rowId, source: recognized.source, entries }];
   });
   const rowsById = new Map(rows.map((row) => [row.rowId, row]));
 
   const orphanRows = translatedTexts
     .filter((translated) => !usedTranslationIds.has(translated.id))
-    .reduce<Map<string, TranslationLogEntry[]>>((grouped, translated) => {
+    .reduce<
+      Map<
+        string,
+        { source: RecognitionSourceMeta; entries: TranslationLogEntry[] }
+      >
+    >((grouped, translated) => {
       const rowId = recognitionSourceRowId(translated.source);
-      const entries = grouped.get(rowId) ?? [];
-      entries.push({ kind: "ready", event: translated });
-      grouped.set(rowId, entries);
+      const row = grouped.get(rowId) ?? {
+        source: translated.source,
+        entries: [],
+      };
+      row.entries.push({ kind: "ready", event: translated });
+      grouped.set(rowId, row);
       return grouped;
     }, new Map());
 
-  for (const [rowId, entries] of orphanRows) {
+  for (const [rowId, row] of orphanRows) {
     const existing = rowsById.get(rowId);
     if (existing) {
-      existing.entries.push(...entries);
+      existing.entries.push(...row.entries);
     } else {
-      rows.push({ rowId, entries });
+      rows.push({ rowId, ...row });
     }
   }
 

@@ -3,34 +3,20 @@ import { useTranslation } from "react-i18next";
 
 import type { RuntimeState } from "../hooks/use-app-state";
 import { errorColor, getParapperErrorMessage } from "../lib/error";
-import { isMacOs } from "../lib/platform";
 import { notificationColor } from "../lib/theme";
-import type { RecognitionStatus } from "../lib/types";
-
-const statusColor = (status: RecognitionStatus) => {
-  switch (status) {
-    case "listening":
-      return notificationColor.ok;
-    case "waiting_for_client":
-      return notificationColor.info;
-    case "draining":
-      return notificationColor.warn;
-    case "error":
-      return notificationColor.error;
-    case "stopped":
-      return "gray";
-    default:
-      return notificationColor.info;
-  }
-};
+import { RecognitionStatusBadge } from "../ui/recognition/recognition-status-badge";
 
 type StatusBadgesProps = {
   runtime: RuntimeState;
+  nativeConnectionsAvailable: boolean;
 };
 
-export const StatusBadges: React.FC<StatusBadgesProps> = ({ runtime }) => {
+export const StatusBadges: React.FC<StatusBadgesProps> = ({
+  runtime,
+  nativeConnectionsAvailable,
+}) => {
   const { t } = useTranslation();
-  const nativeConnectionsDisabled = isMacOs();
+  const nativeConnectionsDisabled = !nativeConnectionsAvailable;
   const vrcMicState =
     runtime.oscMuted === null
       ? t("status.idle")
@@ -40,9 +26,10 @@ export const StatusBadges: React.FC<StatusBadgesProps> = ({ runtime }) => {
 
   return (
     <Group gap="xs" justify="flex-end">
-      <Badge color={statusColor(runtime.status)} variant="light">
-        {t(`status.recognition.${runtime.status}`)}
-      </Badge>
+      <RecognitionStatusBadge
+        status={runtime.status}
+        label={t(`status.recognition.${runtime.status}`)}
+      />
       <Badge
         color={
           runtime.vadState?.state === "speech" ? notificationColor.info : "gray"

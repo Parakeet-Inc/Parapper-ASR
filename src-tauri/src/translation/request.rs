@@ -1,5 +1,5 @@
 use crate::{
-    config::{AsrModel, ParapperConfig, TranslationBackend},
+    config::{AsrLanguage, AsrModel, DeliveryRouteSnapshot, ParapperConfig, TranslationBackend},
     delivery::{
         RecognitionSourceMeta, RecognizedTextOutput,
         common::{
@@ -7,14 +7,16 @@ use crate::{
             timing::translation_timing_allows_output, translation_targets_for_mappings,
         },
     },
-    recognition::control::events::RecognizedTextUpdateMode,
+    recognition::events::RecognizedTextUpdateMode,
 };
 
 pub(crate) struct TranslationRequest {
     pub(super) config: ParapperConfig,
+    pub(super) delivery_route: DeliveryRouteSnapshot,
     pub(super) source_recognition_id: String,
     pub(super) source_meta: RecognitionSourceMeta,
     pub(super) source_asr_model: AsrModel,
+    pub(super) source_language: AsrLanguage,
     pub(super) source_text: String,
     pub(super) source_detected_language: Option<String>,
     pub(super) targets: Vec<TranslationTarget>,
@@ -42,12 +44,34 @@ impl TranslationRequest {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn build_translation_request(
     config: &ParapperConfig,
     recognized_text_id: &str,
     output: &RecognizedTextOutput,
 ) -> Option<TranslationRequest> {
-    if !config.translation.enabled {
+    build_translation_request_with_route(
+        config,
+        &config.legacy_delivery_route(),
+        recognized_text_id,
+        output,
+    )
+}
+
+pub(crate) fn build_translation_request_with_route(
+    config: &ParapperConfig,
+    delivery_route: &DeliveryRouteSnapshot,
+    recognized_text_id: &str,
+    output: &RecognizedTextOutput,
+) -> Option<TranslationRequest> {
+    let mut scoped_config = config.clone();
+    scoped_config.translation.mappings.retain(|mapping| {
+        delivery_route
+            .translation_mapping_ids
+            .iter()
+            .any(|id| id == &mapping.id)
+    });
+    if !scoped_config.translation.enabled {
         return None;
     }
 
@@ -61,7 +85,7 @@ pub(crate) fn build_translation_request(
     }
     let source_meta = output.meta.source().clone();
 
-    let mut translation_mappings = config.translation.mappings.clone();
+    let mut translation_mappings = scoped_config.translation.mappings.clone();
     if !ParapperConfig::neo_http_supported() {
         let before = translation_mappings.len();
         translation_mappings.retain(|mapping| mapping.backend != TranslationBackend::Ync);
@@ -87,10 +111,12 @@ pub(crate) fn build_translation_request(
     }
 
     Some(TranslationRequest {
-        config: config.clone(),
+        config: scoped_config,
+        delivery_route: delivery_route.clone(),
         source_recognition_id: recognized_text_id.to_string(),
         source_meta,
         source_asr_model: output.source_asr_model,
+        source_language: output.source_language,
         source_text: text,
         source_detected_language: output.detected_language.clone(),
         targets,

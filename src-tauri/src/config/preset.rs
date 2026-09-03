@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{
     AsrLanguage, AsrModel, AsrPrecision, LocalTranslationModel, LocalTtsVoice,
-    NoiseCancellationModel, ParapperConfig, SpeechBackend, SpeechMapping, SpeechSourceKind,
-    TranslationLanguage, TranslationMapping, TurnDetector,
+    NoiseCancellationModel, NoiseCancellationTarget, ParapperConfig, SpeechBackend, SpeechMapping,
+    SpeechSourceKind, TranslationBackend, TranslationLanguage, TranslationMapping, TurnDetector,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +37,7 @@ pub fn save_config_preset(
     config: ParapperConfig,
 ) -> Result<Vec<ConfigPreset>> {
     let name = normalized_preset_name(name)?;
+    config.validate()?;
     let mut stored = load_stored_config_presets(path)?;
     let preset = StoredConfigPreset {
         name: name.clone(),
@@ -186,7 +187,7 @@ fn japanese_to_english_translation_mapping() -> TranslationMapping {
     TranslationMapping {
         id: "translate-ja-en".to_string(),
         source_asr_model: Some(AsrModel::ReazonSpeechK2V2),
-        backend: Default::default(),
+        backend: TranslationBackend::default(),
         local_model: LocalTranslationModel::default(),
         source_lang: TranslationLanguage::Ja,
         target_lang: TranslationLanguage::En,
@@ -205,7 +206,7 @@ fn japanese_english_bidirectional_translation_speech_config() -> ParapperConfig 
         TranslationMapping {
             id: "translate-ja-en".to_string(),
             source_asr_model: Some(AsrModel::ReazonSpeechK2V2),
-            backend: Default::default(),
+            backend: TranslationBackend::default(),
             local_model: LocalTranslationModel::default(),
             source_lang: TranslationLanguage::Ja,
             target_lang: TranslationLanguage::En,
@@ -213,7 +214,7 @@ fn japanese_english_bidirectional_translation_speech_config() -> ParapperConfig 
         TranslationMapping {
             id: "translate-en-ja".to_string(),
             source_asr_model: Some(AsrModel::NemoParakeetTdt0_6BV2Int8),
-            backend: Default::default(),
+            backend: TranslationBackend::default(),
             local_model: LocalTranslationModel::default(),
             source_lang: TranslationLanguage::En,
             target_lang: TranslationLanguage::Ja,
@@ -254,6 +255,7 @@ fn base_japanese_config() -> ParapperConfig {
     config.turn.rerecognize_full_on_complete = false;
     config.noise_cancellation.enabled = false;
     config.noise_cancellation.model = NoiseCancellationModel::UlUnas;
+    config.noise_cancellation.target = NoiseCancellationTarget::VadOnly;
     config.translation.enabled = false;
     config.translation.mappings = Vec::new();
     config.speech.mappings = Vec::new();
@@ -303,7 +305,8 @@ mod tests {
         save_config_preset,
     };
     use crate::config::{
-        AsrModel, InputSourceKind, LocalTtsVoice, ParapperConfig, StreamingRecognitionOutputMode,
+        AsrModel, InputSourceKind, LocalTtsVoice, NoiseCancellationTarget, ParapperConfig,
+        StreamingRecognitionOutputMode,
     };
 
     #[test]
@@ -353,6 +356,24 @@ mod tests {
         for preset in presets.iter().filter(|preset| preset.built_in) {
             assert_eq!(
                 preset.config.segmentation.segment_start_speech_ms, 96,
+                "preset={}",
+                preset.name
+            );
+        }
+    }
+
+    #[test]
+    fn built_in_presets_route_enabled_noise_cancellation_to_vad_only() {
+        let presets = load_config_presets(std::path::Path::new("missing-presets.json"))
+            .expect("built-in presets should load");
+
+        for preset in presets
+            .iter()
+            .filter(|preset| preset.built_in && preset.config.noise_cancellation.enabled)
+        {
+            assert_eq!(
+                preset.config.noise_cancellation.target,
+                NoiseCancellationTarget::VadOnly,
                 "preset={}",
                 preset.name
             );

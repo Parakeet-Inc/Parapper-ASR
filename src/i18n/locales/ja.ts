@@ -47,25 +47,70 @@ export const ja = {
   },
   tabs: {
     settings: "設定",
-    connection: "接続",
+    connection: "入力",
     vad: "VAD",
     asr: "ASR",
     noiseCancellation: "NC",
     other: "その他",
+    downloads: "ダウンロード",
     licenses: "ライセンス",
     translation: "MT",
     speech: "TTS",
+    externalApps: "外部アプリ",
     collapseSettings: "設定を折りたたむ",
     expandSettings: "設定を展開",
+  },
+  settingsGroups: {
+    stt: "STT",
+    output: "出力",
+    other: "その他",
+  },
+  sttProfiles: {
+    selectorLabel: "STTプロファイル",
+    defaultName: "プロファイル{{number}}",
+    add: "新規追加",
+    delete: "プロファイルを削除",
+    deleteFor: "{{name}}を削除",
+    deleteConfirmationTitle: "プロファイルを削除しますか？",
+    deleteConfirmationBody:
+      "{{name}}と関連するSTT設定を削除します。この操作は元に戻せません。",
+    enabledFor: "{{name}}を有効化",
+    name: "プロファイル名",
+    color: "表示色",
+    volumeLabel: "プロファイル音量",
+    mute: "プロファイルをミュート",
+    unmute: "プロファイルのミュートを解除",
+    inputLevel: "入力レベル",
+    neoHttpEnabled: "ゆかコネNEOへ送信する",
+    neoHttpEnabledDescription:
+      "このSTTプロファイルの認識結果をゆかコネNEOへ送信します。",
+    neoHttpEnabledFor: "{{name}}をゆかコネNEOへ送信",
+    developerHttpEnabled: "HTTPへ送信する",
+    developerHttpEnabledDescription:
+      "このSTTプロファイルの認識結果を開発者向けHTTP接続へ送信します。",
+    developerHttpEnabledFor: "{{name}}をHTTPへ送信",
   },
   licenses: {
     modelLicenses: "モデルライセンス",
     rustLicenses: "Rust依存ライセンス",
     openRustLicenses: "Rust依存ライセンスを開く",
     loadingRustLicenses: "Rust依存ライセンスを読み込み中",
+    hotwordReadingNotices: "内蔵辞書のライセンス",
+    hotwordReadingNoticesDescription:
+      "Morph用UniDic CWJ 3.1.1、SudachiDict Full/UniDic/NEologd、CMUdictの帰属表示とライセンス本文です。",
+    openHotwordReadingNotices: "内蔵辞書のライセンスを開く",
+    loadingHotwordNotices: "辞書のライセンスを読み込み中",
+    failedToLoadHotwordNotices: "辞書のライセンスを読み込めませんでした。",
+    thirdPartyNotices: "第三者通知",
+    thirdPartyNoticesDescription:
+      "ASRの元モデル、参照実装、モデル配布元に対する帰属と、Parapperで行った変更の説明です。",
+    openThirdPartyNotices: "第三者通知を開く",
+    loadingThirdPartyNotices: "第三者通知を読み込み中",
+    failedToLoadThirdPartyNotices: "第三者通知を読み込めませんでした。",
     usedBy: "使用元",
   },
   common: {
+    cancel: "キャンセル",
     search: "探す",
     resetLogs: "ログを消去",
     csvExport: "CSV出力",
@@ -96,8 +141,6 @@ export const ja = {
     },
     oscQuery: {
       label: "VRChat / OSCQuery設定",
-      description:
-        "VRChat のミュート状態を OSCQuery で読み取り、ミュート中はゆかコネNEOへ送信しないための設定です。",
       muteSyncLabel: "VRChatでミュートの時は送信しない(要OSC)",
     },
     turnDetector: {
@@ -161,13 +204,32 @@ export const ja = {
     asrModel: {
       label: "ASRモデル",
       description:
-        "言語と sherpa-onnx モデルを選びます。NeMo は重い代わりに精度が期待できます。",
+        "使用するASRモデルを選びます。日本語モデルでは推論モードも選択できます。",
+    },
+    asrMode: {
+      label: "ASRモード",
+      description:
+        "高速・軽量はgreedy、高精度はビームサーチなどの追加探索を使います。対応していないモデルでは高速・軽量のみ選べます。",
+      options: {
+        fast: "高速・軽量",
+        accurate: "高精度",
+      },
     },
     interimAsrModel: {
       label: "途中表示ASRモデル",
       description:
         "途中表示だけに使うASRモデルです。デフォルトではASRモデルと同じモデルを使います。",
       primary: "ASRモデルと同じ",
+      nemotronEnglish: "Nemotron（英語）",
+      nemotronMultilingual: "Nemotron 3.5（多言語）",
+      latencyLabel: "Nemotronの遅延",
+      latencyDescription:
+        "途中表示の応答性と認識精度のバランスを選びます。音声認識中は変更できません。",
+      latency80: "80 ms",
+      latency160: "160 ms",
+      latency320: "320 ms",
+      latency560: "560 ms",
+      latency1120: "1120 ms",
     },
     asrPrecision: {
       label: "ASR precision",
@@ -179,6 +241,49 @@ export const ja = {
       description:
         "ASR 推論で使う intra CPU スレッド数です。max はランタイムに任せます。",
       max: "max",
+    },
+    hotwords: {
+      label: "Hotword",
+      count: "{{count}}件",
+      manage: "Hotwordを管理",
+      enable: "Hotwordを有効にする",
+      enableDescription:
+        "高精度モードのビーム探索で登録したHotwordを候補選択に反映します。登録内容は無効時も保持されます。",
+      accurateOnly: "Hotwordは高精度モードでのみ有効にできます。",
+      title: "Hotword管理",
+      description:
+        "高精度モードで優先したい表記と読みを登録します。\n読みは1行に1つひらがなで入力してください。\n優先倍率は未指定でx100、x1は中立、1未満は抑制です。",
+      entry: "Hotword {{number}}",
+      surfaceColumn: "表記",
+      readingsColumn: "読み",
+      scoreColumn: "優先倍率",
+      surface: "表記（必須）",
+      surfacePlaceholder: "例: 斎藤",
+      surfaceRequired: "表記を入力してください。",
+      duplicateSurface: "同じ表記のHotwordが複数あります。",
+      pathCollision:
+        "表記または読みが別のHotwordと同じトークン経路になります。",
+      terminalPrefix:
+        "他の表記または読みと接頭辞関係にあります。短い候補か長い候補のどちらかを変更してください。",
+      readings: "読み（任意）",
+      readingsDescription:
+        "複数の読みは改行で区切ります。未指定でも登録できます。",
+      readingsPlaceholder: "ぱらっぱー",
+      autofill: "自動入力",
+      autofillHelp:
+        "英字表記を完全一致辞書で検索し、見つからない場合は英語の発音から読みを推定します。",
+      autofillEmpty: "読み候補が見つかりませんでした。",
+      autofillFailed: "読み候補を生成できませんでした。",
+      blankReading: "空の読みを削除するか入力してください。",
+      duplicateReading: "同じ読みが複数あります。",
+      score: "優先倍率（任意）",
+      invalidScore: "優先倍率は0より大きい有限値を入力してください。",
+      scorePlaceholder: "100（未指定時）",
+      add: "Hotwordを追加",
+      delete: "Hotwordを削除",
+      empty: "Hotwordはまだ登録されていません。",
+      cancel: "キャンセル",
+      save: "保存",
     },
     multilingualAsr: {
       label: "多言語ASRを使い分ける",
@@ -242,17 +347,23 @@ export const ja = {
     },
     inputAudioDevice: {
       label: "入力デバイス",
+      description:
+        "このSTTプロファイルに割り当てる入力デバイスとチャンネルです。",
       placeholder: "既定の入力デバイス",
+      channelLabel: "入力チャンネル",
+      channelPlaceholder: "チャンネルを選択",
+      channel: "チャンネル{{number}}",
       loopbackGroup: "スピーカー出力（ループバック）",
       networkGroup: "ネットワーク入力",
       webSocket: "WebSocket (PCM 16 kHz)",
     },
   },
   connectionSettings: {
-    neoEnabled: "ゆかコネNEOに接続する",
-    developerEnabled: "HTTP / WebSocket接続をする（開発者向け）",
+    streamingEnabled: "HTTP / WebSocket接続をする（開発者向け）",
     connectionMode: "接続モード",
+    neoProfiles: "ゆかコネNEOへ送信するSTTプロファイル",
     httpUrl: "HTTP送信先URL",
+    httpProfiles: "HTTPで送信するSTTプロファイル",
     httpPayloadExample: "HTTPで送信する値の例",
     bindAddress: "待受アドレス",
     port: "WebSocket port",
@@ -263,11 +374,21 @@ export const ja = {
     webSocketAndDesktop: "WebSocket + 画面/連携",
     endpoint: "接続先: ws://{{address}}:{{port}}/ws/recognition",
   },
+  externalAppSettings: {
+    yncEnabled: "ゆかコネNEOに接続する",
+    yncPlugin: "ゆかコネ翻訳プラグイン",
+  },
   noiseCancellationSettings: {
     enable: {
       label: "ノイズキャンセリングを有効化",
       description:
-        "マイク音声を VAD と ASR に渡す前に、ノイズキャンセリングモデルで処理します。",
+        "ノイズキャンセリングした音声をVADに使用します。ASRへ渡す音声は適用先で選べます。",
+    },
+    target: {
+      label: "NCの適用先",
+      description:
+        "「VADのみ」は認識音声を加工せず、ノイズによる発話誤検出だけを抑えます。",
+      disabledTooltip: "ノイズキャンセリングを有効化すると適用先を選べます。",
     },
     model: {
       label: "NCモデル",
@@ -288,14 +409,26 @@ export const ja = {
       nemoParakeetTdtV2Int8: "英語 (NeMo Parakeet TDT 0.6B v2 int8)",
       nemoParakeetTdtV3Int8:
         "ヨーロッパ系他言語 (NeMo Parakeet TDT 0.6B v3 int8)",
+      nemotronSpeechStreamingEn80MsInt8:
+        "英語 (Nemotron Speech Streaming 0.6B 80ms int8)",
       nemotronSpeechStreamingEn160MsInt8:
         "英語 (Nemotron Speech Streaming 0.6B 160ms int8)",
+      nemotronSpeechStreamingEn320MsInt8:
+        "英語 (Nemotron Speech Streaming 0.6B 320ms int8)",
       nemotronSpeechStreamingEn560MsInt8:
         "英語 (Nemotron Speech Streaming 0.6B 560ms int8)",
+      nemotronSpeechStreamingEn1120MsInt8:
+        "英語 (Nemotron Speech Streaming 0.6B 1120ms int8)",
+      nemotron35AsrStreaming80MsInt8:
+        "多言語(日本語を含む) (Nemotron 3.5 ASR Streaming 0.6B 80ms int8)",
       nemotron35AsrStreaming160MsInt8:
         "多言語(日本語を含む) (Nemotron 3.5 ASR Streaming 0.6B 160ms int8)",
+      nemotron35AsrStreaming320MsInt8:
+        "多言語(日本語を含む) (Nemotron 3.5 ASR Streaming 0.6B 320ms int8)",
       nemotron35AsrStreaming560MsInt8:
         "多言語(日本語を含む) (Nemotron 3.5 ASR Streaming 0.6B 560ms int8)",
+      nemotron35AsrStreaming1120MsInt8:
+        "多言語(日本語を含む) (Nemotron 3.5 ASR Streaming 0.6B 1120ms int8)",
     },
     turnDetector: {
       simple: "Simple",
@@ -304,6 +437,10 @@ export const ja = {
     },
     noiseCancellationModel: {
       ulUnas: "UL-UNAS",
+    },
+    noiseCancellationTarget: {
+      vadOnly: "VADのみ",
+      vadAndAsr: "VADとASR",
     },
     neoSendTiming: {
       interim: "ASR途中も送る",
@@ -488,6 +625,10 @@ export const ja = {
     },
     audioDeviceSaveFailed: {
       title: "デバイス設定の反映に失敗しました",
+    },
+    sttProfileAddFailed: {
+      title: "STTプロファイルを追加できません",
+      message: "未使用の入力デバイスチャンネルがありません。",
     },
     audioDeviceRefreshFailed: {
       title: "デバイス一覧の更新に失敗しました",

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://parakeet-inc.example/schemas/parapper-asr-reference-fixture-v1.json",
+  "title": "Parapper ASR reference fixture",
+  "type": "object",
+  "required": ["schema_version", "kind", "reference", "input", "output"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "enum": ["algorithm", "tensor", "audio", "streaming"] },
+    "reference": {
+      "type": "object",
+      "required": ["oracle", "nemo_commit", "model_repository", "model_revision"],
+      "properties": {
+        "oracle": { "type": "string" },
+        "nemo_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "model_repository": { "type": "string" },
+        "model_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "decoding_strategy": { "type": ["string", "null"] },
+        "parameters": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "input": {
+      "type": "object",
+      "required": ["sha256"],
+      "properties": {
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "sample_rate_hz": { "type": ["integer", "null"] },
+        "samples": {
+          "oneOf": [
+            { "type": "integer" },
+            { "type": "null" },
+            { "type": "array", "items": { "type": "number" } }
+          ]
+        },
+        "provenance": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "text": { "type": ["string", "null"] },
+        "token_ids": { "type": "array", "items": { "type": "integer" } },
+        "score": { "type": ["number", "null"] },
+        "timestamps": {},
+        "partial_sequence": { "type": "array" },
+        "tensors": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "environment": { "type": "object" }
+  },
+  "additionalProperties": false
+}

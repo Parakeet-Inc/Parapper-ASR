@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "kind": "audio",
+  "reference": {
+    "oracle": "pinned_nvidia_python",
+    "nemo_commit": "b331a34885986ec879ca7acb62d955e7af71c015",
+    "model_repository": "nvidia/parakeet-tdt-0.6b-v2",
+    "model_revision": "ae9ad07059c7c739ffaf932226a8fe64ae2620b0",
+    "runtime": "onnxruntime-1.24.4",
+    "source_files": [
+      "nemo/collections/asr/parts/preprocessing/features.py",
+      "nemo/collections/asr/parts/submodules/rnnt_greedy_decoding.py"
+    ],
+    "decoding_strategy": "GreedyTDTInfer",
+    "parameters": {
+      "durations": [0, 1, 2, 3, 4],
+      "max_symbols_per_step": 10,
+      "include_duration": true
+    }
+  },
+  "input": {
+    "sha256": "eb1eb008904465b74c304aad8342e8c7d3c6e61ffe9f66adcaca9cf0f76a93f4",
+    "sample_rate_hz": 16000,
+    "samples": 114432,
+    "model_dir": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+  },
+  "output": {
+    "text": "The tribal chieftain called for the boy, and presented him with fifty pieces of gold.",
+    "token_ids": [
+      155, 1, 201, 840, 50, 168, 227, 558, 177, 805, 77, 5, 429, 833, 839, 31,
+      713, 68, 38, 396, 102, 23, 182, 508, 24, 227, 522, 30, 84, 82, 841
+    ],
+    "score": 2601.228958129883,
+    "timestamps": [
+      8, 14, 16, 18, 20, 22, 24, 26, 28, 31, 35, 37, 40, 42, 44, 47, 50, 53, 55,
+      57, 60, 62, 64, 66, 69, 70, 72, 74, 77, 80, 82
+    ],
+    "token_durations": [
+      3, 2, 2, 2, 2, 2, 2, 2, 3, 4, 2, 3, 2, 2, 3, 3, 3, 2, 2, 3, 2, 2, 2, 3, 1,
+      2, 2, 3, 3, 2, 4
+    ],
+    "encoded_frames": 90
+  }
+}

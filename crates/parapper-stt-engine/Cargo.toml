@@ -1,0 +1,15 @@
+[package]
+name = "parapper-stt-engine"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+parapper-models = { path = "../parapper-models", default-features = false }
+serde.workspace = true

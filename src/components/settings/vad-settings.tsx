@@ -40,11 +40,7 @@ export const VadSettings: React.FC<VadSettingsProps> = ({
           allowDeselect={false}
           disabled={runtimeLocked}
           onChange={(value) => {
-            if (
-              value === "simple" ||
-              value === "morph" ||
-              value === "namo"
-            ) {
+            if (value === "simple" || value === "morph" || value === "namo") {
               onUpdateConfig("turn_detector", value);
             }
           }}
@@ -56,11 +52,9 @@ export const VadSettings: React.FC<VadSettingsProps> = ({
           t("settings.interimResult.description"),
         )}
         checked={config.interim_result_enabled}
+        disabled={runtimeLocked}
         onChange={(event) =>
-          onUpdateConfig(
-            "interim_result_enabled",
-            event.currentTarget.checked,
-          )
+          onUpdateConfig("interim_result_enabled", event.currentTarget.checked)
         }
       />
       {config.interim_result_enabled ? (

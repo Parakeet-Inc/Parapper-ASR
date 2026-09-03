@@ -7,6 +7,7 @@ publish = false
 
 [features]
 real-asr-tests = []
+smoke-server = ["dep:app_lib"]
 
 [lints]
 workspace = true
@@ -31,10 +32,61 @@ required-features = ["real-asr-tests"]
 [[bin]]
 name = "streaming_recognition_smoke_server"
 path = "src/bin/streaming_recognition_smoke_server.rs"
+required-features = ["smoke-server"]
+
+[[bin]]
+name = "run_asr_eval"
+path = "src/bin/run_asr_eval.rs"
+
+[[bin]]
+name = "run_reazon_eval_sweep"
+path = "src/bin/run_reazon_eval_sweep.rs"
+
+[[bin]]
+name = "profile_reazon_search"
+path = "src/bin/profile_reazon_search.rs"
+
+[[bin]]
+name = "run_reazon_nbest_ablation"
+path = "src/bin/run_reazon_nbest_ablation.rs"
+
+[[bin]]
+name = "run_reazon_nbest_rescore"
+path = "src/bin/run_reazon_nbest_rescore.rs"
+
+[[bin]]
+name = "run_reazon_monotonic_alignment"
+path = "src/bin/run_reazon_monotonic_alignment.rs"
+
+[[bin]]
+name = "run_reazon_lattice_eval"
+path = "src/bin/run_reazon_lattice_eval.rs"
+
+[[bin]]
+name = "run_reazon_hotword_eval"
+path = "src/bin/run_reazon_hotword_eval.rs"
+
+[[bin]]
+name = "run_parakeet_ja_tdt_sweep"
+path = "src/bin/run_parakeet_ja_tdt_sweep.rs"
+
+[[bin]]
+name = "run_parakeet_ja_dag_merge_ablation"
+path = "src/bin/run_parakeet_ja_dag_merge_ablation.rs"
+
+[[bin]]
+name = "dump_ja_morphology"
+path = "src/bin/dump_ja_morphology.rs"
+
+[[bin]]
+name = "prepare_nc_derived_split"
+path = "src/bin/prepare_nc_derived_split.rs"
 
 [dependencies]
-app_lib = { package = "parapper", path = "../src-tauri", features = ["smoke-server"] }
+app_lib = { package = "parapper", path = "../src-tauri", features = ["smoke-server"], optional = true }
 anyhow.workspace = true
+parapper-models = { path = "../crates/parapper-models", features = ["asr-ort", "nc-ort"] }
+parapper-stt-engine = { path = "../crates/parapper-stt-engine" }
 chrono.workspace = true
 cpal = "0.17.3"
 dasp_sample = "0.11.0"
@@ -43,5 +95,6 @@ reqwest.workspace = true
 rubato = "1.0.1"
 serde.workspace = true
 serde_json.workspace = true
-sherpa-onnx = { version = "=1.13.3", default-features = false, features = ["shared"] }
+sha2 = "0.10"
 unicode-normalization = "0.1"
+vibrato-rkyv = { version = "0.7.8", default-features = false, features = ["legacy"] }

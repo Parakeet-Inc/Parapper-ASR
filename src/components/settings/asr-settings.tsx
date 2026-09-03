@@ -1,9 +1,30 @@
-import { Checkbox, Select, Stack } from "@mantine/core";
+import { Button, Checkbox, Group, Select, Stack, Text } from "@mantine/core";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { AsrHotwordModal } from "./asr-hotword-modal";
 import { useAsrModelOptions } from "../../hooks/use-asr-model-options";
+import {
+  asrModeOptionsForModel,
+  canToggleAsrHotwords,
+  effectiveAsrMode,
+} from "../../lib/asr-mode";
+import {
+  nemotronFamilyForModel,
+  nemotronLatenciesForFamily,
+  nemotronLatencyForModel,
+  nemotronModelFor,
+  nemotronModelForFamily,
+  type NemotronFamily,
+  type NemotronLatencyMs,
+} from "../../lib/nemotron";
 import { buildAsrThreadOptions } from "../../lib/settings-options";
-import type { AsrModel, AsrPrecision, ParapperConfig } from "../../lib/types";
+import type {
+  AsrMode,
+  AsrModel,
+  AsrPrecision,
+  ParapperConfig,
+} from "../../lib/types";
 import { DisabledReasonTooltip, settingLabel } from "../ui/display";
 
 type AsrSettingsProps = {
@@ -14,6 +35,7 @@ type AsrSettingsProps = {
     value: ParapperConfig[K],
   ) => void;
   onApplyAsrModel: (model: AsrModel) => void;
+  onSuggestHotwordReadings: (surface: string) => Promise<string[]>;
 };
 
 export const AsrSettings: React.FC<AsrSettingsProps> = ({
@@ -21,14 +43,24 @@ export const AsrSettings: React.FC<AsrSettingsProps> = ({
   runtimeLocked,
   onUpdateConfig,
   onApplyAsrModel,
+  onSuggestHotwordReadings,
 }) => {
   const { t } = useTranslation();
-  const {
-    asrModelSelectOptions,
-    interimOnlyAsrModelSelectOptions,
-    selectedAsrPrecisionOptions,
-  } = useAsrModelOptions(config.asr_model);
+  const [hotwordsOpened, setHotwordsOpened] = useState(false);
+  const { asrModelSelectOptions, selectedAsrPrecisionOptions } =
+    useAsrModelOptions(config.asr_model);
   const asrThreadOptions = buildAsrThreadOptions(t);
+  const asrModeOptions = asrModeOptionsForModel(config.asr_model).map(
+    (mode) => ({
+      value: mode,
+      label: t(`settings.asrMode.options.${mode}`),
+    }),
+  );
+  const selectedAsrMode = effectiveAsrMode(config.asr_model, config.asr_mode);
+  const canToggleHotwords = canToggleAsrHotwords(
+    selectedAsrMode,
+    runtimeLocked,
+  );
   const runtimeLockedTooltip = t("tooltip.runtimeLocked");
   const primaryAsrModelValue = "__primary_asr_model__";
   const splitAsrModelOptions = [
@@ -36,8 +68,27 @@ export const AsrSettings: React.FC<AsrSettingsProps> = ({
       value: primaryAsrModelValue,
       label: t("settings.interimAsrModel.primary"),
     },
-    ...interimOnlyAsrModelSelectOptions,
+    {
+      value: "english",
+      label: t("settings.interimAsrModel.nemotronEnglish"),
+    },
+    {
+      value: "multilingual",
+      label: t("settings.interimAsrModel.nemotronMultilingual"),
+    },
   ];
+  const selectedNemotronFamily = nemotronFamilyForModel(
+    config.interim_asr_model,
+  );
+  const selectedNemotronLatency = nemotronLatencyForModel(
+    config.interim_asr_model,
+  );
+  const nemotronLatencyOptions = selectedNemotronFamily
+    ? nemotronLatenciesForFamily(selectedNemotronFamily).map((latency) => ({
+        value: latency,
+        label: t(`settings.interimAsrModel.latency${latency}`),
+      }))
+    : [];
   const selectedEnabledAsrModels = config.enabled_asr_models?.length
     ? config.enabled_asr_models
     : [config.asr_model];
@@ -81,17 +132,68 @@ export const AsrSettings: React.FC<AsrSettingsProps> = ({
             t("settings.interimAsrModel.description"),
           )}
           data={splitAsrModelOptions}
-          value={config.interim_asr_model ?? primaryAsrModelValue}
+          value={selectedNemotronFamily ?? primaryAsrModelValue}
           allowDeselect={false}
           disabled={runtimeLocked}
           onChange={(value) =>
             onUpdateConfig(
               "interim_asr_model",
               value && value !== primaryAsrModelValue
-                ? (value as AsrModel)
+                ? nemotronModelForFamily(
+                    value as NemotronFamily,
+                    config.interim_asr_model,
+                  )
                 : null,
             )
           }
+        />
+      </DisabledReasonTooltip>
+      {selectedNemotronFamily && selectedNemotronLatency ? (
+        <DisabledReasonTooltip
+          disabled={runtimeLocked}
+          label={runtimeLockedTooltip}
+        >
+          <Select
+            label={settingLabel(
+              t("settings.interimAsrModel.latencyLabel"),
+              t("settings.interimAsrModel.latencyDescription"),
+            )}
+            data={nemotronLatencyOptions}
+            value={selectedNemotronLatency}
+            allowDeselect={false}
+            disabled={runtimeLocked}
+            onChange={(value) => {
+              if (value) {
+                onUpdateConfig(
+                  "interim_asr_model",
+                  nemotronModelFor(
+                    selectedNemotronFamily,
+                    value as NemotronLatencyMs,
+                  ),
+                );
+              }
+            }}
+          />
+        </DisabledReasonTooltip>
+      ) : null}
+      <DisabledReasonTooltip
+        disabled={runtimeLocked}
+        label={runtimeLockedTooltip}
+      >
+        <Select
+          label={settingLabel(
+            t("settings.asrMode.label"),
+            t("settings.asrMode.description"),
+          )}
+          data={asrModeOptions}
+          value={selectedAsrMode}
+          allowDeselect={false}
+          disabled={runtimeLocked}
+          onChange={(value) => {
+            if (value) {
+              onUpdateConfig("asr_mode", value as AsrMode);
+            }
+          }}
         />
       </DisabledReasonTooltip>
       <DisabledReasonTooltip
@@ -132,6 +234,62 @@ export const AsrSettings: React.FC<AsrSettingsProps> = ({
           }
         />
       </DisabledReasonTooltip>
+      <DisabledReasonTooltip
+        disabled={!canToggleHotwords}
+        label={
+          runtimeLocked
+            ? runtimeLockedTooltip
+            : t("settings.hotwords.accurateOnly")
+        }
+      >
+        <Checkbox
+          label={settingLabel(
+            t("settings.hotwords.enable"),
+            t("settings.hotwords.enableDescription"),
+          )}
+          checked={config.asr_hotwords_enabled}
+          disabled={!canToggleHotwords}
+          onChange={(event) =>
+            onUpdateConfig("asr_hotwords_enabled", event.currentTarget.checked)
+          }
+        />
+      </DisabledReasonTooltip>
+      <DisabledReasonTooltip
+        disabled={runtimeLocked}
+        label={runtimeLockedTooltip}
+      >
+        <Group justify="space-between" align="center" wrap="nowrap">
+          <Stack gap={2}>
+            <Text size="sm" fw={500}>
+              {t("settings.hotwords.label")}
+            </Text>
+            <Text size="xs" c="dimmed">
+              {t("settings.hotwords.count", {
+                count: config.asr_hotwords.length,
+              })}
+            </Text>
+          </Stack>
+          <Button
+            variant="light"
+            disabled={runtimeLocked}
+            onClick={() => setHotwordsOpened(true)}
+          >
+            {t("settings.hotwords.manage")}
+          </Button>
+        </Group>
+      </DisabledReasonTooltip>
+      <AsrHotwordModal
+        opened={hotwordsOpened}
+        hotwords={config.asr_hotwords}
+        disabled={runtimeLocked}
+        onSuggestReadings={onSuggestHotwordReadings}
+        onClose={() => setHotwordsOpened(false)}
+        onSave={(hotwords) => {
+          if (runtimeLocked) return;
+          onUpdateConfig("asr_hotwords", hotwords);
+          setHotwordsOpened(false);
+        }}
+      />
       <Checkbox
         label={settingLabel(
           t("settings.asrNormalizeInput.label"),
